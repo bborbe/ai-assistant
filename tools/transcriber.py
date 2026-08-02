@@ -111,10 +111,12 @@ def process(session_dir: Path) -> int:
                 text = ""
 
         if text:
-            ts = datetime.fromtimestamp(int(epoch_ms) / 1000, timezone.utc).astimezone()
-            line = f"- `{ts:%H:%M:%S}` **{speaker}**: {text}\n"
+            # UTC, matching the folder date. Mixing the two puts local times
+            # inside a UTC-dated folder, which reads as an hours-long gap.
+            ts = datetime.fromtimestamp(int(epoch_ms) / 1000, timezone.utc)
+            line = f"- `{ts:%H:%M:%S}Z` **{speaker}**: {text}\n"
             (session_dir / "transcript.md").open("a").write(line)
-            print(f"  {ts:%H:%M:%S} {speaker}: {text[:70]}", flush=True)
+            print(f"  {ts:%H:%M:%S}Z {speaker}: {text[:70]}", flush=True)
 
         if kind == "txt":
             wav.unlink(missing_ok=True)

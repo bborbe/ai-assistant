@@ -50,15 +50,10 @@ function slug(name) {
 
 class TranscriptSession {
   constructor(guildName, channelName) {
-    // LOCAL date, not toISOString() — that is UTC, so a session at 00:30 CEST
-    // would file under the previous day while every timestamp inside the file
-    // is local. Found the hard way at 00:32 on 2026-08-03.
-    const now = new Date();
-    const day = [
-      now.getFullYear(),
-      String(now.getMonth() + 1).padStart(2, '0'),
-      String(now.getDate()).padStart(2, '0'),
-    ].join('-');
+    // UTC throughout — folder date and the timestamps inside must agree, or a
+    // session just after local midnight lands in a folder dated the previous
+    // day. UTC is also stable across DST and travel, which local time is not.
+    const day = new Date().toISOString().slice(0, 10);
     this.dir = path.join(config.transcriptDir, `${slug(guildName)}-${slug(channelName)}-${day}`);
     this.segments = path.join(this.dir, 'segments');
     fs.mkdirSync(this.segments, { recursive: true });

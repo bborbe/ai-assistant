@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Transcripts are UTC throughout. The folder date came from `toISOString()`
+  (UTC) while the line timestamps were local, so a session just after local
+  midnight landed in a folder dated the previous day. UTC is also stable across
+  DST and travel; times are suffixed `Z` so it is unambiguous
+
 - The transcriber no longer borrows the speech-to-speech venv: dependencies are
   declared inline (PEP 723) so `uv run` resolves them. The repo no longer needs
   a speech-to-speech checkout to transcribe, and `make dev` starts it alongside
