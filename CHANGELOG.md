@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The transcriber no longer borrows the speech-to-speech venv: dependencies are
+  declared inline (PEP 723) so `uv run` resolves them. The repo no longer needs
+  a speech-to-speech checkout to transcribe, and `make dev` starts it alongside
+  the rest
+
 - Persistent Claude Code process per session, fed as `stream-json` over stdin
   instead of spawning `claude -p` per turn. Cold 7.6s, warm 5.3s, then 4.4s —
   and context is retained on the live process. Measurement first ruled out the

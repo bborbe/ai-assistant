@@ -125,8 +125,9 @@ Naive `pcm[::3]` is wrong twice over: it walks alternating channels on an interl
 ## Running it
 
 ```bash
-make dev                  # shim + speech-to-speech + bot, Ctrl-C stops all three
-SKIP_VOICE=1 make dev     # text surface only — starts in seconds
+make dev                     # shim + speech-to-speech + transcriber + bot
+SKIP_VOICE=1 make dev        # text surface only — starts in seconds
+SKIP_TRANSCRIBER=1 make dev  # no voice transcription
 ```
 
 `make dev` reuses anything already listening rather than fighting it, and waits for each port instead of sleeping a fixed time (model load is variable). Individually: `make shim`, `make run`.
@@ -146,5 +147,6 @@ SKIP_VOICE=1 make dev     # text surface only — starts in seconds
 Diagnostics from the spikes that proved each leg, kept because they isolate faults the full bridge can't:
 
 - `capture.js` — join a channel, capture one speaker, write raw 48 kHz stereo WAV. Proves voice receive with no endpoint involved.
-- `to16k.py` — mono mix + `soxr` HQ resample to 16 kHz. Run in the speech-to-speech venv.
+- `to16k.py` — mono mix + `soxr` HQ resample to 16 kHz.
+- `transcriber.py` — watches for voice segments and appends the speaker-labelled transcript. Dependencies are declared inline (PEP 723), so `uv run` resolves them and no speech-to-speech checkout is needed.
 - `realtime_probe.py` — send a WAV to the speech-to-speech realtime socket and report every event type it emits. Proves the endpoint with no Discord involved; the reference for the protocol handling in `src/voice.js`.

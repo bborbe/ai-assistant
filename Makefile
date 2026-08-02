@@ -12,7 +12,6 @@ include Makefile.docker
 -include local.env
 
 SERVICE = bborbe/discord-assistant
-S2S_DIR ?= $(HOME)/Documents/workspaces/speech-to-speech
 
 .PHONY: all
 all: precommit
@@ -46,11 +45,12 @@ require-config:
 
 .PHONY: transcriber
 # Watch for voice segments and append speaker-labelled transcripts.
-# Runs in the speech-to-speech venv (Parakeet MLX lives there), and is separate
-# from the bot on purpose: STT must never stall a live conversation.
+# Dependencies are declared inline in the script (PEP 723), so uv resolves them
+# — no speech-to-speech checkout required. Separate from the bot on purpose:
+# STT must never stall a live conversation.
 transcriber:
 	@set -a; . ./local.env; set +a; \
-	cd $(S2S_DIR) && uv run --python 3.13 python $(CURDIR)/tools/transcriber.py
+	uv run tools/transcriber.py
 
 .PHONY: shim
 # Run the Claude Code OpenAI-compatible shim

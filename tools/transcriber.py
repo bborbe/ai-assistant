@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["mlx-audio", "soundfile", "soxr", "numpy"]
+# ///
 """Watch for voice segments and append a merged, speaker-labelled transcript.
 
-    cd ~/Documents/workspaces/speech-to-speech
-    uv run --python 3.13 python ~/Documents/workspaces/discord-assistant/tools/transcriber.py
+    make transcriber          # or: uv run tools/transcriber.py
 
-Runs in the speech-to-speech venv, which already has Parakeet MLX, soxr and
-soundfile. Deliberately a SEPARATE process from the bot: STT is slow and
+Dependencies are declared inline (PEP 723), so `uv run` resolves them itself —
+no shared venv and no dependency on a speech-to-speech checkout being present.
+The Parakeet weights come from the shared HuggingFace cache, so nothing is
+downloaded twice.
+
+Deliberately a SEPARATE process from the bot: STT is slow and
 occasionally fails, and neither should ever stall a live conversation. If this
 is not running, segments simply pile up on disk and can be transcribed later —
 the audio is never lost.

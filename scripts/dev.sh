@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Start the whole local stack and stop it cleanly on Ctrl-C.
 #
-#   scripts/dev.sh              shim + speech-to-speech + bot
+#   scripts/dev.sh              shim + speech-to-speech + transcriber + bot
 #   SKIP_VOICE=1 scripts/dev.sh shim + bot only (text surface; starts in seconds)
+#   SKIP_TRANSCRIBER=1 …        no voice transcription
 #
 # speech-to-speech is the slow part — it loads STT and TTS models, ~60s cold.
 # Skip it unless you actually want to talk.
@@ -64,6 +65,18 @@ elif [ -x "$S2S_LAUNCHER" ]; then
   wait_for_port "$S2S_PORT" speech-to-speech 90 || echo "  continuing without voice"
 else
   echo "  no s2s launcher at $S2S_LAUNCHER — continuing without voice" >&2
+fi
+
+# Transcription: separate process on purpose, so slow or failing STT never
+# stalls a live conversation. Deps resolve inline via uv (PEP 723).
+if [ "${SKIP_TRANSCRIBER:-}" = "1" ]; then
+  echo "  skipping transcriber (SKIP_TRANSCRIBER=1)"
+elif pgrep -f "transcriber.py" >/dev/null 2>&1; then
+  echo "  transcriber already running, reusing"
+else
+  echo "starting transcriber…"
+  uv run tools/transcriber.py > "$LOGDIR/transcriber.log" 2>&1 &
+  pids+=($!)
 fi
 
 echo "starting bot…"
