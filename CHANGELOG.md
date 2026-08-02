@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Always-on transcription: every speaker in the channel is written to a
+  speaker-labelled, timestamped `transcript.md` inside the vault, appended live
+  so it is readable mid-call. Separate from the command allowlist — the
+  allowlist controls who can _drive_ the bot, this controls who is _written
+  down_. Announced in-channel on join
+- `tools/transcriber.py` watches for segments and transcribes with the same
+  Parakeet loader speech-to-speech uses. A separate process on purpose: STT
+  must never stall a live conversation, and if it is not running the audio
+  simply waits on disk
+
 - Per-speaker audio buffers. Every subscribed speaker was appended to one
   buffer in arrival order, so two people would have produced interleaved
   chunks — worse than a mix, because the samples never align. Now buffered per

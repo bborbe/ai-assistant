@@ -7,6 +7,7 @@ include Makefile.docker
 -include local.env
 
 SERVICE = bborbe/discord-assistant
+S2S_DIR ?= $(HOME)/Documents/workspaces/speech-to-speech
 
 .PHONY: all
 all: precommit
@@ -36,6 +37,13 @@ dev: require-config
 # Fail with a useful message rather than an empty-token error.
 require-config:
 	@test -f local.env || { echo "local.env missing — run: cp local.env.example local.env" >&2; exit 1; }
+
+.PHONY: transcriber
+# Watch for voice segments and append speaker-labelled transcripts.
+# Runs in the speech-to-speech venv (Parakeet MLX lives there), and is separate
+# from the bot on purpose: STT must never stall a live conversation.
+transcriber:
+	@cd $(S2S_DIR) && uv run --python 3.13 python $(CURDIR)/tools/transcriber.py
 
 .PHONY: shim
 # Run the Claude Code OpenAI-compatible shim

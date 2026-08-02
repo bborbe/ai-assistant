@@ -30,6 +30,20 @@ const config = {
 
   logLevel: (process.env.LOG_LEVEL || 'info').toLowerCase(),
 
+  // Transcription of EVERY speaker in the channel, not just the allowlist.
+  // Deliberately separate from the command path: the allowlist controls who can
+  // *drive* the bot, this controls who gets *written down*. Recording other
+  // people is a consent matter wherever that is not obviously fine.
+  transcribe: process.env.TRANSCRIBE !== '0',
+  // Set TRANSCRIPT_DIR in local.env. It belongs somewhere the shim can READ —
+  // Claude Code runs with cwd in the vault and no --add-dir, so a path outside
+  // it cannot be read mid-call, and "what did we just discuss?" would fail.
+  // Defaults to a repo-local dir so a fresh clone never writes into a vault it
+  // was not told about.
+  transcriptDir: process.env.TRANSCRIPT_DIR || `${__dirname}/../transcripts`,
+  // Announce in-channel on join, so recording is never silent.
+  announceTranscription: process.env.ANNOUNCE_TRANSCRIPTION !== '0',
+
   // Health/readiness endpoints, so this runs as a normal k8s workload.
   healthHost: process.env.HEALTH_HOST || '0.0.0.0',
   healthPort: parseInt(process.env.HEALTH_PORT || '8080', 10),

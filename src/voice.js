@@ -16,6 +16,7 @@ const { Readable } = require('stream');
 const WebSocket = require('ws');
 const config = require('./config');
 const log = require('./log');
+const { TranscriptSession } = require('./transcript');
 
 const DISCORD_RATE = 48000,
   DISCORD_CH = 2;
@@ -61,7 +62,7 @@ function up(buf) {
 
 /** One live voice session: Discord audio <-> speech-to-speech. */
 class Session {
-  constructor(connection, guildId) {
+  constructor(connection, guildId, guildName, channelName) {
     this.conn = connection;
     this.guildId = guildId;
     // Per-speaker buffers. Discord gives a separate stream per user (per SSRC),
@@ -74,6 +75,12 @@ class Session {
     this.subscribed = new Set();
     this.closed = false;
 
+    // Transcript path — EVERY speaker, independent of the command allowlist.
+    // Buffers here are flushed on each speaker's silence boundary.
+    this.transcript = config.transcribe ? new TranscriptSession(guildName, channelName) : null;
+    this.utterance = new Map(); // userId -> Buffer (48k stereo, as captured)
+    this.names = new Map(); // userId -> display name
+
     this.player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play } });
     this.conn.subscribe(this.player);
     this.player.on('idle', () => {
@@ -81,6 +88,10 @@ class Session {
     });
 
     this.conn.receiver.speaking.on('start', (userId) => this.listen(userId));
+    // Silence boundary per speaker: this is what turns a continuous stream into
+    // utterances, and it is why the transcript reads like a conversation rather
+    // than one undifferentiated block.
+    this.conn.receiver.speaking.on('end', (userId) => this.flush(userId));
     this.connectS2S();
 
     // Discord emits audio ONLY while someone speaks, but s2s closes a turn on
@@ -91,15 +102,19 @@ class Session {
 
   listen(userId) {
     if (this.subscribed.has(userId)) return;
-    if (!config.isAllowed(userId)) {
+    const allowed = config.isAllowed(userId);
+    // Subscribe to everyone when transcribing; otherwise only to people who may
+    // drive the bot. Two different questions: who can COMMAND it (allowlist)
+    // and who gets WRITTEN DOWN (transcript).
+    if (!allowed && !this.transcript) {
       if (!this.subscribed.has(`denied:${userId}`)) {
         this.subscribed.add(`denied:${userId}`);
-        log.info(`  voice: IGNORING ${userId} — not allowlisted`);
+        log.info('voice: ignoring speaker, not allowlisted', { userId });
       }
       return;
     }
     this.subscribed.add(userId);
-    log.info(`  voice <- ${userId} speaking`);
+    log.info('voice: speaker subscribed', { userId, drivesBot: allowed });
     const decoder = new prism.opus.Decoder({
       rate: DISCORD_RATE,
       channels: DISCORD_CH,
@@ -111,8 +126,27 @@ class Session {
       })
       .pipe(decoder)
       .on('data', (c) => {
-        this.inbox.set(userId, Buffer.concat([this.inbox.get(userId) ?? Buffer.alloc(0), c]));
+        // Command path: only allowlisted audio reaches speech-to-speech.
+        if (allowed) {
+          this.inbox.set(userId, Buffer.concat([this.inbox.get(userId) ?? Buffer.alloc(0), c]));
+        }
+        // Transcript path: everyone, kept separate per speaker.
+        if (this.transcript) {
+          this.utterance.set(
+            userId,
+            Buffer.concat([this.utterance.get(userId) ?? Buffer.alloc(0), c]),
+          );
+        }
       });
+  }
+
+  /** Write one speaker's utterance to disk when they stop talking. */
+  flush(userId) {
+    if (!this.transcript) return;
+    const pcm = this.utterance.get(userId);
+    if (!pcm?.length) return;
+    this.utterance.delete(userId);
+    this.transcript.write(userId, this.names.get(userId) ?? userId, pcm);
   }
 
   tick() {
@@ -205,6 +239,9 @@ class Session {
   }
 
   destroy() {
+    // Flush in-flight utterances before tearing down, or the last thing anyone
+    // said is silently lost.
+    for (const userId of [...this.utterance.keys()]) this.flush(userId);
     this.closed = true;
     clearInterval(this.pump);
     try {
@@ -232,8 +269,14 @@ async function join(channel) {
   });
   conn.on('stateChange', (o, n) => log.info(`  voice: ${o.status} -> ${n.status}`));
   await entersState(conn, VoiceConnectionStatus.Ready, 30000);
-  sessions.set(channel.guild.id, new Session(conn, channel.guild.id));
-  log.info(`  voice: joined #${channel.name}`);
+  const session = new Session(conn, channel.guild.id, channel.guild.name, channel.name);
+  // Resolve display names once so the transcript reads with names, not ids.
+  for (const [id, member] of channel.members) {
+    session.names.set(id, member.displayName ?? member.user.username);
+  }
+  sessions.set(channel.guild.id, session);
+  log.info('voice: joined', { channel: channel.name, transcribing: Boolean(session.transcript) });
+  return session;
 }
 
 function leave(guildId) {

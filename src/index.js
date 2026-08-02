@@ -111,8 +111,15 @@ client.on('interactionCreate', async (i) => {
     }
     await i.reply({ content: `Joining ${channel.name}…`, flags: MessageFlags.Ephemeral });
     try {
-      await voice.join(channel);
+      const session = await voice.join(channel);
       await i.followUp({ content: `Listening in ${channel.name}.`, flags: MessageFlags.Ephemeral });
+      // Say it out loud in the channel: recording should never be silent, even
+      // on a server where everyone present already knows.
+      if (session?.transcript && config.announceTranscription) {
+        await i.channel
+          ?.send(`🎙️ Transcribing **${channel.name}** — every speaker is written down.`)
+          .catch(() => {});
+      }
     } catch (e) {
       log.error('voice join failed', { error: e.message });
       await i.followUp({
