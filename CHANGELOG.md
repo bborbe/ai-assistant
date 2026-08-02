@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Leave voice properly on shutdown. `client.destroy()` ran immediately after
+  leaving, cutting the gateway before the voice-state update reached Discord —
+  so the bot lingered in the channel as a ghost a later process had to evict.
+  Now it leaves, evicts, and waits briefly before tearing down
+- Ghost eviction falls back to the guild's voice-state cache. `members.me.voice`
+  may not be populated at `clientReady`, so a ghost invisible to one cache is
+  usually visible to the other
+
 - Transcripts are UTC throughout. The folder date came from `toISOString()`
   (UTC) while the line timestamps were local, so a session just after local
   midnight landed in a folder dated the previous day. UTC is also stable across

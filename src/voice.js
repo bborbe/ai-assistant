@@ -340,8 +340,17 @@ function leave(guildId) {
  */
 async function evictGhost(guild) {
   const me = guild.members.me ?? (await guild.members.fetchMe().catch(() => null));
-  if (!me?.voice?.channelId) return null;
-  const name = me.voice.channel?.name ?? me.voice.channelId;
+  if (!me) return null;
+
+  // members.me.voice reads a cache that may not be populated yet at
+  // clientReady, so fall back to the guild's voice-state cache directly. A
+  // ghost that is invisible to one of these is usually visible to the other.
+  const channelId = me.voice?.channelId ?? guild.voiceStates?.cache?.get(me.id)?.channelId ?? null;
+  if (!channelId) return null;
+
+  const name = guild.channels.cache.get(channelId)?.name ?? channelId;
+  // disconnect() goes through the gateway voice state, so it works regardless
+  // of which process opened the connection.
   await me.voice.disconnect().catch(() => {});
   return name;
 }

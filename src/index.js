@@ -184,15 +184,22 @@ function shutdown(signal) {
   }, config.shutdownTimeoutMs);
   timer.unref();
 
-  // Leaving voice channels first is a courtesy: otherwise the bot lingers as a
-  // ghost participant until Discord times the connection out.
+  // Leave voice BEFORE tearing down the gateway, and give the voice-state
+  // update a moment to actually reach Discord. Destroying the client straight
+  // away cuts the connection first, leaving the bot as a ghost participant
+  // that a later process then has to evict.
   for (const id of [...voice.sessions.keys()]) voice.leave(id);
-  client.destroy();
-  health.close(() => {
-    clearTimeout(timer);
-    log.info('shutdown complete');
-    process.exit(0);
-  });
+  for (const guild of client.guilds.cache.values()) {
+    voice.evictGhost(guild).catch(() => {});
+  }
+  setTimeout(() => {
+    client.destroy();
+    health.close(() => {
+      clearTimeout(timer);
+      log.info('shutdown complete');
+      process.exit(0);
+    });
+  }, 600).unref();
 }
 
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => shutdown(sig));
