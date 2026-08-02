@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Persistent Claude Code process per session, fed as `stream-json` over stdin
+  instead of spawning `claude -p` per turn. Cold 7.6s, warm 5.3s, then 4.4s —
+  and context is retained on the live process. Measurement first ruled out the
+  obvious suspect: trimming MCP from 15 servers to 1 saved only 1.6s of 11.8s,
+  so the cost is CLI startup and only reuse fixes it
+- Drop superseded turns. speech-to-speech emits progressive transcription
+  finals, so one sentence arrived as four requests that each queued on the
+  session lock — four invocations and a multi-second stall. A request that
+  finds a newer one waiting now drops itself before doing any work
+- Filler short-circuit: bare "okay"/"yeah" no longer wake Claude Code. Bare
+  "yes"/"no" deliberately still do — they are answers, not backchannel
+
 - The bot's own replies are recorded too. Its speech never returns through
   Discord, so the transcript was one-sided — questions with no answers. Written
   as timestamped `.txt` sidecars rather than appended directly, so the

@@ -79,6 +79,28 @@ DEFAULT_KEY = "default"
 _locks: dict[str, Lock] = defaultdict(Lock)
 _sessions_lock = Lock()
 
+# Sequence per key, so a request can tell it has been superseded.
+#
+# speech-to-speech emits PROGRESSIVE transcription finals: one sentence arrives
+# as "The plot." / "The plot uh dash p allows uh" / "…allows uh streaming of" /
+# the full text. Each becomes a request, each queues on the key's lock, and the
+# result is four Claude invocations for one sentence and a multi-second stall.
+# s2s cancels its own stale HTTP requests, but that does not reach us — so a
+# request that finds a newer one waiting simply drops itself before doing work.
+_seq: dict[str, int] = defaultdict(int)
+_seq_lock = Lock()
+
+
+def next_seq(key: str) -> int:
+    with _seq_lock:
+        _seq[key] += 1
+        return _seq[key]
+
+
+def superseded(key: str, mine: int) -> bool:
+    with _seq_lock:
+        return _seq[key] > mine
+
 
 # ── sessions ───────────────────────────────────────────────────────────────
 def _load() -> dict:
@@ -165,6 +187,24 @@ TEXT_DIRECTIVE = (
 # emoji appear only in closer panels, whereas the keyword after them is free-form
 # ("⚪ Status check answered" is not "⚪ DONE"), so matching on the word alone
 # misses real panels.
+# Backchannel that VAD turns into a "turn". Each one otherwise costs a full
+# Claude Code invocation (10-70s) AND blocks the per-session lock, so a couple
+# of "okay"s while thinking will queue up behind the real question.
+#
+# Deliberately narrow: bare "yes"/"no" are NOT here, because they are real
+# answers to a question the assistant just asked. Only ≤3 words, all filler.
+_FILLER_WORDS = {
+    "okay", "ok", "yeah", "yep", "yup", "mm", "mmm", "mhm", "mmhmm", "hmm", "hm",
+    "uh", "um", "ah", "oh", "right", "sure", "cool", "nice", "alright", "so",
+    "thanks", "ta", "hello", "hi", "hey",
+}
+
+
+def is_filler(text: str) -> bool:
+    words = re.findall(r"[\w'-]+", text.lower())
+    return 0 < len(words) <= 3 and all(w in _FILLER_WORDS for w in words)
+
+
 _PANEL = re.compile(
     r"^\s*[\U0001F7E2\U0001F7E1\U0001F534\U0001F535\u26AA][^\n]*$"   # 🟢🟡🔴🔵⚪ …
     r"|^[^\w\n]{1,6}\s*(?:You|Next|Recommend)\s*:.*$"                    # 👤 You: / ⏰ Next:
@@ -196,8 +236,119 @@ def strip_markdown(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-# ── claude ─────────────────────────────────────────────────────────────────
+# ── persistent claude processes ────────────────────────────────────────────
+# One long-lived `claude` per session key, fed over stdin as stream-json.
+#
+# Spawning `claude -p` per turn re-pays startup every time: measured at ~10s,
+# of which trimming MCP from 15 servers to 1 saved only 1.6s — the cost is the
+# CLI itself, so only process reuse fixes it. A second turn on a warm process
+# measured 4.4s against 7.5s cold, and the gap widens as a session grows.
+#
+# `--append-system-prompt` is a LAUNCH flag, not per-message. That is fine here
+# because a key maps to exactly one surface (voice uses the default key, text
+# uses thread:/dm:/channel: keys), so the directive is stable for the process's
+# life.
+class ClaudeProcess:
+    def __init__(self, key: str, session_id: str, resume: bool, system: str):
+        cmd = ["claude", "-p",
+               "--input-format", "stream-json", "--output-format", "stream-json",
+               "--verbose", "--permission-mode", "auto",
+               "--mcp-config", MCP_CONFIG, "--strict-mcp-config"]
+        if not UNSAFE:
+            cmd += ["--allowed-tools", ALLOWED_TOOLS]
+        cmd += ["--resume", session_id] if resume else ["--session-id", session_id]
+        if system:
+            cmd += ["--append-system-prompt", system]
+
+        self.key = key
+        self.session_id = session_id
+        self.last_used = time.time()
+        self.proc = subprocess.Popen(
+            cmd, cwd=CWD, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, bufsize=1,
+        )
+        print(f"  [{key}] spawned claude ({'resume' if resume else 'new'} {session_id[:8]})", flush=True)
+
+    def alive(self) -> bool:
+        return self.proc.poll() is None
+
+    def ask(self, prompt: str) -> str:
+        msg = {"type": "user",
+               "message": {"role": "user", "content": [{"type": "text", "text": prompt}]}}
+        self.proc.stdin.write(json.dumps(msg) + "\n")
+        self.proc.stdin.flush()
+        deadline = time.time() + TIMEOUT
+        while time.time() < deadline:
+            line = self.proc.stdout.readline()
+            if not line:
+                raise RuntimeError("claude process ended")
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "result":
+                self.last_used = time.time()
+                return str(event.get("result") or "").strip()
+        raise TimeoutError(f"no result within {TIMEOUT}s")
+
+    def close(self):
+        try:
+            self.proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            self.proc.terminate()
+        except Exception:
+            pass
+
+
+_procs: dict[str, ClaudeProcess] = {}
+_procs_lock = Lock()
+
+
+def get_process(key: str, system: str) -> ClaudeProcess:
+    with _procs_lock:
+        proc = _procs.get(key)
+        if proc and proc.alive():
+            return proc
+        if proc:
+            print(f"  [{key}] claude process died, respawning", flush=True)
+            proc.close()
+        sid, started = get_session(key)
+        proc = ClaudeProcess(key, sid, started, system)
+        _procs[key] = proc
+        return proc
+
+
+def drop_process(key: str) -> None:
+    with _procs_lock:
+        proc = _procs.pop(key, None)
+    if proc:
+        proc.close()
+
+
 def ask_claude(key: str, system: str, prompt: str) -> str:
+    """Ask over the persistent process, respawning once if it has died."""
+    for attempt in (1, 2):
+        proc = get_process(key, system)
+        began = time.monotonic()
+        try:
+            out = proc.ask(prompt)
+            mark_started(key)
+            print(f"  [{key}] {time.monotonic() - began:.1f}s, {len(out)} chars", flush=True)
+            return out
+        except (RuntimeError, BrokenPipeError, OSError) as e:
+            print(f"  [{key}] process failed ({e}), attempt {attempt}", flush=True)
+            drop_process(key)
+            if attempt == 2:
+                return f"(claude unavailable: {e})"
+        except TimeoutError as e:
+            print(f"  [{key}] {e}", flush=True)
+            return f"(timed out after {TIMEOUT}s)"
+    return "(claude unavailable)"
+
+
+def _legacy_ask_claude(key: str, system: str, prompt: str) -> str:
     sid, started = get_session(key)
     cmd = ["claude", "-p", prompt, "--output-format", "text",
            "--mcp-config", MCP_CONFIG, "--strict-mcp-config",
@@ -278,6 +429,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path.rstrip("/").endswith("/sessions/reset"):
             key = self._key()
+            drop_process(key)          # kill the live process, not just the mapping
             old = reset_session(key)
             print(f"-> RESET [{key}] {old or '(none)'}", flush=True)
             return self._json(200, {"reset": key, "previous": old})
@@ -294,6 +446,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"error": {"message": "no user message"}})
 
         key = self._key()
+
+        # Answer filler without waking Claude Code. Empty content means
+        # speech-to-speech synthesises nothing, so the bot simply stays quiet —
+        # which is what a person does when you say "okay" mid-thought.
+        if is_filler(prompt):
+            print(f"-> SKIP  [{self._key()}] filler: {prompt[:40]!r}", flush=True)
+            if req.get("stream"):
+                return self._stream("")
+            return self._json(200, self._completion(""))
+
         low = system.lower()
         voice = ("spoken conversation" in low or "voice rules" in low
                  or self.headers.get("X-Output-Mode", "").lower() == "voice")
@@ -301,7 +463,14 @@ class Handler(BaseHTTPRequestHandler):
 
         parts = [p for p in (system, MEMORY_DIRECTIVE,
                              VOICE_DIRECTIVE if voice else TEXT_DIRECTIVE) if p]
+        mine = next_seq(key)
         with _locks[key]:                 # per key, so other keys run concurrently
+            # While we waited for the lock a newer turn may have arrived — this
+            # one is a partial hypothesis of the same sentence. Drop it silently
+            # rather than spending a Claude invocation on stale text.
+            if superseded(key, mine):
+                print(f"-> STALE [{key}] superseded, dropping: {prompt[:40]!r}", flush=True)
+                return self._stream("") if req.get("stream") else self._json(200, self._completion(""))
             answer = ask_claude(key, "\n\n".join(parts), prompt)
         answer = strip_markdown(answer) if voice else strip_panels(answer)
 
