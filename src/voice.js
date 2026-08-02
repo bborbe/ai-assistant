@@ -64,7 +64,11 @@ class Session {
   constructor(connection, guildId) {
     this.conn = connection;
     this.guildId = guildId;
-    this.inbox = Buffer.alloc(0);
+    // Per-speaker buffers. Discord gives a separate stream per user (per SSRC),
+    // which is the expensive half of any diarization pipeline — appending them
+    // all to one buffer would throw that away AND garble the audio, since the
+    // chunks interleave rather than align in time.
+    this.inbox = new Map(); // userId -> Buffer
     this.reply = [];
     this.speaking = false;
     this.subscribed = new Set();
@@ -107,18 +111,36 @@ class Session {
       })
       .pipe(decoder)
       .on('data', (c) => {
-        this.inbox = Buffer.concat([this.inbox, c]);
+        this.inbox.set(userId, Buffer.concat([this.inbox.get(userId) ?? Buffer.alloc(0), c]));
       });
   }
 
   tick() {
     if (this.closed || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    // Take one 20ms slice from each speaker and sum them sample-aligned. With a
+    // single speaker this is a pass-through; with several it is a real mix
+    // rather than interleaved garbage. Speaker identity is preserved in the
+    // buffers above, so per-speaker STT stays possible later.
+    const ready = [];
+    for (const [userId, buf] of this.inbox) {
+      if (buf.length < IN_BYTES) continue;
+      ready.push(buf.subarray(0, IN_BYTES));
+      this.inbox.set(userId, buf.subarray(IN_BYTES));
+    }
+
     let frame;
-    if (this.inbox.length >= IN_BYTES) {
-      frame = down(this.inbox.subarray(0, IN_BYTES));
-      this.inbox = this.inbox.subarray(IN_BYTES);
+    if (ready.length === 0) {
+      frame = Buffer.alloc(OUT_SAMPLES * 2); // silence keeps the VAD turn closing
+    } else if (ready.length === 1) {
+      frame = down(ready[0]);
     } else {
-      frame = Buffer.alloc(OUT_SAMPLES * 2); // silence
+      frame = Buffer.alloc(OUT_SAMPLES * 2);
+      const mixed = ready.map(down);
+      for (let i = 0; i < OUT_SAMPLES; i++) {
+        let sum = 0;
+        for (const m of mixed) sum += m.readInt16LE(i * 2);
+        frame.writeInt16LE(Math.max(-32768, Math.min(32767, sum)), i * 2);
+      }
     }
     this.ws.send(
       JSON.stringify({ type: 'input_audio_buffer.append', audio: frame.toString('base64') }),

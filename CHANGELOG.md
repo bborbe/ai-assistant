@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Per-speaker audio buffers. Every subscribed speaker was appended to one
+  buffer in arrival order, so two people would have produced interleaved
+  chunks — worse than a mix, because the samples never align. Now buffered per
+  user and summed sample-aligned at send time. Latent until now (the allowlist
+  subscribes one person), and it keeps speaker identity available for
+  per-speaker STT later
+
 - Strip the CLAUDE.md closer panel from text replies too, not just voice. A chat
   window is not a terminal. Matching is anchored on the state icon rather than
   the keyword: the text after it is free-form, so "⚪ Status check answered" is
