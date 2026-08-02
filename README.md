@@ -38,6 +38,7 @@ Not built yet: proactive outbound (the bot speaking unprompted, e.g. reporting a
 
 ```bash
 make install
+cp local.env.example local.env      # gitignored; holds the TeamVault key, not the token
 
 # text only — no speech-to-speech needed
 DISCORD_TOKEN=$(teamvault-cli password <secret-id>) \
@@ -62,7 +63,9 @@ To put Claude Code behind it instead of a hosted model, run `make shim` and poin
 | `HEALTH_PORT`      | `8080`                            | `/healthz`, `/readiness`, `/version`                                                  |
 | `HISTORY_LIMIT`    | `20`                              | Prior messages resent per text turn                                                   |
 
-See `example.env` for the full set.
+See `local.env.example` for the full set.
+
+There is **no committed env file** on purpose. Make variables override the environment, so a committed `export DISCORD_TOKEN=` — even an empty one — silently clobbers whatever you exported in your shell. Config lives in gitignored `local.env`; `make run` fails with a pointer to the template if it is missing.
 
 ## The shim — Claude Code behind an OpenAI endpoint
 

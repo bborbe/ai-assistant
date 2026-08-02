@@ -13,7 +13,9 @@
   readiness before draining
 - Security gates: `npm audit` (high/critical) and `trivy fs` (vulns + secrets)
 - `make run` resolves the Discord token from TeamVault at run time, with
-  fail-fast guards; `local.env` (gitignored) overrides committed defaults
+  fail-fast guards. Config lives in gitignored `local.env` (from
+  `local.env.example`); there is no committed env file, because Make variables
+  override the environment and would clobber the shell
 - Health server moved to 8081 — 8080 belongs to the shim
 - `Makefile.k8s` uses `teamvault-cli config parse`; `teamvault-config-parser`
   was retired in v5.7 and silently renders nothing
