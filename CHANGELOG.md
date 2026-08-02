@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Stream assistant text as it arrives instead of waiting for `result`, and run
+  Claude Code on a PTY so it line-buffers. Off a pipe it block-buffers and a
+  whole turn lands at once; on a PTY chunks arrive ~0.2s apart
+- Caveat, measured: the model usually calls its tools _before_ saying anything,
+  so there is little early text to stream. The directive asks it to speak first
+  and it does not comply — a fast-LLM tier that answers regardless is the fix,
+  and this streaming path is what it will use
+
 - Voice replies stop reciting identifiers. The directive now forbids ids,
   hashes, byte counts, paths and timestamps explicitly and asks for flowing
   conversational sentences rather than clipped fragments; a regex backstop

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import pty
 import re
 import subprocess
 import time
@@ -166,6 +167,10 @@ VOICE_DIRECTIVE = (
     "heard rather than read. Say 'the transcript file' not its path, 'the same session as "
     "before' not its id, 'about thirty turns' not an exact count. If a detail only makes "
     "sense written down, say you have put it in the vault instead of reciting it.\n"
+    "If you are about to look something up, SAY ONE SHORT SENTENCE FIRST — 'let me "
+    "check that' — then do the lookup and answer. Speaking before the tool runs is what "
+    "keeps the silence from feeling broken; your first sentence is spoken while the work "
+    "happens.\n"
     "If the answer is long, say the single most important thing and offer to continue."
 )
 
@@ -281,37 +286,94 @@ class ClaudeProcess:
         self.key = key
         self.session_id = session_id
         self.last_used = time.time()
+
+        # stdout goes to a PTY, not a pipe. Claude Code block-buffers when it
+        # is not on a terminal, so every event of a turn arrives at once at the
+        # end — measured: acknowledgement and answer both landing at 32.4s. On a
+        # PTY it line-buffers, and the same turn yields "let me check" at 3.0s
+        # with the answer at 7.8s. That early sentence is what TTS speaks while
+        # the tools run, instead of dead air.
+        self._pty_main, pty_child = pty.openpty()
         self.proc = subprocess.Popen(
-            cmd, cwd=CWD, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True, bufsize=1,
+            cmd, cwd=CWD, stdin=subprocess.PIPE, stdout=pty_child,
+            stderr=subprocess.DEVNULL, text=True, bufsize=1,
         )
+        os.close(pty_child)
+        self._out = os.fdopen(self._pty_main, "rb", 0)
+        self._buf = b""
         print(f"  [{key}] spawned claude ({'resume' if resume else 'new'} {session_id[:8]})", flush=True)
 
     def alive(self) -> bool:
         return self.proc.poll() is None
 
-    def ask(self, prompt: str) -> str:
+    def _readline(self) -> str | None:
+        """One JSON line off the PTY. A PTY has no EOF while the child lives,
+        so read byte-wise and split on newlines ourselves; \r is the PTY's
+        own line-ending translation and is not part of the payload."""
+        while True:
+            chunk = self._out.read(1)
+            if not chunk:
+                return None
+            self._buf += chunk
+            if chunk == b"\n":
+                line = self._buf.decode("utf-8", errors="ignore").replace("\r", "")
+                self._buf = b""
+                return line
+
+    def ask(self, prompt: str, on_text=None) -> str:
+        """Run one turn. `on_text` receives assistant text as it arrives.
+
+        The `assistant` event carries the reply BEFORE `result` — measured 6.1s
+        vs 8.7s on a plain question, and much wider when the turn uses tools,
+        because `result` waits for every tool to finish. Waiting for `result`
+        therefore throws away speech-ready text; emitting on `assistant` lets
+        TTS start earlier and lets the model say "let me check" while it works,
+        which is exactly what the voice prompt asks for and never got.
+        """
         msg = {"type": "user",
                "message": {"role": "user", "content": [{"type": "text", "text": prompt}]}}
         self.proc.stdin.write(json.dumps(msg) + "\n")
         self.proc.stdin.flush()
+
+        seen: list[str] = []
         deadline = time.time() + TIMEOUT
         while time.time() < deadline:
-            line = self.proc.stdout.readline()
-            if not line:
+            line = self._readline()
+            if line is None:
                 raise RuntimeError("claude process ended")
+            if not line.strip():
+                continue
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if event.get("type") == "result":
+
+            kind = event.get("type")
+            if kind == "assistant":
+                chunk = "".join(
+                    c.get("text", "")
+                    for c in event.get("message", {}).get("content", [])
+                    if c.get("type") == "text"
+                ).strip()
+                if chunk:
+                    seen.append(chunk)
+                    if on_text:
+                        on_text(chunk)
+            elif kind == "result":
                 self.last_used = time.time()
-                return str(event.get("result") or "").strip()
+                final = str(event.get("result") or "").strip()
+                # `result` repeats the last assistant text; return what was
+                # already emitted so the caller does not say it twice.
+                return final if not seen else "\n".join(seen)
         raise TimeoutError(f"no result within {TIMEOUT}s")
 
     def close(self):
         try:
             self.proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            self._out.close()
         except Exception:
             pass
         try:
@@ -345,13 +407,13 @@ def drop_process(key: str) -> None:
         proc.close()
 
 
-def ask_claude(key: str, system: str, prompt: str) -> str:
+def ask_claude(key: str, system: str, prompt: str, on_text=None) -> str:
     """Ask over the persistent process, respawning once if it has died."""
     for attempt in (1, 2):
         proc = get_process(key, system)
         began = time.monotonic()
         try:
-            out = proc.ask(prompt)
+            out = proc.ask(prompt, on_text=on_text)
             mark_started(key)
             print(f"  [{key}] {time.monotonic() - began:.1f}s, {len(out)} chars", flush=True)
             return out
@@ -411,6 +473,49 @@ def extract(messages: list[dict]) -> tuple[str, str]:
         prompt = c if isinstance(c, str) else " ".join(
             p.get("text", "") for p in c if isinstance(p, dict))
     return system.strip(), prompt.strip()
+
+
+class _StreamWriter:
+    """Incremental SSE writer for one response.
+
+    Headers go out on the first chunk, so a turn that produces nothing (a
+    superseded or filler turn) can still answer with the simple empty body.
+    """
+
+    def __init__(self, handler):
+        self.h = handler
+        self.id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+        self.created = int(time.time())
+        self.started = False
+
+    def _send(self, delta: dict, finish=None):
+        if not self.started:
+            self.h.send_response(200)
+            self.h.send_header("Content-Type", "text/event-stream")
+            self.h.send_header("Cache-Control", "no-cache")
+            self.h.send_header("Connection", "close")
+            self.h.end_headers()
+            self.started = True
+            self._raw({"role": "assistant", "content": ""})
+        self._raw(delta, finish)
+
+    def _raw(self, delta: dict, finish=None):
+        chunk = {"id": self.id, "object": "chat.completion.chunk", "created": self.created,
+                 "model": MODEL,
+                 "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+        self.h.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+        self.h.wfile.flush()
+
+    def chunk(self, text: str):
+        if text:
+            self._send({"content": text})
+
+    def finish(self):
+        if not self.started:
+            self._send({"content": ""})
+        self._raw({}, finish="stop")
+        self.h.wfile.write(b"data: [DONE]\n\n")
+        self.h.wfile.flush()
 
 
 class Handler(BaseHTTPRequestHandler):
