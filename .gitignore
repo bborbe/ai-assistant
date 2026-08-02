@@ -1,0 +1,9 @@
+node_modules/
+
+# captured audio — may contain real conversation
+out/
+*.wav
+
+# never commit credentials; the bot token lives in TeamVault
+.env
+.env.*
