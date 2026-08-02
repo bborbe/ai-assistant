@@ -20,7 +20,7 @@ One Discord bot identity permits one gateway connection, so text and voice must 
 
 Both surfaces work, verified end to end against a real Claude Code session:
 
-- **Text** — DM or `@mention`; reads the vault, runs skills and MCP, answers in the channel.
+- **Text** — DM, or `@mention` in a guild channel. A mention opens a **thread** and the conversation continues there, so follow-ups need no `@` and history stays scoped to the thread rather than to whatever else the channel was discussing. DMs stay flat — Discord has no threads in DMs.
 - **Voice** — `/join` from a voice channel, talk, hear the reply. Barge-in supported.
 - **Sender allowlist** on both surfaces, failing closed.
 - **Cross-surface continuity** — a stateful endpoint means a voice turn and a text turn share one conversation.
@@ -82,6 +82,12 @@ It is OpenAI-**shaped but stateful**, a deliberate deviation:
 Clients resend full history per the spec; appending it to a session that already has it would double context every turn and fork into a second, divergent history. Dropping it is also what makes cross-surface continuity work: the session is the conversation, not the transport.
 
 For voice it additionally **enforces** speakable output — a session with a personal `CLAUDE.md` follows its own formatting rules (status panels, markdown, bullet lists), which are unusable as speech and which the voice prompt alone does not override.
+
+### Threads and the stateful endpoint
+
+Threads tidy the channel and scope history; they do **not** create separate conversations. With the stateful shim every thread maps onto the same Claude Code session, so context carries across them — which is the intended behaviour (it is what makes voice and text share a conversation), but it will surprise you if you expect one thread to be a sandbox. Against a _stateless_ endpoint, threads would be genuinely independent.
+
+Requires **Create Public Threads** and **Send Messages in Threads**. Without them the bot logs a warning and answers in the channel instead of losing the reply.
 
 ## Service endpoints
 

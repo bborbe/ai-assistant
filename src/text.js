@@ -30,30 +30,70 @@ async function history(channel, botId) {
     .map((m) => ({ role: m.author.id === botId ? 'assistant' : 'user', content: m.content }));
 }
 
+/** A thread this bot started — messages in it are turns, no mention needed. */
+function isOwnThread(channel, botId) {
+  return Boolean(channel?.isThread?.() && channel.ownerId === botId);
+}
+
+/**
+ * Where the answer goes.
+ *
+ * In a guild channel, the first mention opens a thread and everything after
+ * lives there: the channel stays clean, follow-ups need no `@`, and history
+ * fetches are naturally scoped to the conversation instead of to whatever else
+ * the channel was discussing.
+ *
+ * DMs are returned as-is — Discord has no threads in DMs.
+ */
+async function conversationChannel(msg, botId) {
+  if (!msg.guild) return msg.channel;
+  if (isOwnThread(msg.channel, botId)) return msg.channel;
+  if (!msg.channel.threads) return msg.channel; // e.g. already a forum post
+  try {
+    return await msg.startThread({
+      name:
+        msg.content
+          .replace(/<@!?\d+>/g, '')
+          .trim()
+          .slice(0, 90) || 'assistant',
+      autoArchiveDuration: 1440,
+    });
+  } catch (e) {
+    // Missing Create Threads permission is not worth losing the answer over.
+    log.warn('could not start thread, replying in channel', { error: e.message });
+    return msg.channel;
+  }
+}
+
 function register(client) {
   client.on('messageCreate', async (msg) => {
     if (msg.author.bot) return;
 
-    // Answer DMs, and mentions in a guild — not every message in a channel.
+    // Answer DMs, mentions in a guild, and anything inside a thread we opened.
     const isDM = !msg.guild;
     const mentioned = msg.mentions.users.has(client.user.id);
-    if (!isDM && !mentioned) return;
+    const inOwnThread = isOwnThread(msg.channel, client.user.id);
+    if (!isDM && !mentioned && !inOwnThread) return;
 
     if (!config.isAllowed(msg.author.id)) {
-      log.info(`  text: DROPPED ${msg.author.tag} (${msg.author.id}) — not allowlisted`);
+      log.warn('text message dropped', { user: msg.author.tag, id: msg.author.id });
       return;
     }
 
     const content = msg.content.replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '').trim();
     if (!content) return;
-    log.info(`  text <- ${msg.author.tag}: ${content.slice(0, 80)}`);
+    log.info('text in', { user: msg.author.tag, content: content.slice(0, 80) });
 
+    let target = msg.channel;
     try {
-      await msg.channel.sendTyping();
-      const typing = setInterval(() => msg.channel.sendTyping().catch(() => {}), 8000);
+      target = await conversationChannel(msg, client.user.id);
+      await target.sendTyping();
+      const typing = setInterval(() => target.sendTyping().catch(() => {}), 8000);
 
-      const messages = await history(msg.channel, client.user.id).catch(() => []);
-      // The fetch above already includes this message; only append if it didn't.
+      // Read history from the thread, not the parent channel — that is the
+      // point of threading. A brand-new thread has none, so fall back to the
+      // message itself.
+      const messages = await history(target, client.user.id).catch(() => []);
       if (messages.at(-1)?.content !== content) messages.push({ role: 'user', content });
 
       let answer;
@@ -63,12 +103,12 @@ function register(client) {
         clearInterval(typing);
       }
 
-      log.info(`  text -> ${answer.slice(0, 80)}`);
-      for (const part of chunk(answer)) await msg.reply(part);
+      log.info('text out', { chars: answer.length, preview: answer.slice(0, 80) });
+      for (const part of chunk(answer)) await target.send(part);
     } catch (e) {
-      log.error('  text error:', e.message);
-      await msg
-        .reply(`error talking to the endpoint: ${e.message}`.slice(0, DISCORD_LIMIT))
+      log.error('text error', { error: e.message });
+      await target
+        .send(`error talking to the endpoint: ${e.message}`.slice(0, DISCORD_LIMIT))
         .catch(() => {});
     }
   });

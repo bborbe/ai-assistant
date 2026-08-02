@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Text conversations run in a thread: an `@mention` opens one, follow-ups need
+  no mention, and history is scoped to the thread. Falls back to the channel if
+  thread permissions are missing rather than dropping the answer
+
 - `make dev` starts the whole local stack (shim + speech-to-speech + bot) and
   stops it cleanly; `SKIP_VOICE=1` for the text surface only
 - Repo is now self-contained: the speech-to-speech launcher, the realtime probe
