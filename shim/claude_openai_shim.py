@@ -403,13 +403,29 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
+    def handle_one_request(self):
+        """Client disconnects are normal here, not errors.
+
+        speech-to-speech cancels its own in-flight request on barge-in and on a
+        superseded turn, so the socket is often gone by the time we answer.
+        The default handler dumps a traceback for that; it is expected traffic.
+        """
+        try:
+            super().handle_one_request()
+        except (BrokenPipeError, ConnectionResetError):
+            print("   (client went away — cancelled turn)", flush=True)
+            self.close_connection = True
+
     def _json(self, code: int, payload: dict):
         body = json.dumps(payload).encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
 
     def _key(self) -> str:
         return self.headers.get("X-Session-Key") or DEFAULT_KEY
@@ -509,13 +525,26 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
             self.wfile.flush()
 
-        send({"role": "assistant", "content": ""})
+        def safe(*a, **kw):
+            try:
+                send(*a, **kw)
+                return True
+            except (BrokenPipeError, ConnectionResetError):
+                self.close_connection = True
+                return False
+
+        if not safe({"role": "assistant", "content": ""}):
+            return
         for part in re.findall(r"[^.!?]+[.!?]*\s*", text) or [text]:
-            if part:
-                send({"content": part})
-        send({}, finish="stop")
-        self.wfile.write(b"data: [DONE]\n\n")
-        self.wfile.flush()
+            if part and not safe({"content": part}):
+                return
+        if not safe({}, finish="stop"):
+            return
+        try:
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
 
 
 if __name__ == "__main__":

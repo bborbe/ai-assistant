@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Client disconnects are handled as normal traffic, not errors.
+  speech-to-speech cancels its in-flight request on barge-in and on a
+  superseded turn, so the socket is routinely gone before the answer is
+  written; that produced an unhandled `BrokenPipeError` traceback per
+  cancelled turn
+
 - Leave voice properly on shutdown. `client.destroy()` ran immediately after
   leaving, cutting the gateway before the voice-state update reached Discord —
   so the bot lingered in the channel as a ghost a later process had to evict.
