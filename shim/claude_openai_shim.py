@@ -155,12 +155,17 @@ def reset_session(key: str) -> str:
 # as speech. The voice prompt is advisory and loses to them, so the shim
 # enforces: belt (instruction) and braces (post-strip).
 VOICE_DIRECTIVE = (
-    "SPOKEN OUTPUT MODE. Your reply is read aloud by a speech synthesiser, not displayed. "
-    "Reply in at most two short sentences of plain prose. "
-    "This overrides any output-format rules in CLAUDE.md or memory: emit NO status panels, "
-    "no lines beginning with READY/DONE/ACTIVE/WAITING/BLOCKED, no 'You:' or 'Next:' lines, "
-    "no markdown, no bullet lists, no headings, no code, no backticks, no emoji. "
-    "Do not speak file paths, wikilinks, URLs or hashes — describe them in words. "
+    "SPOKEN OUTPUT MODE. Your reply is read aloud, not displayed. Speak the way a person "
+    "speaks: full, flowing sentences, one or two of them, in a natural conversational "
+    "register. Never a clipped fragment or a list read out loud.\n"
+    "This overrides any output-format rules in CLAUDE.md or memory: no status panels, no "
+    "lines beginning with READY/DONE/ACTIVE/WAITING/BLOCKED, no 'You:' or 'Next:' lines, "
+    "no markdown, bullets, headings, code, backticks or emoji.\n"
+    "NEVER say aloud: identifiers, hashes, session ids, byte counts, file paths, "
+    "wikilinks, URLs, line numbers, timestamps or version strings. They are noise when "
+    "heard rather than read. Say 'the transcript file' not its path, 'the same session as "
+    "before' not its id, 'about thirty turns' not an exact count. If a detail only makes "
+    "sense written down, say you have put it in the vault instead of reciting it.\n"
     "If the answer is long, say the single most important thing and offer to continue."
 )
 
@@ -226,9 +231,20 @@ def strip_panels(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()   # tidy the gaps left behind
 
 
+# Identifiers read aloud are pure noise — "bee one eff five zero six bee zero".
+# The directive asks the model not to emit them; this is the backstop, because
+# asking is not the same as guaranteeing.
+_HEXISH = re.compile(r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{6,}\b", re.I)
+_UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I)
+_PATHISH = re.compile(r"\S*/\S+\.\w{1,5}\b")
+
+
 def strip_markdown(text: str) -> str:
-    """Make model output safe to speak: no markup, no panels, no paths."""
+    """Make model output safe to speak: no markup, no panels, no identifiers."""
     text = re.sub(r"```.*?```", " ", text, flags=re.S)
+    text = _UUID.sub("an id", text)
+    text = _PATHISH.sub("a file", text)
+    text = _HEXISH.sub("an id", text)
     text = _PANEL.sub("", text)
     text = re.sub(r"\[\[([^\]|]*\|)?([^\]]+)\]\]", r"\2", text)
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)

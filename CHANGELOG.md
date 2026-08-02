@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Voice replies stop reciting identifiers. The directive now forbids ids,
+  hashes, byte counts, paths and timestamps explicitly and asks for flowing
+  conversational sentences rather than clipped fragments; a regex backstop
+  rewrites anything that slips through, because asking a model is not the same
+  as guaranteeing
+
 - Client disconnects are handled as normal traffic, not errors.
   speech-to-speech cancels its in-flight request on barge-in and on a
   superseded turn, so the socket is routinely gone before the answer is
