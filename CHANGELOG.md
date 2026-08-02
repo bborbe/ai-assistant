@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- The bot's own replies are recorded too. Its speech never returns through
+  Discord, so the transcript was one-sided — questions with no answers. Written
+  as timestamped `.txt` sidecars rather than appended directly, so the
+  transcriber merges them in order; appending would race, since STT lags and the
+  reply would land above the question
+- Utterances close on sustained silence (1.5s), not on Discord's `speaking.end`
+  — that fires on every brief pause, chopping a sentence into fragments and
+  filling the transcript with "Yeah." lines
+- Recipes source `local.env` in the shell. Make's `include` reads `$HOME` as an
+  empty _Make_ variable and keeps quotes literally, so `TRANSCRIPT_DIR` became
+  `"OME/Documents/...` and transcripts landed in a bogus directory
+
 - Always-on transcription: every speaker in the channel is written to a
   speaker-labelled, timestamped `transcript.md` inside the vault, appended live
   so it is readable mid-call. Separate from the command allowlist — the

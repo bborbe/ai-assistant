@@ -72,10 +72,11 @@ class TranscriptSession {
    */
   write(userId, displayName, pcm) {
     if (!pcm?.length) return null;
-    // Sub-200ms fragments are almost always a click or a breath; transcribing
-    // them produces noise lines that make the transcript harder to read.
+    // Sub-400ms fragments are almost always a click, a breath, or a backchannel
+    // grunt. Transcribing them fills the transcript with "Yeah." lines that
+    // make it harder to read than if they were dropped.
     const ms = (pcm.length / (RATE * CHANNELS * 2)) * 1000;
-    if (ms < 200) return null;
+    if (ms < 400) return null;
 
     const file = path.join(this.segments, `${Date.now()}-${slug(displayName)}-${userId}.wav`);
     try {
@@ -87,5 +88,28 @@ class TranscriptSession {
     }
   }
 }
+
+/**
+ * Record something already known as text — the bot's own replies.
+ *
+ * Written as a timestamped sidecar rather than appended straight to
+ * transcript.md, so the transcriber merges it by the same filename-sort as the
+ * audio segments. Appending directly would race: STT lags a couple of seconds,
+ * so the reply would often land *above* the question that prompted it.
+ *
+ * No STT involved — speech-to-speech hands us the exact text it synthesised, so
+ * the bot's half of the transcript is verbatim rather than re-recognised.
+ */
+TranscriptSession.prototype.writeText = function writeText(speaker, text) {
+  if (!text?.trim()) return null;
+  const file = path.join(this.segments, `${Date.now()}-${slug(speaker)}-000000.txt`);
+  try {
+    fs.writeFileSync(file, text.trim());
+    return file;
+  } catch (e) {
+    log.error('transcript text write failed', { error: e.message });
+    return null;
+  }
+};
 
 module.exports = { TranscriptSession };

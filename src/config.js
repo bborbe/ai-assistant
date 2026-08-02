@@ -41,6 +41,8 @@ const config = {
   // Defaults to a repo-local dir so a fresh clone never writes into a vault it
   // was not told about.
   transcriptDir: process.env.TRANSCRIPT_DIR || `${__dirname}/../transcripts`,
+  // How the bot labels itself in transcripts.
+  botName: process.env.BOT_NAME || 'Assistant',
   // Announce in-channel on join, so recording is never silent.
   announceTranscription: process.env.ANNOUNCE_TRANSCRIPTION !== '0',
 

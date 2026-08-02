@@ -34,7 +34,10 @@ POLL_SECONDS = float(os.environ.get("TRANSCRIBER_POLL", "2"))
 STT_RATE = 16000
 KEEP_AUDIO = os.environ.get("TRANSCRIBER_KEEP_AUDIO") == "1"
 
-SEGMENT = re.compile(r"^(\d+)-(.+)-(\d{5,})\.wav$")
+# .wav = captured audio needing STT. .txt = already-known text (the bot's own
+# replies, handed over verbatim by speech-to-speech). Both carry the same
+# epoch-ms prefix, so a filename sort interleaves them chronologically.
+SEGMENT = re.compile(r"^(\d+)-(.+)-(\d+)\.(wav|txt)$")
 
 _model = None
 
@@ -79,7 +82,7 @@ def process(session_dir: Path) -> int:
         return 0
     done = 0
     # Sort by filename: the epoch prefix makes that chronological across speakers.
-    for wav in sorted(segments.glob("*.wav")):
+    for wav in sorted([*segments.glob("*.wav"), *segments.glob("*.txt")], key=lambda p: p.name):
         m = SEGMENT.match(wav.name)
         if not m:
             continue
@@ -90,12 +93,15 @@ def process(session_dir: Path) -> int:
         if wav.stat().st_size != size:
             continue
 
-        epoch_ms, speaker, _ = m.groups()
-        try:
-            text = transcribe(wav)
-        except Exception as e:  # a bad segment must not kill the watcher
-            print(f"  !! {wav.name}: {e}", flush=True)
-            text = ""
+        epoch_ms, speaker, _, kind = m.groups()
+        if kind == "txt":
+            text = wav.read_text().strip()   # verbatim, no recognition step
+        else:
+            try:
+                text = transcribe(wav)
+            except Exception as e:  # a bad segment must not kill the watcher
+                print(f"  !! {wav.name}: {e}", flush=True)
+                text = ""
 
         if text:
             ts = datetime.fromtimestamp(int(epoch_ms) / 1000, timezone.utc).astimezone()
@@ -103,7 +109,9 @@ def process(session_dir: Path) -> int:
             (session_dir / "transcript.md").open("a").write(line)
             print(f"  {ts:%H:%M:%S} {speaker}: {text[:70]}", flush=True)
 
-        if KEEP_AUDIO:
+        if kind == "txt":
+            wav.unlink(missing_ok=True)
+        elif KEEP_AUDIO:
             archive = session_dir / "audio"
             archive.mkdir(exist_ok=True)
             wav.rename(archive / wav.name)

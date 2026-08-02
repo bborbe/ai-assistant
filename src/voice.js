@@ -22,6 +22,9 @@ const DISCORD_RATE = 48000,
   DISCORD_CH = 2;
 const S2S_RATE = 16000;
 const TICK_MS = 20;
+// How long a speaker must stay silent before their utterance is considered
+// finished. Discord's speaking.end fires on brief pauses within a sentence.
+const UTTERANCE_GAP_MS = parseInt(process.env.UTTERANCE_GAP_MS || '1500', 10);
 const IN_BYTES = (DISCORD_RATE * DISCORD_CH * 2 * TICK_MS) / 1000; // 20ms @48k stereo
 const OUT_SAMPLES = (S2S_RATE * TICK_MS) / 1000; // 20ms @16k mono
 
@@ -79,6 +82,7 @@ class Session {
     // Buffers here are flushed on each speaker's silence boundary.
     this.transcript = config.transcribe ? new TranscriptSession(guildName, channelName) : null;
     this.utterance = new Map(); // userId -> Buffer (48k stereo, as captured)
+    this.flushTimers = new Map(); // userId -> pending flush
     this.names = new Map(); // userId -> display name
 
     this.player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play } });
@@ -87,11 +91,15 @@ class Session {
       this.speaking = false;
     });
 
-    this.conn.receiver.speaking.on('start', (userId) => this.listen(userId));
+    this.conn.receiver.speaking.on('start', (userId) => {
+      clearTimeout(this.flushTimers.get(userId)); // resumed — keep accumulating
+      this.flushTimers.delete(userId);
+      this.listen(userId);
+    });
     // Silence boundary per speaker: this is what turns a continuous stream into
     // utterances, and it is why the transcript reads like a conversation rather
     // than one undifferentiated block.
-    this.conn.receiver.speaking.on('end', (userId) => this.flush(userId));
+    this.conn.receiver.speaking.on('end', (userId) => this.scheduleFlush(userId));
     this.connectS2S();
 
     // Discord emits audio ONLY while someone speaks, but s2s closes a turn on
@@ -140,7 +148,27 @@ class Session {
       });
   }
 
-  /** Write one speaker's utterance to disk when they stop talking. */
+  /**
+   * Close an utterance only after sustained silence.
+   *
+   * Discord fires `speaking.end` on every brief pause, so flushing immediately
+   * chops one sentence into fragments and the transcript fills with "Yeah."
+   * lines. Waiting UTTERANCE_GAP_MS — and cancelling if the same speaker
+   * resumes — keeps a sentence together.
+   */
+  scheduleFlush(userId) {
+    if (!this.transcript) return;
+    clearTimeout(this.flushTimers.get(userId));
+    this.flushTimers.set(
+      userId,
+      setTimeout(() => {
+        this.flushTimers.delete(userId);
+        this.flush(userId);
+      }, UTTERANCE_GAP_MS),
+    );
+  }
+
+  /** Write one speaker's utterance to disk. */
   flush(userId) {
     if (!this.transcript) return;
     const pcm = this.utterance.get(userId);
@@ -218,7 +246,12 @@ class Session {
         if (e.delta) this.reply.push(Buffer.from(e.delta, 'base64'));
         break;
       case 'response.output_audio_transcript.done':
-        if (e.transcript) log.info(`  voice BOT: ${e.transcript}`);
+        if (e.transcript) {
+          log.info(`  voice BOT: ${e.transcript}`);
+          // The bot's own speech never returns through Discord, so without this
+          // the transcript is one-sided: questions with no answers.
+          this.transcript?.writeText(config.botName, e.transcript);
+        }
         break;
       case 'response.output_audio.done':
       case 'response.done':
@@ -241,6 +274,8 @@ class Session {
   destroy() {
     // Flush in-flight utterances before tearing down, or the last thing anyone
     // said is silently lost.
+    for (const t of this.flushTimers.values()) clearTimeout(t);
+    this.flushTimers.clear();
     for (const userId of [...this.utterance.keys()]) this.flush(userId);
     this.closed = true;
     clearInterval(this.pump);

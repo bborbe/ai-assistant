@@ -4,6 +4,11 @@ include Makefile.docker
 # Local, gitignored config. There is no committed env file on purpose: Make
 # variables override the environment, so a committed empty `export DISCORD_TOKEN=`
 # would silently clobber the shell. Start from local.env.example.
+#
+# NOTE: recipes that need values containing `$` or spaces source this file in
+# the SHELL instead of relying on this include — Make would read `$HOME` as an
+# (empty) Make variable and keep the quotes literally, yielding paths like
+# `"OME/Documents/...`.
 -include local.env
 
 SERVICE = bborbe/discord-assistant
@@ -23,8 +28,9 @@ install:
 # would bake the literal token into the sh -c argv and expose it to `ps`.
 run: require-config
 	@command -v teamvault-cli >/dev/null 2>&1 || { echo "teamvault-cli not on PATH" >&2; exit 1; }
-	@DISCORD_TOKEN=$$(teamvault-cli password $(DISCORD_TOKEN_KEY)); \
-	[ -n "$$DISCORD_TOKEN" ] || { echo "empty token from TeamVault key $(DISCORD_TOKEN_KEY)" >&2; exit 1; }; \
+	@set -a; . ./local.env; set +a; \
+	DISCORD_TOKEN=$$(teamvault-cli password $$DISCORD_TOKEN_KEY); \
+	[ -n "$$DISCORD_TOKEN" ] || { echo "empty token from TeamVault key $$DISCORD_TOKEN_KEY" >&2; exit 1; }; \
 	export DISCORD_TOKEN; node src/index.js
 
 .PHONY: dev
@@ -43,7 +49,8 @@ require-config:
 # Runs in the speech-to-speech venv (Parakeet MLX lives there), and is separate
 # from the bot on purpose: STT must never stall a live conversation.
 transcriber:
-	@cd $(S2S_DIR) && uv run --python 3.13 python $(CURDIR)/tools/transcriber.py
+	@set -a; . ./local.env; set +a; \
+	cd $(S2S_DIR) && uv run --python 3.13 python $(CURDIR)/tools/transcriber.py
 
 .PHONY: shim
 # Run the Claude Code OpenAI-compatible shim
