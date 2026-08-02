@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: discord-assistant
+  namespace: default
+spec:
+  # A Discord bot identity permits ONE gateway connection — never scale this up.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: discord-assistant
+  template:
+    metadata:
+      labels:
+        app: discord-assistant
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: bot
+          image: docker.io/bborbe/discord-assistant:master
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: DISCORD_TOKEN
+              valueFrom:
+                secretKeyRef: { name: discord-assistant, key: DISCORD_TOKEN }
+            - name: ALLOWED_USER_IDS
+              valueFrom:
+                secretKeyRef: { name: discord-assistant, key: ALLOWED_USER_IDS }
+            - name: OPENAI_BASE_URL
+              value: http://claude-shim:8080/v1
+            - name: S2S_URL
+              value: ws://speech-to-speech:8765/v1/realtime
+            - name: LOG_LEVEL
+              value: info
+          # Liveness must not depend on Discord: an outage there should drain,
+          # not restart every pod into a reconnect storm.
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+          # Readiness tracks the gateway connection.
+          readinessProbe:
+            httpGet: { path: /readiness, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 2
+          resources:
+            requests: { cpu: 100m, memory: 192Mi }
+            limits: { memory: 512Mi }
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ['ALL'] }

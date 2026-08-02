@@ -14,13 +14,18 @@ Today that endpoint is MiniMax. Later it is a wrapper around a Claude Code sessi
 
 ## Why one service
 
-One Discord bot identity permits one gateway connection, so text and voice must live in one process. Splitting them across runtimes would need two bot *applications* — two names, two invites — defeating the point of a single assistant. They also share the sender allowlist, which should be one list rather than two that drift.
+One Discord bot identity permits one gateway connection, so text and voice must live in one process. Splitting them across runtimes would need two bot _applications_ — two names, two invites — defeating the point of a single assistant. They also share the sender allowlist, which should be one list rather than two that drift.
 
 ## Status
 
-Working: voice round trip (`bridge.js`) — Discord voice in, spoken reply out, multi-turn, verified in a real voice channel.
+Both surfaces work, verified end to end against a real Claude Code session:
 
-Not built yet: `/join` + `/leave` slash commands (it currently auto-joins a channel named on the command line), the text surface, sender allowlist.
+- **Text** — DM or `@mention`; reads the vault, runs skills and MCP, answers in the channel.
+- **Voice** — `/join` from a voice channel, talk, hear the reply. Barge-in supported.
+- **Sender allowlist** on both surfaces, failing closed.
+- **Cross-surface continuity** — a stateful endpoint means a voice turn and a text turn share one conversation.
+
+Not built yet: proactive outbound (the bot speaking unprompted, e.g. reporting a finished job), a session reset policy, and Telegram as a second transport.
 
 ## Requirements
 
@@ -32,26 +37,60 @@ Not built yet: `/join` + `/leave` slash commands (it currently auto-joins a chan
 ## Run
 
 ```bash
-# 1. speech-to-speech, realtime mode, pointed at your endpoint
-S2S_MODE=realtime ~/Documents/workspaces/scripts/s2s-minimax
+make install
 
-# 2. the bridge
+# text only — no speech-to-speech needed
 DISCORD_TOKEN=$(teamvault-cli password <secret-id>) \
-  node bridge.js "<guild name>" "<voice channel name>"
+ALLOWED_USER_IDS=<your-discord-user-id> \
+  make run
+
+# add voice: speech-to-speech in realtime mode, LLM slot pointed at the same endpoint
+S2S_MODE=realtime ~/Documents/workspaces/scripts/s2s-minimax
 ```
 
-Then join that voice channel and talk.
+DM the bot to use text. `/join` from a voice channel to use voice, `/leave` to stop.
 
-| Env | Default | Meaning |
-|---|---|---|
-| `DISCORD_TOKEN` | — | Bot token (required) |
-| `S2S_URL` | `ws://127.0.0.1:8765/v1/realtime` | speech-to-speech realtime socket |
+To put Claude Code behind it instead of a hosted model, run `make shim` and point `OPENAI_BASE_URL` at it.
+
+| Env                | Default                           | Meaning                                                                               |
+| ------------------ | --------------------------------- | ------------------------------------------------------------------------------------- |
+| `DISCORD_TOKEN`    | —                                 | Bot token (required)                                                                  |
+| `ALLOWED_USER_IDS` | —                                 | Comma-separated Discord user IDs. **Empty means nobody** — it fails closed on purpose |
+| `OPENAI_BASE_URL`  | `http://127.0.0.1:8080/v1`        | The swappable endpoint                                                                |
+| `OPENAI_MODEL`     | `claude-code`                     | Model name passed through                                                             |
+| `S2S_URL`          | `ws://127.0.0.1:8765/v1/realtime` | speech-to-speech realtime socket                                                      |
+| `HEALTH_PORT`      | `8080`                            | `/healthz`, `/readiness`, `/version`                                                  |
+| `HISTORY_LIMIT`    | `20`                              | Prior messages resent per text turn                                                   |
+
+See `example.env` for the full set.
+
+## The shim — Claude Code behind an OpenAI endpoint
+
+`shim/claude_openai_shim.py` exposes **one persistent Claude Code session** as `/v1/chat/completions`, so both surfaces (and anything else speaking OpenAI) continue the _same_ conversation.
+
+It is OpenAI-**shaped but stateful**, a deliberate deviation:
+
+| Role            | Handling     | Why                                                        |
+| --------------- | ------------ | ---------------------------------------------------------- |
+| `system`        | pass through | per-request output rules (voice clients send speech rules) |
+| latest `user`   | the turn     | the actual new input                                       |
+| everything else | **discard**  | the session already has the history                        |
+
+Clients resend full history per the spec; appending it to a session that already has it would double context every turn and fork into a second, divergent history. Dropping it is also what makes cross-surface continuity work: the session is the conversation, not the transport.
+
+For voice it additionally **enforces** speakable output — a session with a personal `CLAUDE.md` follows its own formatting rules (status panels, markdown, bullet lists), which are unusable as speech and which the voice prompt alone does not override.
+
+## Service endpoints
+
+`/healthz` (liveness), `/readiness` (gateway connected — 503 while draining), `/version`.
+
+Liveness deliberately ignores Discord: an outage there should drain traffic, not restart every pod into a reconnect storm.
 
 ## Three things the bridge has to get right
 
 Each of these was found the hard way; none is obvious from the docs.
 
-1. **Inject silence during gaps.** Discord emits audio *only while someone speaks*, but speech-to-speech's VAD closes a turn *on silence*. Without a fixed-rate ticker sending silence between utterances the turn never ends and no reply is ever generated. This is the single thing that makes the bridge work.
+1. **Inject silence during gaps.** Discord emits audio _only while someone speaks_, but speech-to-speech's VAD closes a turn _on silence_. Without a fixed-rate ticker sending silence between utterances the turn never ends and no reply is ever generated. This is the single thing that makes the bridge work.
 
 2. **Never send `input_audio_buffer.commit` or `response.create`.** They race the VAD-driven response and show up server-side as `speech during pending response: cancelled`.
 
@@ -69,6 +108,10 @@ Naive `pcm[::3]` is wrong twice over: it walks alternating channels on an interl
 - **A connection stuck in `signalling` means permissions** — even when `permissionsFor(me)` reports `Connect`/`Speak`/`ViewChannel`/`UseVAD` all `true`. Trust the state machine over the permission API, and always log `conn.on('stateChange')`; otherwise the failure surfaces as an unhandled `AbortError` with no cause.
 - **Run `generateDependencyReport()` first** on any voice problem — it rules out the whole Opus/encryption class in one command.
 - **Discord's portal blocks auto-generated install links for private apps.** Set Installation → Install Link → None and hand-build the OAuth2 URL; keep Public Bot off.
+
+## Deployment
+
+`make buca` → build, upload, clean, apply. **Never scale beyond one replica** — a Discord bot identity permits exactly one gateway connection, which is why `k8s/` pins `replicas: 1` with `strategy: Recreate`.
 
 ## tools/
 

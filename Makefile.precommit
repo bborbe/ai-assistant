@@ -1,0 +1,29 @@
+.PHONY: precommit
+# Run all precommit checks (install is defined in the main Makefile)
+precommit: install format test check
+	@echo "All precommit checks passed"
+
+.PHONY: format
+# Format code with prettier, autofix what eslint can
+format:
+	npx prettier --write .
+	npx eslint --fix . || true
+
+.PHONY: lint
+# Lint code with eslint
+lint:
+	npx eslint .
+
+.PHONY: formatcheck
+# Verify formatting without rewriting (used in CI)
+formatcheck:
+	npx prettier --check .
+
+.PHONY: check
+# Run lint and format verification
+check: lint formatcheck
+
+.PHONY: test
+# Run tests with the built-in node test runner
+test:
+	node --test

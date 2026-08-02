@@ -3,15 +3,17 @@
   "version": "0.0.1",
   "description": "One Discord bot reaching an OpenAI-compatible endpoint from both text and voice",
   "private": true,
-  "main": "bridge.js",
+  "main": "src/index.js",
   "type": "commonjs",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "start": "node bridge.js",
-    "test": "node --check bridge.js && node --check tools/capture.js && echo 'syntax ok'",
-    "deps": "node -e \"console.log(require('@discordjs/voice').generateDependencyReport())\""
+    "start": "node src/index.js",
+    "test": "node --test",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "shim": "python3 -u shim/claude_openai_shim.py"
   },
   "license": "UNLICENSED",
   "dependencies": {
@@ -21,5 +23,9 @@
     "opusscript": "^0.0.8",
     "prism-media": "^1.3.5",
     "ws": "^8.21.1"
+  },
+  "devDependencies": {
+    "eslint": "^9.39.1",
+    "prettier": "^3.6.2"
   }
 }
