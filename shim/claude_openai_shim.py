@@ -193,10 +193,12 @@ TEXT_DIRECTIVE = (
 #
 # Deliberately narrow: bare "yes"/"no" are NOT here, because they are real
 # answers to a question the assistant just asked. Only ≤3 words, all filler.
+# Greetings and thanks are NOT here: "hello" is an opener that deserves a
+# reply, and silence in response reads as the bot being broken. Bare "yes"/"no"
+# are excluded for the same reason — they answer a question.
 _FILLER_WORDS = {
     "okay", "ok", "yeah", "yep", "yup", "mm", "mmm", "mhm", "mmhmm", "hmm", "hm",
-    "uh", "um", "ah", "oh", "right", "sure", "cool", "nice", "alright", "so",
-    "thanks", "ta", "hello", "hi", "hey",
+    "uh", "um", "ah", "oh", "erm", "eh", "alright", "right",
 }
 
 
