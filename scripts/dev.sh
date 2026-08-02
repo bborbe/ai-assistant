@@ -13,9 +13,8 @@ cd "$(dirname "$0")/.."
 [ -f local.env ] || { echo "local.env missing — run: cp local.env.example local.env" >&2; exit 1; }
 set -a; . ./local.env; set +a
 
-# Prefer the in-repo launcher so a fresh clone works; fall back to a personal one.
+# In-repo, so a fresh clone works with no external dependency.
 S2S_LAUNCHER="${S2S_LAUNCHER:-$PWD/scripts/s2s-minimax}"
-[ -x "$S2S_LAUNCHER" ] || S2S_LAUNCHER="$HOME/Documents/workspaces/scripts/s2s-minimax"
 SHIM_PORT="${SHIM_PORT:-8080}"
 S2S_PORT="${S2S_PORT:-8765}"
 LOGDIR="${LOGDIR:-/tmp/discord-assistant}"
