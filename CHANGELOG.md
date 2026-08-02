@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Strip the CLAUDE.md closer panel from text replies too, not just voice. A chat
+  window is not a terminal. Matching is anchored on the state icon rather than
+  the keyword: the text after it is free-form, so "⚪ Status check answered" is
+  a panel while "⚪ DONE" is the only form a keyword match would catch
+
 - Evict voice connections left by a previous process. Killing the bot mid-call
   left it visible in the channel while `/leave` said "not in a voice channel":
   a new process has no session for it and `getVoiceConnection` only sees its

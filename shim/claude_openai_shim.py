@@ -49,6 +49,27 @@ MODEL = os.environ.get("SHIM_MODEL", "claude-code")
 CWD = os.environ.get("SHIM_CWD", str(Path.home() / "Documents/Obsidian/Personal"))
 MCP_CONFIG = os.environ.get("SHIM_MCP_CONFIG", str(Path.home() / ".claude/mcp-obsidian-personal.json"))
 TIMEOUT = int(os.environ.get("SHIM_TIMEOUT", "300"))
+
+# Blast radius. Anyone on the Discord allowlist reaches this session, so the
+# tool set is bounded rather than left at "whatever Claude Code can do".
+# Derived from the /first-mate command's own allowed-tools: read and write the
+# vault, search it, query GitHub read-only, and nothing else. Notably absent:
+# unrestricted Bash, WebFetch, and any mutating git or kubectl.
+#
+# `--allowed-tools` is an allowlist, so anything not named here is refused —
+# and because -p disables interactive prompts, refusal is a clean failure
+# rather than a hang. Set SHIM_ALLOWED_TOOLS to override, or SHIM_UNSAFE=1 to
+# drop the restriction entirely (do that only against a throwaway vault).
+DEFAULT_ALLOWED_TOOLS = ",".join([
+    "Read", "Edit", "Write", "Glob", "Grep",
+    "Bash(vault-cli:*)",
+    "Bash(date:*)", "Bash(shasum:*)", "Bash(ls:*)",
+    "Bash(gh api:*)", "Bash(gh pr view:*)", "Bash(git ls-remote:*)",
+    "mcp__semantic-search__search_related",
+    "mcp__semantic-search__check_duplicates",
+])
+ALLOWED_TOOLS = os.environ.get("SHIM_ALLOWED_TOOLS", DEFAULT_ALLOWED_TOOLS)
+UNSAFE = os.environ.get("SHIM_UNSAFE") == "1"
 SESSIONS_FILE = Path(os.environ.get("SHIM_SESSIONS_FILE", Path.home() / ".claude/shim-sessions.json"))
 DEFAULT_KEY = "default"
 
@@ -132,11 +153,35 @@ MEMORY_DIRECTIVE = (
     "Do not write chit-chat, and do not ask permission for a small note."
 )
 
+# Same lesson as the voice directive: instruct AND post-strip, because the model
+# following a formatting instruction every time is not guaranteed.
+TEXT_DIRECTIVE = (
+    "You are replying in a Discord chat, not a terminal. Do not emit status panels: "
+    "no lines beginning with READY/DONE/ACTIVE/WAITING/BLOCKED, and no 'You:' or 'Next:' "
+    "lines. Markdown is fine — Discord renders it. Keep it short unless asked."
+)
+
+# Three signals, most reliable first. The state icon is the strongest: those five
+# emoji appear only in closer panels, whereas the keyword after them is free-form
+# ("⚪ Status check answered" is not "⚪ DONE"), so matching on the word alone
+# misses real panels.
 _PANEL = re.compile(
-    r"^[^\w\n]{1,6}\s*(?:You|Next|Recommend)\s*:.*$"
+    r"^\s*[\U0001F7E2\U0001F7E1\U0001F534\U0001F535\u26AA][^\n]*$"   # 🟢🟡🔴🔵⚪ …
+    r"|^[^\w\n]{1,6}\s*(?:You|Next|Recommend)\s*:.*$"                    # 👤 You: / ⏰ Next:
     r"|^[^\w\n]{0,6}\s*(?:\*\*)?(?:READY|DONE|ACTIVE|WAITING|BLOCKED)\b[^\n]*$",
     re.M,
 )
+
+
+def strip_panels(text: str) -> str:
+    """Remove the CLAUDE.md closer panel. Applied to BOTH surfaces.
+
+    A chat window is not a terminal: "READY / You: / Next:" is noise in Discord
+    and unspeakable in voice. Markdown is kept for text, where Discord renders
+    it, and removed for voice, where TTS would read the asterisks aloud.
+    """
+    text = _PANEL.sub("", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()   # tidy the gaps left behind
 
 
 def strip_markdown(text: str) -> str:
@@ -157,6 +202,8 @@ def ask_claude(key: str, system: str, prompt: str) -> str:
     cmd = ["claude", "-p", prompt, "--output-format", "text",
            "--mcp-config", MCP_CONFIG, "--strict-mcp-config",
            "--permission-mode", "auto"]
+    if not UNSAFE:
+        cmd += ["--allowed-tools", ALLOWED_TOOLS]
     cmd += ["--resume", sid] if started else ["--session-id", sid]
     if system:
         cmd += ["--append-system-prompt", system]
@@ -252,11 +299,11 @@ class Handler(BaseHTTPRequestHandler):
                  or self.headers.get("X-Output-Mode", "").lower() == "voice")
         print(f"-> {'VOICE' if voice else 'TEXT '} [{key}] {prompt[:70]!r}", flush=True)
 
-        parts = [p for p in (system, MEMORY_DIRECTIVE, VOICE_DIRECTIVE if voice else "") if p]
+        parts = [p for p in (system, MEMORY_DIRECTIVE,
+                             VOICE_DIRECTIVE if voice else TEXT_DIRECTIVE) if p]
         with _locks[key]:                 # per key, so other keys run concurrently
             answer = ask_claude(key, "\n\n".join(parts), prompt)
-        if voice:
-            answer = strip_markdown(answer)
+        answer = strip_markdown(answer) if voice else strip_panels(answer)
 
         if req.get("stream"):
             self._stream(answer)
@@ -304,5 +351,6 @@ if __name__ == "__main__":
     existing = _load()
     print(f"claude-code shim on http://{HOST}:{PORT}/v1")
     print(f"  sessions {len(existing)} known ({SESSIONS_FILE})")
+    print(f"  tools    {'UNRESTRICTED (SHIM_UNSAFE=1)' if UNSAFE else str(ALLOWED_TOOLS.count(',') + 1) + ' allowed'}")
     print(f"  cwd      {CWD}")
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
