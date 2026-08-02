@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Evict voice connections left by a previous process. Killing the bot mid-call
+  left it visible in the channel while `/leave` said "not in a voice channel":
+  a new process has no session for it and `getVoiceConnection` only sees its
+  own. Now cleared on startup and as a `/leave` fallback, via the gateway voice
+  state
+- `make run` uses `$$( )` rather than `$(shell )` — Make expands the latter
+  itself, baking the token into the `sh -c` argv where `ps` can read it
+
 - Keyed sessions: one Claude Code session per thread/DM/channel via
   `X-Session-Key`, with per-key locks so conversations run concurrently instead
   of queueing behind a single global lock

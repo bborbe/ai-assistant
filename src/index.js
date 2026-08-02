@@ -66,6 +66,13 @@ client.once('clientReady', async () => {
     version: config.build.version,
   });
 
+  // A previous process may have died while in a voice channel, leaving the bot
+  // visible there with nothing driving it. Clear that before anything else.
+  for (const guild of client.guilds.cache.values()) {
+    const ghost = await voice.evictGhost(guild).catch(() => null);
+    if (ghost) log.warn('evicted leftover voice connection', { guild: guild.name, channel: ghost });
+  }
+
   // Guild-scoped registration applies immediately; global takes ~an hour.
   const rest = new REST().setToken(config.discordToken);
   for (const guild of client.guilds.cache.values()) {

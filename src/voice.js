@@ -229,4 +229,21 @@ function leave(guildId) {
   return false;
 }
 
-module.exports = { join, leave, sessions };
+/**
+ * Evict a voice connection left behind by a previous process.
+ *
+ * If the bot is killed while in a voice channel, Discord keeps showing it as a
+ * participant. A fresh process has no session for it, and `getVoiceConnection`
+ * only sees connections *this* process opened — so /leave reports "not in a
+ * voice channel" while the bot is visibly sitting in one. Disconnecting via the
+ * gateway voice state works regardless of which process opened it.
+ */
+async function evictGhost(guild) {
+  const me = guild.members.me ?? (await guild.members.fetchMe().catch(() => null));
+  if (!me?.voice?.channelId) return null;
+  const name = me.voice.channel?.name ?? me.voice.channelId;
+  await me.voice.disconnect().catch(() => {});
+  return name;
+}
+
+module.exports = { join, leave, evictGhost, sessions };

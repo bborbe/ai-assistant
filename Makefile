@@ -17,11 +17,12 @@ install:
 	@npm ci
 
 .PHONY: run
-# Run the bot. The Discord token is resolved from TeamVault at run time, so it
-# never lands on disk. DISCORD_TOKEN_KEY and ALLOWED_USER_IDS live in example.env.
+# Run the bot. The token is resolved from TeamVault at run time, so it never
+# lands on disk. Note $$( ) not $(shell ) — Make expands $(shell ) itself, which
+# would bake the literal token into the sh -c argv and expose it to `ps`.
 run: require-config
 	@command -v teamvault-cli >/dev/null 2>&1 || { echo "teamvault-cli not on PATH" >&2; exit 1; }
-	@DISCORD_TOKEN="$(shell teamvault-cli password $(DISCORD_TOKEN_KEY))"; \
+	@DISCORD_TOKEN=$$(teamvault-cli password $(DISCORD_TOKEN_KEY)); \
 	[ -n "$$DISCORD_TOKEN" ] || { echo "empty token from TeamVault key $(DISCORD_TOKEN_KEY)" >&2; exit 1; }; \
 	export DISCORD_TOKEN; node src/index.js
 
