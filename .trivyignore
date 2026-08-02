@@ -1,0 +1,5 @@
+# Vulnerability IDs to ignore, one per line, each with a reason.
+# Keep this file honest: an entry without a reason is a silent risk.
+#
+# Example:
+# CVE-0000-00000  # unreachable: dev-only transitive dep, not shipped in the image

@@ -11,6 +11,7 @@
   `make buca`, Dockerfile, k8s manifests, structured JSON logging
 - `/healthz`, `/readiness`, `/version` and graceful shutdown that fails
   readiness before draining
+- Security gates: `npm audit` (high/critical) and `trivy fs` (vulns + secrets)
 
 ## v0.0.1
 

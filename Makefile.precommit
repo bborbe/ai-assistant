@@ -20,10 +20,31 @@ formatcheck:
 	npx prettier --check .
 
 .PHONY: check
-# Run lint and format verification
-check: lint formatcheck
+# Lint, formatting and security gates
+check: lint formatcheck audit trivy
 
 .PHONY: test
 # Run tests with the built-in node test runner
 test:
 	node --test
+
+.PHONY: audit
+# Dependency vulnerabilities from the npm advisory database.
+# Fails on high/critical only: moderate findings in dev-only transitive deps
+# would otherwise block every commit for something unreachable at runtime.
+audit:
+	npm audit --audit-level=high
+
+.PHONY: trivy
+# Filesystem scan: dependency vulns (reads package-lock.json) + secret detection.
+# Same invocation as go-skeleton, so behaviour is consistent across languages.
+trivy:
+	trivy fs \
+	--db-repository ghcr.io/aquasecurity/trivy-db \
+	$(if $(wildcard .trivyignore),--ignorefile .trivyignore,$(if $(wildcard $(ROOTDIR)/.trivyignore),--ignorefile $(ROOTDIR)/.trivyignore,)) \
+	--scanners vuln,secret \
+	--skip-dirs node_modules \
+	--quiet \
+	--no-progress \
+	--disable-telemetry \
+	--exit-code 1 .
