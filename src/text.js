@@ -2,7 +2,7 @@
 
 const config = require('./config');
 const log = require('./log');
-const { chat } = require('./llm');
+const { chat, sessionKeyFor } = require('./llm');
 
 const DISCORD_LIMIT = 2000;
 
@@ -96,9 +96,13 @@ function register(client) {
       const messages = await history(target, client.user.id).catch(() => []);
       if (messages.at(-1)?.content !== content) messages.push({ role: 'user', content });
 
+      // Key the conversation to the thread/DM/channel so separate threads get
+      // separate sessions and can run at the same time.
+      const sessionKey = sessionKeyFor(target, msg.author.id);
+
       let answer;
       try {
-        answer = await chat(messages);
+        answer = await chat(messages, { sessionKey });
       } finally {
         clearInterval(typing);
       }

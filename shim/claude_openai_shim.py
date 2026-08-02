@@ -1,29 +1,33 @@
 #!/usr/bin/env python3
-"""OpenAI-compatible endpoint backed by ONE persistent Claude Code session.
+"""OpenAI-compatible endpoint backed by keyed, persistent Claude Code sessions.
 
     python3 shim/claude_openai_shim.py
 
-Any OpenAI client can then point at http://127.0.0.1:8080/v1 — the Discord
-assistant for text, speech-to-speech for voice — and both continue the *same*
-conversation, because the session lives here rather than in any client.
+Any OpenAI client can point at http://127.0.0.1:8080/v1. Clients that send
+`X-Session-Key` get their own conversation; clients that cannot send headers
+(speech-to-speech) share the default one, so voice stays continuous.
 
-OpenAI-SHAPED BUT STATEFUL — a deliberate deviation from the spec:
+WHY KEYED SESSIONS, NOT ONE
+    An earlier design used a single session so a voice turn and a text turn
+    shared context. That requirement is a symptom of not having durable memory.
+    The rule from Agent System Concept — "the identity agent may hold
+    conversation in memory precisely because it never holds *work* in memory" —
+    means anything that matters is written to the vault. Session context is
+    therefore a cache, not the record: it can be cleared, and continuity comes
+    from the vault instead. That buys parallel conversations and bounded
+    context, and costs nothing that was not recoverable anyway.
+
+OPENAI-SHAPED BUT STATEFUL — a deliberate deviation:
 
   role            handling      why
   ------------    -----------   ----------------------------------------------
-  system          pass through  per-request output rules (s2s sends voice rules:
-                                "one spoken sentence, no markdown")
+  system          pass through  per-request output rules (voice sends speech rules)
   latest user     the turn      the actual new input
-  everything else DISCARD       the Claude Code session already has the history
+  everything else DISCARD       the session already has the history
 
-Clients resend full history per the OpenAI spec. Appending that to a session
-that already has it would double the context every turn and drift into a second,
-divergent history. So we drop it — which is also what makes Telegram-to-Discord
-continuity work: the session, not the transport, is the conversation.
-
-Verified before writing this (2026-08-02): `claude -p` keeps skills, slash
-commands, and MCP; `--session-id` then `--resume <uuid>` continues a
-conversation across separate invocations.
+Clients resend full history per the spec; appending it to a session that
+already has it would double context every turn and fork a second, divergent
+history.
 """
 
 from __future__ import annotations
@@ -34,6 +38,7 @@ import re
 import subprocess
 import time
 import uuid
+from collections import defaultdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock
@@ -44,30 +49,68 @@ MODEL = os.environ.get("SHIM_MODEL", "claude-code")
 CWD = os.environ.get("SHIM_CWD", str(Path.home() / "Documents/Obsidian/Personal"))
 MCP_CONFIG = os.environ.get("SHIM_MCP_CONFIG", str(Path.home() / ".claude/mcp-obsidian-personal.json"))
 TIMEOUT = int(os.environ.get("SHIM_TIMEOUT", "300"))
-# One identity == one session. Persisted so a restart resumes rather than forgets.
-SESSION_FILE = Path(os.environ.get("SHIM_SESSION_FILE", Path.home() / ".claude/shim-session-id"))
+SESSIONS_FILE = Path(os.environ.get("SHIM_SESSIONS_FILE", Path.home() / ".claude/shim-sessions.json"))
+DEFAULT_KEY = "default"
 
-# Claude Code turns are serialized: one session cannot run two turns at once.
-_turn_lock = Lock()
-_session_started = SESSION_FILE.exists()
-
-
-def session_id() -> str:
-    global _session_started
-    if SESSION_FILE.exists():
-        return SESSION_FILE.read_text().strip()
-    sid = str(uuid.uuid4())
-    SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SESSION_FILE.write_text(sid)
-    _session_started = False
-    return sid
+# Per-key locks: Claude Code serializes turns *within* a session, but different
+# sessions run concurrently. A single global lock would silently serialize every
+# thread, which is the thing keyed sessions exist to avoid.
+_locks: dict[str, Lock] = defaultdict(Lock)
+_sessions_lock = Lock()
 
 
+# ── sessions ───────────────────────────────────────────────────────────────
+def _load() -> dict:
+    if SESSIONS_FILE.exists():
+        try:
+            return json.loads(SESSIONS_FILE.read_text())
+        except Exception as e:
+            print(f"  sessions file unreadable, starting fresh: {e}", flush=True)
+    return {}
+
+
+def _save(data: dict) -> None:
+    SESSIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    SESSIONS_FILE.write_text(json.dumps(data, indent=2))
+
+
+def get_session(key: str) -> tuple[str, bool]:
+    """Return (session_id, started) for a key, creating one if needed."""
+    with _sessions_lock:
+        data = _load()
+        entry = data.get(key)
+        if entry:
+            return entry["id"], entry.get("started", False)
+        sid = str(uuid.uuid4())
+        data[key] = {"id": sid, "started": False, "created": time.time(), "turns": 0}
+        _save(data)
+        return sid, False
+
+
+def mark_started(key: str) -> None:
+    with _sessions_lock:
+        data = _load()
+        if key in data:
+            data[key]["started"] = True
+            data[key]["turns"] = data[key].get("turns", 0) + 1
+            data[key]["last"] = time.time()
+            _save(data)
+
+
+def reset_session(key: str) -> str:
+    """Drop the key's session so the next turn starts a fresh conversation."""
+    with _sessions_lock:
+        data = _load()
+        old = data.pop(key, {}).get("id", "")
+        _save(data)
+    return old
+
+
+# ── output shaping ─────────────────────────────────────────────────────────
 # A session carrying a personal CLAUDE.md follows *its* output rules — status
-# panels, markdown, bullet lists — which are right for a terminal and unusable as
-# speech. s2s's own voice prompt is advisory and loses to them, so the shim has
-# to enforce. Belt (instruction) and braces (post-strip), because the model
-# obeying the instruction is not guaranteed.
+# panels, markdown, bullet lists — which are right for a terminal and unusable
+# as speech. The voice prompt is advisory and loses to them, so the shim
+# enforces: belt (instruction) and braces (post-strip).
 VOICE_DIRECTIVE = (
     "SPOKEN OUTPUT MODE. Your reply is read aloud by a speech synthesiser, not displayed. "
     "Reply in at most two short sentences of plain prose. "
@@ -78,42 +121,47 @@ VOICE_DIRECTIVE = (
     "If the answer is long, say the single most important thing and offer to continue."
 )
 
-# Status-panel lines the closer convention produces; never speak these.
-# Two patterns, deliberately narrow. "Recommend:" and "You ..." are also normal
-# prose openings — stripping those on the keyword alone eats the actual answer,
-# which is worse than speaking a stray panel line. So the ambiguous words are
-# only dropped when they carry the panel's leading emoji AND a colon.
+# Sessions here are disposable by design, so anything that matters must leave
+# the session before it is cleared. This is the load-bearing half of keyed
+# sessions: without it, clearing one loses decisions that existed nowhere else.
+MEMORY_DIRECTIVE = (
+    "DURABLE MEMORY. This conversation is a cache, not a record — it will be cleared. "
+    "Before the turn ends, write anything worth keeping into the vault: a decision, a "
+    "conclusion, a commitment, a fact you had to work to establish. Use the existing task "
+    "or Knowledge Base page if one fits, and say in one short clause where you put it. "
+    "Do not write chit-chat, and do not ask permission for a small note."
+)
+
 _PANEL = re.compile(
-    r"^[^\w\n]{1,6}\s*(?:You|Next|Recommend)\s*:.*$"      # 👤 You: / ⏰ Next:
-    r"|^[^\w\n]{0,6}\s*(?:\*\*)?(?:READY|DONE|ACTIVE|WAITING|BLOCKED)\b[^\n]*$",  # 🔵 READY — …
+    r"^[^\w\n]{1,6}\s*(?:You|Next|Recommend)\s*:.*$"
+    r"|^[^\w\n]{0,6}\s*(?:\*\*)?(?:READY|DONE|ACTIVE|WAITING|BLOCKED)\b[^\n]*$",
     re.M,
 )
 
 
 def strip_markdown(text: str) -> str:
     """Make model output safe to speak: no markup, no panels, no paths."""
-    text = re.sub(r"```.*?```", " ", text, flags=re.S)      # code fences
-    text = _PANEL.sub("", text)                              # closer panels
-    text = re.sub(r"\[\[([^\]|]*\|)?([^\]]+)\]\]", r"\2", text)  # wikilinks -> label
-    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)     # md links -> label
-    text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.M)     # bullets
-    text = re.sub(r"[*_`#>|]+", "", text)                    # inline markup
+    text = re.sub(r"```.*?```", " ", text, flags=re.S)
+    text = _PANEL.sub("", text)
+    text = re.sub(r"\[\[([^\]|]*\|)?([^\]]+)\]\]", r"\2", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.M)
+    text = re.sub(r"[*_`#>|]+", "", text)
     text = re.sub(r"https?://\S+", "a link", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
-def ask_claude(system: str, prompt: str) -> str:
-    """Run one turn against the persistent session."""
-    global _session_started
-    sid = session_id()
+# ── claude ─────────────────────────────────────────────────────────────────
+def ask_claude(key: str, system: str, prompt: str) -> str:
+    sid, started = get_session(key)
     cmd = ["claude", "-p", prompt, "--output-format", "text",
            "--mcp-config", MCP_CONFIG, "--strict-mcp-config",
            "--permission-mode", "auto"]
-    cmd += ["--resume", sid] if _session_started else ["--session-id", sid]
+    cmd += ["--resume", sid] if started else ["--session-id", sid]
     if system:
         cmd += ["--append-system-prompt", system]
 
-    started = time.monotonic()
+    began = time.monotonic()
     try:
         r = subprocess.run(cmd, cwd=CWD, capture_output=True, text=True, timeout=TIMEOUT)
     except subprocess.TimeoutExpired:
@@ -121,23 +169,21 @@ def ask_claude(system: str, prompt: str) -> str:
 
     if r.returncode != 0:
         err = (r.stderr or r.stdout).strip()[:400]
-        # A resume can fail if the session file was lost; fall back to a new one.
-        if _session_started and "session" in err.lower():
-            SESSION_FILE.unlink(missing_ok=True)
-            _session_started = False
-            print(f"  session resume failed, starting fresh: {err[:120]}")
-            return ask_claude(system, prompt)
-        print(f"  claude failed rc={r.returncode}: {err}")
+        # A resume can fail if the session file was pruned; start a new one once.
+        if started and "session" in err.lower():
+            reset_session(key)
+            print(f"  [{key}] resume failed, starting fresh: {err[:120]}", flush=True)
+            return ask_claude(key, system, prompt)
+        print(f"  [{key}] claude failed rc={r.returncode}: {err}", flush=True)
         return f"(claude error: {err[:200]})"
 
-    _session_started = True
+    mark_started(key)
     out = r.stdout.strip()
-    print(f"  turn took {time.monotonic() - started:.1f}s, {len(out)} chars")
+    print(f"  [{key}] {time.monotonic() - began:.1f}s, {len(out)} chars", flush=True)
     return out
 
 
 def extract(messages: list[dict]) -> tuple[str, str]:
-    """system messages -> passed through; latest user message -> the turn."""
     system = "\n\n".join(
         c if isinstance(c := m.get("content"), str) else json.dumps(c)
         for m in messages if m.get("role") == "system"
@@ -154,7 +200,7 @@ def extract(messages: list[dict]) -> tuple[str, str]:
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
-    def log_message(self, *_):  # quiet: we log what matters ourselves
+    def log_message(self, *_):
         pass
 
     def _json(self, code: int, payload: dict):
@@ -165,43 +211,52 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _key(self) -> str:
+        return self.headers.get("X-Session-Key") or DEFAULT_KEY
+
     def do_GET(self):
-        if self.path.rstrip("/").endswith("/models"):
-            self._json(200, {"object": "list", "data": [
+        path = self.path.rstrip("/")
+        if path.endswith("/models"):
+            return self._json(200, {"object": "list", "data": [
                 {"id": MODEL, "object": "model", "owned_by": "anthropic"}]})
-        else:
-            self._json(404, {"error": {"message": "not found"}})
+        if path.endswith("/sessions"):
+            now = time.time()
+            return self._json(200, {"sessions": [
+                {"key": k, "id": v["id"], "turns": v.get("turns", 0),
+                 "age_minutes": round((now - v.get("created", now)) / 60, 1)}
+                for k, v in sorted(_load().items())
+            ]})
+        self._json(404, {"error": {"message": "not found"}})
 
     def do_POST(self):
+        if self.path.rstrip("/").endswith("/sessions/reset"):
+            key = self._key()
+            old = reset_session(key)
+            print(f"-> RESET [{key}] {old or '(none)'}", flush=True)
+            return self._json(200, {"reset": key, "previous": old})
+
         if "chat/completions" not in self.path:
-            self._json(404, {"error": {"message": "not found"}})
-            return
+            return self._json(404, {"error": {"message": "not found"}})
         try:
             req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         except Exception as e:
-            self._json(400, {"error": {"message": f"bad json: {e}"}})
-            return
+            return self._json(400, {"error": {"message": f"bad json: {e}"}})
 
         system, prompt = extract(req.get("messages", []))
         if not prompt:
-            self._json(400, {"error": {"message": "no user message"}})
-            return
+            return self._json(400, {"error": {"message": "no user message"}})
 
-        # Voice clients (speech-to-speech) announce themselves via their system
-        # prompt. Fall back to a header so any client can opt in explicitly.
+        key = self._key()
         low = system.lower()
         voice = ("spoken conversation" in low or "voice rules" in low
                  or self.headers.get("X-Output-Mode", "").lower() == "voice")
-        print(f"-> {'VOICE' if voice else 'TEXT '} {prompt[:90]!r}", flush=True)
+        print(f"-> {'VOICE' if voice else 'TEXT '} [{key}] {prompt[:70]!r}", flush=True)
 
-        if voice:
-            system = f"{system}\n\n{VOICE_DIRECTIVE}" if system else VOICE_DIRECTIVE
-
-        with _turn_lock:                      # one turn at a time per session
-            answer = ask_claude(system, prompt)
+        parts = [p for p in (system, MEMORY_DIRECTIVE, VOICE_DIRECTIVE if voice else "") if p]
+        with _locks[key]:                 # per key, so other keys run concurrently
+            answer = ask_claude(key, "\n\n".join(parts), prompt)
         if voice:
             answer = strip_markdown(answer)
-        print(f"<- {answer[:90]!r}")
 
         if req.get("stream"):
             self._stream(answer)
@@ -220,8 +275,8 @@ class Handler(BaseHTTPRequestHandler):
         }
 
     def _stream(self, text: str):
-        """Claude Code has no partial output here, so emit sentence-sized chunks —
-        enough for speech-to-speech to start synthesizing before the end."""
+        """Claude Code gives no partial output here, so emit sentence-sized
+        chunks — enough for speech-to-speech to start synthesizing early."""
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -246,8 +301,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    sid = session_id()
+    existing = _load()
     print(f"claude-code shim on http://{HOST}:{PORT}/v1")
-    print(f"  session {sid} ({'resuming' if _session_started else 'new'})")
-    print(f"  cwd     {CWD}")
+    print(f"  sessions {len(existing)} known ({SESSIONS_FILE})")
+    print(f"  cwd      {CWD}")
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

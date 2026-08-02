@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Keyed sessions: one Claude Code session per thread/DM/channel via
+  `X-Session-Key`, with per-key locks so conversations run concurrently instead
+  of queueing behind a single global lock
+- `/new` clears the current conversation, `/sessions` lists what is held
+- Shim injects a memory directive: anything worth keeping is written to the
+  vault before the turn ends, which is what makes clearing a session safe
+
 - Text conversations run in a thread: an `@mention` opens one, follow-ups need
   no mention, and history is scoped to the thread. Falls back to the channel if
   thread permissions are missing rather than dropping the answer

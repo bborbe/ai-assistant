@@ -13,6 +13,7 @@ const {
 const config = require('./config');
 const voice = require('./voice');
 const text = require('./text');
+const { resetSession, listSessions, sessionKeyFor } = require('./llm');
 const log = require('./log');
 const { startHealthServer } = require('./health');
 
@@ -111,6 +112,37 @@ client.on('interactionCreate', async (i) => {
         content: `Could not join: ${e.message}. A connection stuck in "signalling" is usually permissions.`,
         flags: MessageFlags.Ephemeral,
       });
+    }
+  }
+
+  if (i.commandName === 'new') {
+    const key = sessionKeyFor(i.channel, i.user.id);
+    try {
+      const r = await resetSession(key);
+      log.info('session reset', { key, previous: r.previous || null });
+      return i.reply({
+        content: `Fresh start here. Anything that mattered is in the vault.`,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (e) {
+      log.error('session reset failed', { key, error: e.message });
+      return i.reply({ content: `Could not reset: ${e.message}`, flags: MessageFlags.Ephemeral });
+    }
+  }
+
+  if (i.commandName === 'sessions') {
+    try {
+      const { sessions = [] } = await listSessions();
+      const here = sessionKeyFor(i.channel, i.user.id);
+      const lines = sessions.length
+        ? sessions.map(
+            (s) =>
+              `${s.key === here ? '**here** ' : ''}\`${s.key}\` — ${s.turns} turns, ${s.age_minutes}m old`,
+          )
+        : ['none yet'];
+      return i.reply({ content: lines.join('\n').slice(0, 1900), flags: MessageFlags.Ephemeral });
+    } catch (e) {
+      return i.reply({ content: `Could not list: ${e.message}`, flags: MessageFlags.Ephemeral });
     }
   }
 
