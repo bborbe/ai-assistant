@@ -116,9 +116,29 @@ Naive `pcm[::3]` is wrong twice over: it walks alternating channels on an interl
 
 `make buca` → build, upload, clean, apply. **Never scale beyond one replica** — a Discord bot identity permits exactly one gateway connection, which is why `k8s/` pins `replicas: 1` with `strategy: Recreate`.
 
+## Running it
+
+```bash
+make dev                  # shim + speech-to-speech + bot, Ctrl-C stops all three
+SKIP_VOICE=1 make dev     # text surface only — starts in seconds
+```
+
+`make dev` reuses anything already listening rather than fighting it, and waits for each port instead of sleeping a fixed time (model load is variable). Individually: `make shim`, `make run`.
+
+| Process          | Port | Needed for                        |
+| ---------------- | ---- | --------------------------------- |
+| shim             | 8080 | both surfaces                     |
+| speech-to-speech | 8765 | voice only (~60 s to load models) |
+| bot              | 8081 | both                              |
+
+## patches/
+
+`speech-to-speech` needs one change for MiniMax (see `patches/README.md`). It lives here because that repo is a third-party clone — a `git pull` silently discards it, and the voice surface then fails in a way that looks unrelated.
+
 ## tools/
 
 Diagnostics from the spikes that proved each leg, kept because they isolate faults the full bridge can't:
 
 - `capture.js` — join a channel, capture one speaker, write raw 48 kHz stereo WAV. Proves voice receive with no endpoint involved.
 - `to16k.py` — mono mix + `soxr` HQ resample to 16 kHz. Run in the speech-to-speech venv.
+- `realtime_probe.py` — send a WAV to the speech-to-speech realtime socket and report every event type it emits. Proves the endpoint with no Discord involved; the reference for the protocol handling in `src/voice.js`.

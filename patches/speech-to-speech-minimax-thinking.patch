@@ -1,0 +1,43 @@
+diff --git a/src/speech_to_speech/LLM/base_openai_compatible_language_model.py b/src/speech_to_speech/LLM/base_openai_compatible_language_model.py
+index 195c129..560ca4c 100644
+--- a/src/speech_to_speech/LLM/base_openai_compatible_language_model.py
++++ b/src/speech_to_speech/LLM/base_openai_compatible_language_model.py
+@@ -173,6 +173,18 @@ class BaseOpenAICompatibleHandler(BaseHandler[LLMIn, LLMOut], ABC):
+             return False
+         return base_url.rstrip("/") == "https://api.openai.com/v1"
+ 
++    @staticmethod
++    def _is_minimax(base_url: Optional[str]) -> bool:
++        """Whether ``base_url`` points at MiniMax's OpenAI-compatible server.
++
++        Covers both regional hosts (``api.minimax.io`` / ``api.minimaxi.com``);
++        MiniMax ignores the chat-template and reasoning_effort flags and needs
++        its own ``thinking`` key instead.
++        """
++        if base_url is None:
++            return False
++        return "api.minimax.io" in base_url or "api.minimaxi.com" in base_url
++
+     @classmethod
+     def _build_extra_body(
+         cls,
+@@ -186,11 +198,17 @@ class BaseOpenAICompatibleHandler(BaseHandler[LLMIn, LLMOut], ABC):
+         ``chat_template_kwargs.enable_thinking=false``, while others (e.g. GLM via
+         the HF router) ignore that and require ``reasoning_effort='none'``. A
+         non-empty ``reasoning_effort`` therefore takes precedence; otherwise we fall
+-        back to the chat-template flag. None of this applies to the official
+-        OpenAI server, which rejects unknown extra_body keys.
++        back to the chat-template flag. MiniMax ignores both and requires
++        ``thinking={"type": "disabled"}``; leaving it on is not merely slow but
++        wrong here, since MiniMax emits its reasoning inside ``content`` (not
++        ``reasoning_content``), so the ``<think>`` block would be spoken aloud.
++        None of this applies to the official OpenAI server, which rejects
++        unknown extra_body keys.
+         """
+         if base_url is None or cls._is_official_openai(base_url):
+             return None
++        if cls._is_minimax(base_url):
++            return {"thinking": {"type": "disabled"}} if disable_thinking else None
+         if reasoning_effort:
+             return {"reasoning_effort": reasoning_effort}
+         if disable_thinking:

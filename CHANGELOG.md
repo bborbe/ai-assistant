@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `make dev` starts the whole local stack (shim + speech-to-speech + bot) and
+  stops it cleanly; `SKIP_VOICE=1` for the text surface only
+- Repo is now self-contained: the speech-to-speech launcher, the realtime probe
+  and the MiniMax patch moved in from outside, where a re-clone would have
+  silently destroyed them
+
 - Text surface: DM or `@mention`, thread history resent per turn
 - `/join` and `/leave` slash commands — joins the caller's current voice channel
 - Sender-level allowlist on both surfaces, failing closed when unset

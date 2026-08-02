@@ -25,6 +25,12 @@ run: require-config
 	[ -n "$$DISCORD_TOKEN" ] || { echo "empty token from TeamVault key $(DISCORD_TOKEN_KEY)" >&2; exit 1; }; \
 	export DISCORD_TOKEN; node src/index.js
 
+.PHONY: dev
+# Start the whole local stack: shim, speech-to-speech, bot. Ctrl-C stops all.
+# SKIP_VOICE=1 make dev  -> text surface only, starts in seconds.
+dev: require-config
+	@bash scripts/dev.sh
+
 .PHONY: require-config
 # Fail with a useful message rather than an empty-token error.
 require-config:

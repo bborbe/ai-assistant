@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Launch huggingface/speech-to-speech locally on Apple Silicon with the LLM
+# stage routed to MiniMax-M3 over its OpenAI-compatible API.
+#
+# NOT --local_mac_optimal_settings: that flag unconditionally overwrites
+# llm_backend with "mlx-lm" (s2s_pipeline.py:268-269), which would silently
+# discard the MiniMax config. We therefore set its components by hand and
+# leave llm_backend alone.
+#
+# MiniMax-M3 is required (not M2.7-highspeed): reasoning cannot be disabled on
+# the M2.x models via any documented knob, and MiniMax emits it inside
+# `content` rather than `reasoning_content` — so the <think> block would be
+# read aloud by TTS. M3 honours thinking={"type":"disabled"}, which the local
+# patch in base_openai_compatible_language_model.py sends automatically for
+# api.minimax.io base URLs.
+#
+# The API key is pulled from TeamVault at runtime; it is never stored on disk.
+#
+# Override via env:
+#   S2S_DIR            — repo checkout (default: $HOME/Documents/workspaces/speech-to-speech)
+#   MINIMAX_SECRET_ID  — TeamVault secret key (default: MOPmQL)
+#   S2S_MODEL          — MiniMax model (default: MiniMax-M3)
+
+set -euo pipefail
+
+S2S_DIR="${S2S_DIR:-$HOME/Documents/workspaces/speech-to-speech}"
+MINIMAX_SECRET_ID="${MINIMAX_SECRET_ID:-MOPmQL}"
+S2S_MODEL="${S2S_MODEL:-MiniMax-M3}"
+
+cd "$S2S_DIR" || exit 1
+
+MINIMAX_KEY="$(teamvault-cli password "$MINIMAX_SECRET_ID")"
+if [ ${#MINIMAX_KEY} -lt 8 ]; then
+  echo "error: could not fetch MiniMax key from TeamVault ($MINIMAX_SECRET_ID)" >&2
+  exit 1
+fi
+
+# S2S_MODE=local  → laptop mic + speakers (default)
+# S2S_MODE=realtime → OpenAI-Realtime-compatible WS server for external clients
+S2S_MODE="${S2S_MODE:-local}"
+MODE_ARGS=(--mode "$S2S_MODE")
+if [ "$S2S_MODE" = "realtime" ]; then
+  MODE_ARGS+=(--ws_host "${S2S_WS_HOST:-127.0.0.1}" --ws_port "${S2S_WS_PORT:-8765}")
+fi
+
+exec uv run --python 3.13 speech-to-speech \
+  "${MODE_ARGS[@]}" \
+  --device mps \
+  --stt parakeet-tdt \
+  --tts qwen3 \
+  --llm_backend chat-completions \
+  --responses_api_base_url "https://api.minimax.io/v1" \
+  --responses_api_api_key "$MINIMAX_KEY" \
+  --model_name "$S2S_MODEL" \
+  "$@"
