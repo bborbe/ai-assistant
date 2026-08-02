@@ -1,3 +1,8 @@
 
+# `teamvault-config-parser` was retired in teamvault-cli v5.7 — using it renders
+# nothing, the Secret is silently skipped, and pods land in
+# CreateContainerConfigError. `config parse` resolves its own config (Keychain
+# auth), so no -teamvault-config flag.
 apply:
-	bash -c 'source ${ROOTDIR}/example.env && find . -name "*.yaml" | while read -r file; do cat $${file} | teamvault-config-parser -teamvault-config="${TEAMVAULT}" -logtostderr -v=0 | kubectl apply --context=$${CLUSTER_CONTEXT} -f -; done'
+	@command -v teamvault-cli >/dev/null 2>&1 || { echo "teamvault-cli not on PATH" >&2; exit 1; }
+	bash -c 'source ${ROOTDIR}/example.env && find . -name "*.yaml" | while read -r file; do cat $${file} | teamvault-cli config parse | kubectl apply --context=$${CLUSTER_CONTEXT} -f -; done'
