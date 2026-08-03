@@ -45,7 +45,7 @@ import uuid
 from collections import defaultdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Lock, Timer
+from threading import Event, Lock, Thread, Timer
 
 HOST = os.environ.get("SHIM_HOST", "127.0.0.1")
 PORT = int(os.environ.get("SHIM_PORT", "8080"))
@@ -277,6 +277,9 @@ SENTENCE_MAX = 200
 # worth covering. If the model beats us to it the duplicate is suppressed, so
 # racing near the boundary is harmless.
 HOLD_AFTER = float(os.environ.get("SHIM_HOLD_AFTER", "3.0"))
+# Well inside speech-to-speech's 20s read timeout, and cheap: an empty SSE delta
+# is a few dozen bytes and produces no speech.
+KEEPALIVE_EVERY = float(os.environ.get("SHIM_KEEPALIVE_EVERY", "8.0"))
 # TWO sentences, deliberately. speech-to-speech releases a sentence to TTS only
 # once the NEXT one has started (base_openai_compatible_language_model.py:404) —
 # a lone holding line is held as incomplete text until the answer begins, which
@@ -734,6 +737,23 @@ class _StreamWriter:
         self.id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
         self.created = int(time.time())
         self.started = False
+        # The keepalive runs on its own thread; two writers interleaving would
+        # split an SSE frame down the middle.
+        self._wlock = Lock()
+
+    def keepalive(self) -> None:
+        """Empty delta — resets the client's read timeout, says nothing.
+
+        speech-to-speech aborts a request after 20s with no bytes
+        (base_openai_compatible_language_model.py:139) and speaks a canned
+        apology. That is a gap between chunks, not a total, so a tool phase
+        longer than 20s killed the turn even though it was progressing. An empty
+        delta is a well-formed chunk that adds no text, so nothing is spoken.
+        Sent only once the response has started; before that there is nothing to
+        keep alive.
+        """
+        if self.started:
+            self._raw({})
 
     def _send(self, delta: dict, finish=None):
         if not self.started:
@@ -750,8 +770,9 @@ class _StreamWriter:
         chunk = {"id": self.id, "object": "chat.completion.chunk", "created": self.created,
                  "model": MODEL,
                  "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
-        self.h.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
-        self.h.wfile.flush()
+        with self._wlock:
+            self.h.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+            self.h.wfile.flush()
 
     def chunk(self, text: str):
         if text:
@@ -894,16 +915,35 @@ class Handler(BaseHTTPRequestHandler):
                 # interrupt instead of running on holding the lock.
                 raise ClientGone from None
 
-        with _locks[key]:                 # per key, so other keys run concurrently
-            # While we waited for the lock a newer turn may have arrived — this
-            # one is a partial hypothesis of the same sentence. Drop it silently
-            # rather than spending a Claude invocation on stale text.
-            if superseded(key, mine):
-                print(f"-> STALE [{key}] superseded, dropping: {prompt[:40]!r}", flush=True)
-                return self._stream("") if req.get("stream") else self._json(200, self._completion(""))
-            answer = ask_claude(key, "\n\n".join(parts), prompt,
-                                on_text=on_text if live else None,
-                                is_gone=(lambda: peer_hung_up(self.connection)) if live else None)
+        # Keepalive for the whole turn, including the wait for the lock: a turn
+        # queued behind another can easily exceed the client's 20s read timeout
+        # before it even starts.
+        stop_keepalive = Event()
+        if live:
+            def keepalive_loop():
+                while not stop_keepalive.wait(KEEPALIVE_EVERY):
+                    if dead:
+                        return
+                    try:
+                        writer.keepalive()
+                    except Exception:
+                        return
+            Thread(target=keepalive_loop, daemon=True).start()
+
+        try:
+            with _locks[key]:             # per key, so other keys run concurrently
+                # While we waited for the lock a newer turn may have arrived —
+                # this one is a partial hypothesis of the same sentence. Drop it
+                # rather than spending a Claude invocation on stale text.
+                if superseded(key, mine):
+                    print(f"-> STALE [{key}] superseded, dropping: {prompt[:40]!r}", flush=True)
+                    return self._stream("") if req.get("stream") else self._json(200, self._completion(""))
+                answer = ask_claude(
+                    key, "\n\n".join(parts), prompt,
+                    on_text=on_text if live else None,
+                    is_gone=(lambda: peer_hung_up(self.connection)) if live else None)
+        finally:
+            stop_keepalive.set()
 
         if live:
             if not dead:

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Send SSE keepalives so a long turn is not aborted mid-flight. speech-to-speech
+  gives up after 20s without bytes and speaks "Wow I'm a bit slow today, could
+  you repeat that?" — and because that is a gap between chunks rather than a
+  total, any tool phase over 20s killed a turn that was progressing normally.
+  The timeout is hardcoded upstream with no CLI flag, so the fix is on our side:
+  an empty delta every 8s, which resets the client's read timer and produces no
+  speech. A 30s turn that previously died now completes. Covers the wait for the
+  per-key lock too, where a queued turn could time out before it even began
+
 - Make the spoken length limit hard and put it last, where the directive is
   strongest. Asking for "one or two sentences" in passing produced six on a live
   call; stating it as a limit that holds however much was found, with an explicit
