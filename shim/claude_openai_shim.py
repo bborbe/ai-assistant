@@ -182,7 +182,12 @@ VOICE_DIRECTIVE = (
     "check that' — then do the lookup and answer. Speaking before the tool runs is what "
     "keeps the silence from feeling broken; your first sentence is spoken while the work "
     "happens.\n"
-    "If the answer is long, say the single most important thing and offer to continue."
+    "LENGTH IS A HARD LIMIT, and it is the rule most often broken: TWO SENTENCES. "
+    "Not three. This holds however much you found and however interesting it is — a "
+    "spoken answer cannot be skimmed, re-read, or interrupted politely, so a third "
+    "sentence is not extra value, it is talking over someone. If more matters, give "
+    "the single most important fact in one sentence and offer the rest in a short "
+    "second one: 'there is more if you want it'. Then stop and wait."
 )
 
 # Sessions here are disposable by design, so anything that matters must leave

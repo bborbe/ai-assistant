@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Make the spoken length limit hard and put it last, where the directive is
+  strongest. Asking for "one or two sentences" in passing produced six on a live
+  call; stating it as a limit that holds however much was found, with an explicit
+  alternative — one fact plus an offer of the rest — holds at two, including on
+  "summarise everything", the prompt that produced six before. Note that a live
+  process keeps the directive it launched with, so changes need a respawn
+
 - Interrupt a voice turn when its listener hangs up, instead of running it to
   completion while holding the per-key lock. speech-to-speech drops its request
   every time it supersedes its own turn, which happens on any mid-sentence pause,
