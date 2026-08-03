@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Leave exactly one live speech-to-speech socket behind on reconnect. Replacing
+  `this.ws` did not silence the socket it replaced — the old object kept its
+  message listener and went on feeding the player, so every reply was heard once
+  per stale socket and the count grew with each reconnect. One s2s restart was
+  enough to start it. Superseded sockets are now unbound and closed, at most one
+  reconnect timer is outstanding, and a close from a replaced socket no longer
+  schedules a second chain
+
 - Answer pure small talk from a fast hosted model instead of waking Claude Code.
   Measured: "hello" 1.2s and "thank you" 0.8s, against ~2.6s before and 6s+ for a
   lookup. Voice only — a text surface has no latency problem worth a second model

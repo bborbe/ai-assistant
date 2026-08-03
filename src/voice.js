@@ -77,6 +77,8 @@ class Session {
     this.speaking = false;
     this.subscribed = new Set();
     this.closed = false;
+    this.ws = null;
+    this.retry = null; // at most one outstanding reconnect
 
     // Transcript path — EVERY speaker, independent of the command allowlist.
     // Buffers here are flushed on each speaker's silence boundary.
@@ -209,19 +211,48 @@ class Session {
     );
   }
 
+  /**
+   * (Re)connect to speech-to-speech, leaving exactly ONE live socket behind.
+   *
+   * Replacing `this.ws` does not silence the socket it replaced: the old object
+   * keeps its `message` listener, so it goes on feeding onEvent and every reply
+   * is played once per stale socket. Heard as a doubled response, and it grows
+   * with each reconnect — one s2s restart is enough to start it.
+   *
+   * Likewise only one retry timer may be outstanding, or two chains race and
+   * each leaves its own socket.
+   */
   connectS2S() {
     if (this.closed) return;
-    this.ws = new WebSocket(config.s2sUrl, { maxPayload: 0 });
-    this.ws.on('open', () => log.info('  voice: s2s connected'));
+    if (this.retry) {
+      clearTimeout(this.retry);
+      this.retry = null;
+    }
+    if (this.ws) {
+      try {
+        this.ws.removeAllListeners();
+        this.ws.close();
+      } catch {}
+      this.ws = null;
+    }
+
+    const ws = new WebSocket(config.s2sUrl, { maxPayload: 0 });
+    this.ws = ws;
+    ws.on('open', () => log.info('  voice: s2s connected'));
     // Object, not a bare string: the logger spreads its second argument, so a
     // string renders as {"0":"c","1":"o",…} and the message is unreadable.
-    this.ws.on('error', (e) => log.error('  voice: s2s error', { error: e.message }));
-    this.ws.on('close', () => {
-      if (this.closed) return;
+    ws.on('error', (e) => log.error('  voice: s2s error', { error: e.message }));
+    ws.on('close', () => {
+      // Ignore a close from a socket we already replaced, or it schedules a
+      // reconnect on top of the live one.
+      if (this.closed || this.ws !== ws) return;
       log.info('  voice: s2s closed, retrying in 2s');
-      setTimeout(() => this.connectS2S(), 2000);
+      this.retry = setTimeout(() => this.connectS2S(), 2000);
     });
-    this.ws.on('message', (raw) => this.onEvent(raw));
+    // Same guard: a superseded socket must not reach the player.
+    ws.on('message', (raw) => {
+      if (this.ws === ws) this.onEvent(raw);
+    });
   }
 
   onEvent(raw) {
@@ -278,6 +309,10 @@ class Session {
     // said is silently lost.
     for (const t of this.flushTimers.values()) clearTimeout(t);
     this.flushTimers.clear();
+    if (this.retry) {
+      clearTimeout(this.retry);
+      this.retry = null;
+    }
     for (const userId of [...this.utterance.keys()]) this.flush(userId);
     this.closed = true;
     clearInterval(this.pump);
