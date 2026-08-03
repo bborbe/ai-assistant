@@ -37,6 +37,8 @@ import os
 import pty
 import random
 import re
+import select
+import socket as _socket
 import subprocess
 import time
 import uuid
@@ -270,7 +272,18 @@ SENTENCE_MAX = 200
 # worth covering. If the model beats us to it the duplicate is suppressed, so
 # racing near the boundary is harmless.
 HOLD_AFTER = float(os.environ.get("SHIM_HOLD_AFTER", "3.0"))
-_HOLD_LINES = ("One moment.", "Let me check that.", "Checking now.", "One second.")
+# TWO sentences, deliberately. speech-to-speech releases a sentence to TTS only
+# once the NEXT one has started (base_openai_compatible_language_model.py:404) —
+# a lone holding line is held as incomplete text until the answer begins, which
+# is the whole silence it was meant to fill. Observed 2026-08-03: emitted at 3s,
+# spoken at 13.4s. The second sentence is what pushes the first out; it is itself
+# held back and lands just before the answer, which reads as a natural beat.
+_HOLD_LINES = (
+    "One moment. Let me look that up.",
+    "Let me check that. Just a second.",
+    "Checking now. Won't be long.",
+    "One second. Let me find it.",
+)
 # When the model DOES comply, its own holding sentence lands after ours and the
 # listener hears two. Recognise the shape and drop the duplicate — only ever the
 # first sentence, and only when we already spoke.
@@ -322,6 +335,42 @@ def strip_markdown(text: str) -> str:
 # because a key maps to exactly one surface (voice uses the default key, text
 # uses thread:/dm:/channel: keys), so the directive is stable for the process's
 # life.
+def peer_hung_up(sock) -> bool:
+    """True once the client has closed its end.
+
+    A failed write is NOT enough to notice in time: a turn spends most of its
+    life running tools, producing nothing to write, so a disconnect at second 5
+    would go unseen until the answer at second 60 — measured exactly that. This
+    peeks instead: a socket that is readable but yields no bytes has seen EOF.
+
+    Never raises. A socket we cannot inspect is assumed alive, so the failure
+    mode is the old behaviour rather than a turn killed by mistake.
+    """
+    try:
+        r, _, _ = select.select([sock], [], [], 0)
+        if not r:
+            return False
+        return sock.recv(1, _socket.MSG_PEEK) == b""
+    except (BlockingIOError, InterruptedError):
+        return False
+    except OSError:
+        return True     # already unusable
+    except Exception:
+        return False
+
+
+class ClientGone(Exception):
+    """The listener hung up — raised by the sink, caught by the turn.
+
+    speech-to-speech drops its HTTP request whenever it supersedes its own turn,
+    which happens on every mid-sentence pause. Without this the turn kept running
+    to completion holding the per-key lock, and the NEXT request — the one
+    carrying the full sentence — queued behind one or two dead turns. Measured
+    2026-08-03: three fragments of one sentence, the real answer's holding line
+    delayed to 15s purely by that queue.
+    """
+
+
 class ClaudeProcess:
     def __init__(self, key: str, session_id: str, resume: bool, system: str):
         cmd = ["claude", "-p",
@@ -364,6 +413,25 @@ class ClaudeProcess:
     def alive(self) -> bool:
         return self.proc.poll() is None
 
+    def interrupt(self) -> None:
+        """Abandon the in-flight turn without killing the session.
+
+        Verified: the turn ends within ~0.1s with a `result` carrying
+        subtype 'error_during_execution', and the SAME process answers the next
+        prompt normally — so the session is not desynchronised by this. That
+        second property is what makes it safe; without it, waiting out the dead
+        turn would be the lesser evil.
+        """
+        try:
+            self.proc.stdin.write(json.dumps({
+                "type": "control_request",
+                "request_id": str(uuid.uuid4()),
+                "request": {"subtype": "interrupt"},
+            }) + "\n")
+            self.proc.stdin.flush()
+        except Exception:
+            pass    # a turn we were abandoning anyway
+
     def _readline(self) -> str | None:
         """One JSON line off the PTY. A PTY has no EOF while the child lives,
         so read byte-wise and split on newlines ourselves; \r is the PTY's
@@ -378,7 +446,7 @@ class ClaudeProcess:
                 self._buf = b""
                 return line
 
-    def ask(self, prompt: str, on_text=None) -> str:
+    def ask(self, prompt: str, on_text=None, is_gone=None) -> str:
         """Run one turn. `on_text` receives assistant text as it arrives.
 
         The `assistant` event carries the reply BEFORE `result` — measured 6.1s
@@ -398,6 +466,7 @@ class ClaudeProcess:
         streamed = False   # did any partial reach on_text this turn?
         held = False       # did the timer below speak for us?
         first_out = True   # next emitted sentence is the model's first
+        gone = False       # listener hung up; abandon as soon as we notice
 
         def push(part: str) -> None:
             """The ONLY route from model text to the wire.
@@ -407,15 +476,19 @@ class ClaudeProcess:
             holding sentence through whenever it arrived unpunctuated, and the
             listener heard "Let me check that." twice.
             """
-            nonlocal streamed, first_out
-            if not part:
+            nonlocal streamed, first_out, gone
+            if gone or not part:
                 return
             if first_out and held and _HOLDISH.match(part):
                 first_out = False       # we already said it; do not say it twice
                 streamed = True
                 return
             first_out = False
-            on_text(part)
+            try:
+                on_text(part)
+            except ClientGone:
+                gone = True
+                return
             streamed = True
 
         def emit_sentences(flush: bool = False) -> None:
@@ -450,12 +523,14 @@ class ClaudeProcess:
                 pending = ""
 
         def speak_holding_line():
-            nonlocal held
-            if streamed or not on_text:
+            nonlocal held, gone
+            if streamed or gone or not on_text:
                 return          # already talking; nothing to fill
             held = True
             try:
                 on_text(random.choice(_HOLD_LINES))
+            except ClientGone:
+                gone = True     # the write is also how we learn they left
             except Exception:
                 pass            # a failed filler must never break the turn
 
@@ -469,8 +544,20 @@ class ClaudeProcess:
             if hold_timer:
                 hold_timer.cancel()
 
+        interrupted = False
         deadline = time.time() + TIMEOUT
         while time.time() < deadline:
+            # Noticed on the previous iteration that nobody is listening. Stop
+            # the turn so the per-key lock frees for the request that replaced
+            # it, then keep reading until `result` so the process stays in sync.
+            if not gone and is_gone and is_gone():
+                gone = True
+            if gone and not interrupted:
+                interrupted = True
+                stop_timer()
+                print(f"  [{self.key}] listener gone — interrupting turn", flush=True)
+                self.interrupt()
+
             line = self._readline()
             if line is None:
                 stop_timer()
@@ -562,13 +649,13 @@ def drop_process(key: str) -> None:
         proc.close()
 
 
-def ask_claude(key: str, system: str, prompt: str, on_text=None) -> str:
+def ask_claude(key: str, system: str, prompt: str, on_text=None, is_gone=None) -> str:
     """Ask over the persistent process, respawning once if it has died."""
     for attempt in (1, 2):
         proc = get_process(key, system)
         began = time.monotonic()
         try:
-            out = proc.ask(prompt, on_text=on_text)
+            out = proc.ask(prompt, on_text=on_text, is_gone=is_gone)
             mark_started(key)
             print(f"  [{key}] {time.monotonic() - began:.1f}s, {len(out)} chars", flush=True)
             return out
@@ -797,6 +884,10 @@ class Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 dead = True
                 self.close_connection = True
+                # Raise rather than swallow: the write is the only place we
+                # learn the listener left, and the turn needs to know so it can
+                # interrupt instead of running on holding the lock.
+                raise ClientGone from None
 
         with _locks[key]:                 # per key, so other keys run concurrently
             # While we waited for the lock a newer turn may have arrived — this
@@ -806,10 +897,15 @@ class Handler(BaseHTTPRequestHandler):
                 print(f"-> STALE [{key}] superseded, dropping: {prompt[:40]!r}", flush=True)
                 return self._stream("") if req.get("stream") else self._json(200, self._completion(""))
             answer = ask_claude(key, "\n\n".join(parts), prompt,
-                                on_text=on_text if live else None)
+                                on_text=on_text if live else None,
+                                is_gone=(lambda: peer_hung_up(self.connection)) if live else None)
 
         if live:
-            writer.finish()
+            if not dead:
+                try:
+                    writer.finish()
+                except (BrokenPipeError, ConnectionResetError):
+                    self.close_connection = True
             return
 
         answer = strip_markdown(answer) if voice else strip_panels(answer)

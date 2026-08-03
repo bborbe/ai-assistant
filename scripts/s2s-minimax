@@ -22,6 +22,7 @@
 #   S2S_MODEL          — MiniMax model (default: MiniMax-M3)
 #   S2S_MIN_SILENCE_MS — silence before a turn ends (default: 700, upstream 64)
 #   S2S_STT_LANGUAGE   — STT language code (default: en; empty = auto-detect)
+#   S2S_STREAM_BATCH   — sentences buffered before TTS (default: 1, upstream 3)
 
 set -euo pipefail
 
@@ -54,6 +55,14 @@ S2S_MIN_SILENCE_MS="${S2S_MIN_SILENCE_MS:-700}"
 # Pinning the language makes unclear audio degrade into obviously-wrong words
 # rather than plausible ones. Set empty to restore auto-detect.
 S2S_STT_LANGUAGE="${S2S_STT_LANGUAGE-en}"
+
+# Upstream buffers THREE sentences before handing anything to TTS, which quietly
+# defeats streaming: the shim's holding line is sentence one, so it waited in the
+# buffer until the answer arrived and was spoken immediately before it — heard
+# 2026-08-03 as "the 'let me check that' was late, and the answer directly
+# after". Batching helps prosody across a long reply; it costs the entire point
+# of speaking early. 1 = speak each sentence as it lands.
+S2S_STREAM_BATCH="${S2S_STREAM_BATCH:-1}"
 
 cd "$S2S_DIR" || exit 1
 
@@ -88,6 +97,7 @@ exec uv run --python 3.13 speech-to-speech \
   --stt parakeet-tdt \
   --tts qwen3 \
   --min_silence_ms "$S2S_MIN_SILENCE_MS" \
+  --stream_batch_sentences "$S2S_STREAM_BATCH" \
   --llm_backend chat-completions \
   --responses_api_base_url "https://api.minimax.io/v1" \
   --model_name "$S2S_MODEL" \

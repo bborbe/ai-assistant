@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- Interrupt a voice turn when its listener hangs up, instead of running it to
+  completion while holding the per-key lock. speech-to-speech drops its request
+  every time it supersedes its own turn, which happens on any mid-sentence pause,
+  so the request carrying the finished sentence queued behind one or two dead
+  turns. Measured: a follow-up went from 61.8s to 2.5s
+
+- Detect the disconnect by polling the socket, not by waiting for a failed write.
+  A turn spends most of its life running tools with nothing to write, so a
+  disconnect at second 5 went unnoticed until the answer at second 60. Verified
+  that a `control_request` interrupt ends the turn in ~0.1s and the same process
+  answers the next prompt normally, so the session is not desynchronised
+
+- Speak the holding line as two sentences. speech-to-speech releases a sentence
+  to TTS only once the NEXT one has started, so a lone holding line waited for
+  the answer and was spoken immediately before it — emitted at 3s, heard at
+  13.4s. The second sentence pushes the first out and lands just before the
+  answer. Confirmed on a live call: spoken at 3.0s
+
+- Set `--stream_batch_sentences 1`. Upstream buffers three sentences before
+  synthesising anything, which silently defeated every streaming improvement:
+  the first sentence could not be heard until the third existed
+
 - Speak a holding line when a voice turn stays silent past 3s, so early speech no
   longer depends on the model choosing to produce it. Tuned to 3s because a warm
   no-tool turn reaches its first word at ~2.4s and a shorter threshold interjects
