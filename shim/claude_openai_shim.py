@@ -45,7 +45,7 @@ import uuid
 from collections import defaultdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Event, Lock, Thread, Timer
+from threading import Event, Lock, Thread
 
 HOST = os.environ.get("SHIM_HOST", "127.0.0.1")
 PORT = int(os.environ.get("SHIM_PORT", "8080"))
@@ -280,17 +280,24 @@ HOLD_AFTER = float(os.environ.get("SHIM_HOLD_AFTER", "3.0"))
 # Well inside speech-to-speech's 20s read timeout, and cheap: an empty SSE delta
 # is a few dozen bytes and produces no speech.
 KEEPALIVE_EVERY = float(os.environ.get("SHIM_KEEPALIVE_EVERY", "8.0"))
+# Fallback for a turn that is slow WITHOUT using tools. Rare, so the threshold is
+# generous: better to say nothing than to interject into an answer that is coming.
+HOLD_MAX = float(os.environ.get("SHIM_HOLD_MAX", "8.0"))
 # TWO sentences, deliberately. speech-to-speech releases a sentence to TTS only
 # once the NEXT one has started (base_openai_compatible_language_model.py:404) —
 # a lone holding line is held as incomplete text until the answer begins, which
 # is the whole silence it was meant to fill. Observed 2026-08-03: emitted at 3s,
 # spoken at 13.4s. The second sentence is what pushes the first out; it is itself
 # held back and lands just before the answer, which reads as a natural beat.
+# Deliberately free of any claim about what is happening. The timer is blind —
+# it fires on silence, not on tool use — so "checking now" was spoken in reply to
+# "thank you". A holding line that only buys time cannot be wrong about anything;
+# one that describes the work can.
 _HOLD_LINES = (
-    "One moment. Let me look that up.",
-    "Let me check that. Just a second.",
-    "Checking now. Won't be long.",
-    "One second. Let me find it.",
+    "One moment. Just a second.",
+    "Hang on. Won't be long.",
+    "One second. Bear with me.",
+    "Just a moment. Nearly there.",
 )
 # When the model DOES comply, its own holding sentence lands after ours and the
 # listener hears two. Recognise the shape and drop the duplicate — only ever the
@@ -475,6 +482,7 @@ class ClaudeProcess:
         held = False       # did the timer below speak for us?
         first_out = True   # next emitted sentence is the model's first
         gone = False       # listener hung up; abandon as soon as we notice
+        tool_seen = False  # Claude reached for a tool, so a real wait is coming
 
         def push(part: str) -> None:
             """The ONLY route from model text to the wire.
@@ -542,15 +550,27 @@ class ClaudeProcess:
             except Exception:
                 pass            # a failed filler must never break the turn
 
-        hold_timer = None
+        # Wait for EVIDENCE of work, not merely for time to pass. A bare timer
+        # fires on any slow turn, so "thank you" was answered with "checking
+        # now" — a holding line in front of a reply that needed no lookup at
+        # all. A tool_use block is the signal that a wait is genuinely coming.
+        hold_stop = Event()
+
+        def hold_watch():
+            began = time.monotonic()
+            while not hold_stop.wait(0.4):
+                if streamed or gone:
+                    return
+                waited = time.monotonic() - began
+                if (tool_seen and waited >= HOLD_AFTER) or waited >= HOLD_MAX:
+                    speak_holding_line()
+                    return
+
         if on_text and HOLD_AFTER > 0:
-            hold_timer = Timer(HOLD_AFTER, speak_holding_line)
-            hold_timer.daemon = True
-            hold_timer.start()
+            Thread(target=hold_watch, daemon=True).start()
 
         def stop_timer():
-            if hold_timer:
-                hold_timer.cancel()
+            hold_stop.set()
 
         interrupted = False
         deadline = time.time() + TIMEOUT
@@ -589,6 +609,9 @@ class ClaudeProcess:
                     if d.get("type") == "text_delta":
                         pending += d.get("text", "")
                         emit_sentences()
+                elif ev.get("type") == "content_block_start":
+                    if ev.get("content_block", {}).get("type") == "tool_use":
+                        tool_seen = True
                 elif ev.get("type") == "content_block_stop":
                     emit_sentences(flush=True)
             elif kind == "assistant":

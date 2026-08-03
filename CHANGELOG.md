@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Hold the spoken filler until there is evidence of work. A plain timer fires on
+  any slow turn, so "thank you" was answered with "Checking now. Won't be long.
+  You're welcome." — three sentences of scaffolding around two words. The filler
+  now waits for a `tool_use` block, with an 8s fallback for a turn that is slow
+  without tools. Verified: a thank-you answers directly at 2.6s with no filler,
+  while a lookup still gets its early sentence
+
+- Say nothing about what is happening in the filler itself. "Checking now" and
+  "let me look that up" are claims, and the timer that speaks them cannot see
+  whether anything is being looked up; the lines are now purely neutral
+
 - Send SSE keepalives so a long turn is not aborted mid-flight. speech-to-speech
   gives up after 20s without bytes and speaks "Wow I'm a bit slow today, could
   you repeat that?" — and because that is a gap between chunks rather than a
