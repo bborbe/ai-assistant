@@ -42,7 +42,9 @@ import socket as _socket
 import subprocess
 import time
 import uuid
-from collections import defaultdict
+import urllib.error
+import urllib.request
+from collections import defaultdict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Event, Lock, Thread
@@ -84,6 +86,120 @@ ALLOWED_TOOLS = os.environ.get("SHIM_ALLOWED_TOOLS", DEFAULT_ALLOWED_TOOLS)
 UNSAFE = os.environ.get("SHIM_UNSAFE") == "1"
 SESSIONS_FILE = Path(os.environ.get("SHIM_SESSIONS_FILE", Path.home() / ".claude/shim-sessions.json"))
 DEFAULT_KEY = "default"
+
+# ── front tier ─────────────────────────────────────────────────────────────
+# A small hosted model answers pure conversation, so "hello" does not pay the
+# ~2.4s a Claude Code turn costs before its first word. Everything else goes to
+# Claude untouched.
+#
+# The ROUTING is a closed whitelist here, not a decision the front model makes.
+# Letting it choose costs a round trip (~0.6s) to be told what the transcript
+# already says, and puts a safety-critical judgement inside a model: answering
+# "what did I decide about the deploy" from its own head produces a fluent
+# invention about the user's vault, spoken in the assistant's voice. A closed set
+# of phrases cannot drift, and anything unrecognised falls through to Claude.
+#
+# Disabled unless a key is present, so a missing credential degrades to today's
+# behaviour rather than breaking voice.
+FRONT_BASE_URL = os.environ.get("SHIM_FRONT_BASE_URL", "https://api.minimax.io/v1").rstrip("/")
+FRONT_MODEL = os.environ.get("SHIM_FRONT_MODEL", "MiniMax-M3")
+FRONT_API_KEY = os.environ.get("SHIM_FRONT_API_KEY", "").strip()
+FRONT_TIMEOUT = float(os.environ.get("SHIM_FRONT_TIMEOUT", "4.0"))
+FRONT_HISTORY = int(os.environ.get("SHIM_FRONT_HISTORY", "8"))
+
+FRONT_SYSTEM = (
+    "You are the voice of an assistant in a spoken conversation, handling ONLY "
+    "small talk and conversational repair — greetings, thanks, 'can you hear me', "
+    "'say that again'. Reply in ONE short spoken sentence. No markdown, no lists, "
+    "no emoji.\n"
+    "You have no tools, no files, no memory of the user's work, and no way to look "
+    "anything up. If the user asks anything factual — about tasks, notes, plans, "
+    "code, systems, or anything that happened — do NOT answer or guess. Say only "
+    "that you are checking, in one short sentence."
+)
+
+# Full-match, not substring: "hello" is small talk, "hello, what is my most
+# important task" is not, and a substring test would route the second one here.
+_CHITCHAT = re.compile(r"""^(
+      (hi|hello|hey|yo)(\s+there)?
+    | good\s+(morning|afternoon|evening)
+    | (thanks|thank\s+you|cheers)(\s+(a\s+lot|very\s+much))?
+    | how\s+are\s+you(\s+doing)?
+    | (can|do)\s+you\s+hear\s+me(\s+now)?
+    | are\s+you\s+(there|awake|ok|okay|still\s+there)
+    | (say\s+that\s+again|repeat\s+that|come\s+again|pardon)
+    | (never\s*mind|forget\s+it)
+    | (speak\s+up|louder|slower|slow\s+down)
+    | (good\s*night|bye|goodbye|see\s+you)
+)$""", re.I | re.X)
+
+# Matches both the well-formed block and the unclosed "<think …" MiniMax
+# actually emitted, which a tag-shaped regex alone would miss.
+_THINK = re.compile(r"<think\b.*?(?:</think>?|$)", re.S | re.I)
+
+_front_history: dict[str, deque] = defaultdict(lambda: deque(maxlen=FRONT_HISTORY))
+_front_lock = Lock()
+
+
+def is_chitchat(text: str) -> bool:
+    """Whole utterance is conversational filler with no factual content."""
+    if not FRONT_API_KEY:
+        return False
+    norm = re.sub(r"[.!?,]+$", "", text.strip().lower())
+    norm = re.sub(r"\s+", " ", norm)
+    return bool(_CHITCHAT.fullmatch(norm))
+
+
+def front_reply(key: str, prompt: str) -> str | None:
+    """One short spoken reply from the front model, or None to fall through.
+
+    Every failure path returns None so the turn continues to Claude: a front tier
+    that swallows a question when the API is slow or down is worse than one that
+    never existed.
+    """
+    with _front_lock:
+        history = list(_front_history[key])
+    body = json.dumps({
+        "model": FRONT_MODEL,
+        "messages": [{"role": "system", "content": FRONT_SYSTEM}] + history +
+                    [{"role": "user", "content": prompt}],
+        "max_tokens": 80,
+        "temperature": 0.7,
+        # MiniMax emits reasoning inside `content`, not `reasoning_content`, so
+        # without this the whole think-aloud is spoken. Only M3 honours the flag;
+        # see patches/speech-to-speech-minimax-thinking.patch for the same fix in
+        # the other client. Harmlessly ignored by non-MiniMax endpoints.
+        "thinking": {"type": "disabled"},
+    }).encode()
+    req = urllib.request.Request(
+        f"{FRONT_BASE_URL}/chat/completions", data=body,
+        headers={"Content-Type": "application/json",
+                 "Authorization": f"Bearer {FRONT_API_KEY}"})
+    try:
+        with urllib.request.urlopen(req, timeout=FRONT_TIMEOUT) as resp:
+            data = json.loads(resp.read())
+        text = (data["choices"][0]["message"].get("content") or "").strip()
+    except Exception as e:
+        print(f"  [{key}] front tier unavailable ({e}) — falling through", flush=True)
+        return None
+    # Belt and braces: the flag above is honoured only by some models, and a
+    # leaked think-block is not a cosmetic problem — it gets read aloud.
+    text = _THINK.sub("", text).strip()
+    return text or None
+
+
+def remember(key: str, user: str, assistant: str) -> None:
+    """Keep the front model's view of the conversation current.
+
+    Claude's answers go in here too. Without them 'say that again' reaches a
+    model that never heard the thing it is being asked to repeat.
+    """
+    if not FRONT_API_KEY or not assistant:
+        return
+    with _front_lock:
+        h = _front_history[key]
+        h.append({"role": "user", "content": user[:500]})
+        h.append({"role": "assistant", "content": assistant[:500]})
 
 # Per-key locks: Claude Code serializes turns *within* a session, but different
 # sessions run concurrently. A single global lock would silently serialize every
@@ -271,12 +387,13 @@ SENTENCE_MAX = 200
 # deterministic: it fires only when nothing has been spoken yet, so a prompt
 # answer is never interrupted by it.
 #
-# 3s, not less: a warm turn with no tools reaches its first word at ~2.4s, so a
-# shorter threshold interjects "checking now" in front of an answer that was
-# already arriving. Tool turns produce nothing for 6s or more, which is the case
-# worth covering. If the model beats us to it the duplicate is suppressed, so
-# racing near the boundary is harmless.
-HOLD_AFTER = float(os.environ.get("SHIM_HOLD_AFTER", "3.0"))
+# Measured from the start of the turn, and small because the tool_use gate below
+# already establishes that a wait is coming. This was 3s when the filler fired on
+# time alone — a shorter threshold then interjected in front of answers that were
+# already arriving at ~2.4s. Once a tool is running the answer is provably many
+# seconds away, so there is nothing left to interrupt and the delay was pure
+# cost: it was the largest single slice of the ~4s before the user heard anything.
+HOLD_AFTER = float(os.environ.get("SHIM_HOLD_AFTER", "0.5"))
 # Well inside speech-to-speech's 20s read timeout, and cheap: an empty SSE delta
 # is a few dozen bytes and produces no speech.
 KEEPALIVE_EVERY = float(os.environ.get("SHIM_KEEPALIVE_EVERY", "8.0"))
@@ -902,6 +1019,19 @@ class Handler(BaseHTTPRequestHandler):
                  or self.headers.get("X-Output-Mode", "").lower() == "voice")
         print(f"-> {'VOICE' if voice else 'TEXT '} [{key}] {prompt[:70]!r}", flush=True)
 
+        # Front tier: pure conversation never reaches Claude Code. Voice only —
+        # a text surface has no latency problem worth a second model.
+        if voice and is_chitchat(prompt):
+            said = front_reply(key, prompt)
+            if said:
+                said = strip_markdown(said)
+                print(f"-> FRONT [{key}] {said[:60]!r}", flush=True)
+                remember(key, prompt, said)
+                return self._stream(said) if req.get("stream") else \
+                    self._json(200, self._completion(said))
+            # None = the front tier failed; fall through to Claude rather than
+            # leave the user talking to silence.
+
         parts = [p for p in (system, MEMORY_DIRECTIVE,
                              VOICE_DIRECTIVE if voice else TEXT_DIRECTIVE) if p]
         mine = next_seq(key)
@@ -969,6 +1099,10 @@ class Handler(BaseHTTPRequestHandler):
             stop_keepalive.set()
 
         if live:
+            # Claude's answer is what the user heard, so it is what the front
+            # tier must believe it said — otherwise "say that again" is answered
+            # by a model with no idea what came before.
+            remember(key, prompt, strip_markdown(answer))
             if not dead:
                 try:
                     writer.finish()

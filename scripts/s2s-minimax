@@ -42,9 +42,12 @@ S2S_MODEL="${S2S_MODEL:-MiniMax-M3}"
 # Observed 2026-08-02 22:38:47-53: one sentence, four turns, four invocations,
 # the bot itself answering "same question again (dupe)".
 #
-# Raising the floor to 700 ms costs ~640 ms before a reply starts, against a
-# ~5 s turn — cheap next to answering the same half-sentence four times.
-S2S_MIN_SILENCE_MS="${S2S_MIN_SILENCE_MS:-700}"
+# 400ms rather than the 700ms first chosen here: 700 was bought to avoid splits
+# back when an abandoned turn ran to completion holding the per-key lock, so one
+# mid-sentence pause delayed the real question by ten seconds or more. The shim
+# now interrupts an abandoned turn in ~0.1s, which makes a split cheap — and the
+# silence floor is paid on EVERY turn, so it is the wrong place to spend.
+S2S_MIN_SILENCE_MS="${S2S_MIN_SILENCE_MS:-400}"
 
 # Parakeet defaults to auto-detect across 25 European languages, and that is how
 # it fails: an unclear or mixed-language utterance is not rejected, it is

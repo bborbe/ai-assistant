@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- Answer pure small talk from a fast hosted model instead of waking Claude Code.
+  Measured: "hello" 1.2s and "thank you" 0.8s, against ~2.6s before and 6s+ for a
+  lookup. Voice only — a text surface has no latency problem worth a second model
+
+- Route by a closed whitelist of conversational phrases, not by asking the front
+  model to decide. A tool-call round trip costs ~0.6s to be told what the
+  transcript already says, and it puts a safety-critical judgement inside a model
+  that would answer "what did I decide about the deploy" from its own head. The
+  match is whole-utterance: "hello" routes to the front tier, "hello, what is my
+  most important task" does not. Anything unrecognised, and any front-tier
+  failure, falls through to Claude
+
+- Disable thinking on the front model and strip any that leaks. MiniMax emits
+  reasoning inside `content` rather than `reasoning_content`, so the first
+  version read its own deliberation aloud
+
+- Feed Claude's answers back into the front model's history, or "say that again"
+  reaches a model that never heard what it is being asked to repeat
+
+- Lower the filler threshold to 0.5s and the silence floor to 400ms. Both were
+  set to guard against problems since fixed — the filler now waits for a
+  `tool_use` block rather than firing on any slow turn, and an abandoned turn is
+  interrupted in ~0.1s instead of blocking the next one
+
 - Hold the spoken filler until there is evidence of work. A plain timer fires on
   any slow turn, so "thank you" was answered with "Checking now. Won't be long.
   You're welcome." — three sentences of scaffolding around two words. The filler

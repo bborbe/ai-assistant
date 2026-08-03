@@ -55,6 +55,11 @@ transcriber:
 .PHONY: shim
 # Run the Claude Code OpenAI-compatible shim
 shim:
+	@set -a; [ -f local.env ] && . ./local.env; set +a; \
+	if [ -n "$$FRONT_API_KEY_ID" ]; then \
+	  SHIM_FRONT_API_KEY=$$(teamvault-cli password $$FRONT_API_KEY_ID); \
+	  export SHIM_FRONT_API_KEY; \
+	fi; \
 	python3 -u shim/claude_openai_shim.py
 
 .PHONY: clean-local
