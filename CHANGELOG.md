@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Speak a holding line when a voice turn stays silent past 3s, so early speech no
+  longer depends on the model choosing to produce it. Tuned to 3s because a warm
+  no-tool turn reaches its first word at ~2.4s and a shorter threshold interjects
+  in front of an answer that was already arriving; tool turns produce nothing for
+  6s or more. When the model does say its own holding sentence, the duplicate is
+  recognised and dropped. Override with `SHIM_HOLD_AFTER`, 0 disables
+
+- Route all streamed model text through one emit path. The duplicate check lived
+  only on the sentence-split branch, so a holding sentence that arrived without
+  trailing punctuation went out via the end-of-block flush and was spoken twice
+
 - Stream assistant text as it arrives instead of waiting for `result`, and run
   Claude Code on a PTY so it line-buffers. Off a pipe it block-buffers and a
   whole turn lands at once; on a PTY chunks arrive ~0.2s apart

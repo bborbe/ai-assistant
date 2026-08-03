@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import os
 import pty
+import random
 import re
 import subprocess
 import time
@@ -42,7 +43,7 @@ import uuid
 from collections import defaultdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Timer
 
 HOST = os.environ.get("SHIM_HOST", "127.0.0.1")
 PORT = int(os.environ.get("SHIM_PORT", "8080"))
@@ -254,6 +255,28 @@ _SENTENCE_END = re.compile(r"[.!?…]+[\"')\]]*(?=\s)")
 # a list or a long clause would sit in the buffer until the turn ended, which is
 # exactly the dead air streaming is meant to remove.
 SENTENCE_MAX = 200
+
+# How long a voice turn may stay silent before the shim speaks for itself.
+#
+# VOICE_DIRECTIVE asks the model to say one short sentence before it reaches for
+# a tool, and it does — sometimes. A directive is a request, not a guarantee, and
+# a turn that ignores it is 15s of dead air. This timer makes the early sentence
+# deterministic: it fires only when nothing has been spoken yet, so a prompt
+# answer is never interrupted by it.
+#
+# 3s, not less: a warm turn with no tools reaches its first word at ~2.4s, so a
+# shorter threshold interjects "checking now" in front of an answer that was
+# already arriving. Tool turns produce nothing for 6s or more, which is the case
+# worth covering. If the model beats us to it the duplicate is suppressed, so
+# racing near the boundary is harmless.
+HOLD_AFTER = float(os.environ.get("SHIM_HOLD_AFTER", "3.0"))
+_HOLD_LINES = ("One moment.", "Let me check that.", "Checking now.", "One second.")
+# When the model DOES comply, its own holding sentence lands after ours and the
+# listener hears two. Recognise the shape and drop the duplicate — only ever the
+# first sentence, and only when we already spoke.
+_HOLDISH = re.compile(
+    r"^\s*(let me\b|one moment|one second|hold on|checking\b|i'?ll check|"
+    r"give me a\b|sure,? let me\b|okay,? let me\b)", re.I)
 # A trailing abbreviation is not a sentence end. Splitting there makes TTS speak
 # "e.g." alone, and CoreAudio clips the first word of every utterance — so the
 # fragment is not merely odd, it is inaudible.
@@ -373,6 +396,27 @@ class ClaudeProcess:
         seen: list[str] = []
         pending = ""       # partial text not yet handed to on_text
         streamed = False   # did any partial reach on_text this turn?
+        held = False       # did the timer below speak for us?
+        first_out = True   # next emitted sentence is the model's first
+
+        def push(part: str) -> None:
+            """The ONLY route from model text to the wire.
+
+            Both the sentence-split path and the end-of-block flush go through
+            here: keeping the duplicate check in one of them let the model's own
+            holding sentence through whenever it arrived unpunctuated, and the
+            listener heard "Let me check that." twice.
+            """
+            nonlocal streamed, first_out
+            if not part:
+                return
+            if first_out and held and _HOLDISH.match(part):
+                first_out = False       # we already said it; do not say it twice
+                streamed = True
+                return
+            first_out = False
+            on_text(part)
+            streamed = True
 
         def emit_sentences(flush: bool = False) -> None:
             """Hand whole sentences to on_text, never bare tokens.
@@ -382,7 +426,7 @@ class ClaudeProcess:
             boundaries are the natural unit; SENTENCE_MAX bounds the wait for
             text that never punctuates (a long list, a code-ish line).
             """
-            nonlocal pending, streamed
+            nonlocal pending
             if not on_text:
                 pending = "" if flush else pending
                 return
@@ -400,18 +444,36 @@ class ClaudeProcess:
                     break
                 part, pending = pending[:cut].strip(), pending[cut:]
                 search_from = 0
-                if part:
-                    on_text(part)
-                    streamed = True
+                push(part)
             if flush and pending.strip():
-                on_text(pending.strip())
-                streamed = True
+                push(pending.strip())
                 pending = ""
+
+        def speak_holding_line():
+            nonlocal held
+            if streamed or not on_text:
+                return          # already talking; nothing to fill
+            held = True
+            try:
+                on_text(random.choice(_HOLD_LINES))
+            except Exception:
+                pass            # a failed filler must never break the turn
+
+        hold_timer = None
+        if on_text and HOLD_AFTER > 0:
+            hold_timer = Timer(HOLD_AFTER, speak_holding_line)
+            hold_timer.daemon = True
+            hold_timer.start()
+
+        def stop_timer():
+            if hold_timer:
+                hold_timer.cancel()
 
         deadline = time.time() + TIMEOUT
         while time.time() < deadline:
             line = self._readline()
             if line is None:
+                stop_timer()
                 raise RuntimeError("claude process ended")
             if not line.strip():
                 continue
@@ -450,12 +512,14 @@ class ClaudeProcess:
             elif kind == "result":
                 # A block that never closed (turn ended early, or the model
                 # stopped without punctuation) would otherwise be swallowed.
+                stop_timer()
                 emit_sentences(flush=True)
                 self.last_used = time.time()
                 final = str(event.get("result") or "").strip()
                 # `result` repeats the last assistant text; return what was
                 # already emitted so the caller does not say it twice.
                 return final if not seen else "\n".join(seen)
+        stop_timer()
         raise TimeoutError(f"no result within {TIMEOUT}s")
 
     def close(self):
