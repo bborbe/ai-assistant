@@ -20,12 +20,40 @@
 #   S2S_DIR            — repo checkout (default: $HOME/Documents/workspaces/speech-to-speech)
 #   MINIMAX_SECRET_ID  — TeamVault secret key (default: MOPmQL)
 #   S2S_MODEL          — MiniMax model (default: MiniMax-M3)
+#   S2S_MIN_SILENCE_MS — silence before a turn ends (default: 700, upstream 64)
+#   S2S_STT_LANGUAGE   — STT language code (default: en; empty = auto-detect)
 
 set -euo pipefail
 
 S2S_DIR="${S2S_DIR:-$HOME/Documents/workspaces/speech-to-speech}"
 MINIMAX_SECRET_ID="${MINIMAX_SECRET_ID:-MOPmQL}"
 S2S_MODEL="${S2S_MODEL:-MiniMax-M3}"
+
+# Upstream defaults to 64 ms, which is shorter than the pause between two
+# ordinary words — so a single spoken sentence soft-ends several times.
+#
+# s2s is built to absorb that: a soft-ended turn stays reopenable, and resumed
+# speech reopens it rather than starting a new one (VAD/vad_handler.py:220-248).
+# But reopen is refused once the turn is COMMITTED, and a turn commits as soon
+# as assistant output does. Since the shim began streaming on the first
+# `assistant` event, commit happens almost immediately — the reopen window
+# collapses, and every pause becomes a new turn with its own Claude invocation.
+# Observed 2026-08-02 22:38:47-53: one sentence, four turns, four invocations,
+# the bot itself answering "same question again (dupe)".
+#
+# Raising the floor to 700 ms costs ~640 ms before a reply starts, against a
+# ~5 s turn — cheap next to answering the same half-sentence four times.
+S2S_MIN_SILENCE_MS="${S2S_MIN_SILENCE_MS:-700}"
+
+# Parakeet defaults to auto-detect across 25 European languages, and that is how
+# it fails: an unclear or mixed-language utterance is not rejected, it is
+# transcribed into fluent nonsense in whichever language wins. Observed
+# 2026-08-03 19:45 — "When they have something that's the young job." — which
+# Claude then answered in good faith.
+#
+# Pinning the language makes unclear audio degrade into obviously-wrong words
+# rather than plausible ones. Set empty to restore auto-detect.
+S2S_STT_LANGUAGE="${S2S_STT_LANGUAGE-en}"
 
 cd "$S2S_DIR" || exit 1
 
@@ -35,6 +63,13 @@ if [ ${#MINIMAX_KEY} -lt 8 ]; then
   exit 1
 fi
 
+# Exported, NOT passed as --responses_api_api_key: argv is world-readable via
+# `ps`, so the flag form leaks the key to every local process (and into any
+# terminal transcript that ever runs `ps`). The key defaults to None in
+# responses_api_language_model_arguments.py:13, and the OpenAI SDK falls back
+# to OPENAI_API_KEY when the key is None — so omitting the flag is enough.
+export OPENAI_API_KEY="$MINIMAX_KEY"
+
 # S2S_MODE=local  → laptop mic + speakers (default)
 # S2S_MODE=realtime → OpenAI-Realtime-compatible WS server for external clients
 S2S_MODE="${S2S_MODE:-local}"
@@ -43,13 +78,17 @@ if [ "$S2S_MODE" = "realtime" ]; then
   MODE_ARGS+=(--ws_host "${S2S_WS_HOST:-127.0.0.1}" --ws_port "${S2S_WS_PORT:-8765}")
 fi
 
+LANG_ARGS=()
+[ -n "$S2S_STT_LANGUAGE" ] && LANG_ARGS=(--parakeet_tdt_language "$S2S_STT_LANGUAGE")
+
 exec uv run --python 3.13 speech-to-speech \
   "${MODE_ARGS[@]}" \
+  "${LANG_ARGS[@]}" \
   --device mps \
   --stt parakeet-tdt \
   --tts qwen3 \
+  --min_silence_ms "$S2S_MIN_SILENCE_MS" \
   --llm_backend chat-completions \
   --responses_api_base_url "https://api.minimax.io/v1" \
-  --responses_api_api_key "$MINIMAX_KEY" \
   --model_name "$S2S_MODEL" \
   "$@"

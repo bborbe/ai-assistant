@@ -5,10 +5,50 @@
 - Stream assistant text as it arrives instead of waiting for `result`, and run
   Claude Code on a PTY so it line-buffers. Off a pipe it block-buffers and a
   whole turn lands at once; on a PTY chunks arrive ~0.2s apart
-- Caveat, measured: the model usually calls its tools _before_ saying anything,
-  so there is little early text to stream. The directive asks it to speak first
-  and it does not comply — a fast-LLM tier that answers regardless is the fix,
-  and this streaming path is what it will use
+- Correction to the caveat above: the model was not refusing to speak before its
+  tools. Streaming was never reaching the client at all — `ask_claude` was called
+  without an `on_text` callback, so the shim buffered the whole answer and only
+  chunked it at send time. With the callback wired, a tool turn produces "Let me
+  check that." at ~3s. A fast-LLM tier is therefore no longer the fix
+
+- Stream token deltas via `--include-partial-messages`, split on sentence
+  boundaries before handing text to TTS. Without the flag only complete
+  `assistant` events arrive and there is nothing to stream; without the split,
+  TTS synthesises one clipped utterance per token. Abbreviations, decimals and
+  version numbers are guarded against false splits. First speech on a warm
+  session: 6.5s to 2.4s
+
+- Classify voice by session key rather than by sniffing the system prompt.
+  speech-to-speech selects its voice prompt only when `wants_audio` is set, and
+  with TTS as a separate stage it never is — so every real voice turn arrived
+  carrying the TEXT prompt, was answered with the text directive, and got no
+  live streaming. Text surfaces always carry a `thread:`/`dm:`/`channel:` prefix;
+  voice uses the bare default key
+
+- Do not emit assistant text twice. The `assistant` event arrives BEFORE
+  `content_block_stop`, so emitting from both spoke each block a second time
+
+- Keep a trailing space on each streamed sentence — deltas are concatenated
+  verbatim by the client, so without it a reply reads as "here.That question"
+
+- Raise the speech-to-speech silence floor to 700ms (upstream 64ms, shorter than
+  the pause between two words). s2s can reopen a soft-ended turn, but refuses
+  once the turn is committed — and streaming commits almost immediately, so
+  every pause became a new turn with its own Claude invocation
+
+- Pin STT to English. Auto-detect across 25 languages does not reject unclear
+  audio, it transcribes it into fluent nonsense that Claude then answers in good
+  faith. Override with `S2S_STT_LANGUAGE`
+
+- Stop leaking the MiniMax API key into `ps`. It was passed as
+  `--responses_api_api_key`, so it sat in world-readable argv; it now travels as
+  `OPENAI_API_KEY`, which the SDK reads when the flag is absent
+
+- Add `SHIM_CLAUDE_MODEL` to select the model Claude Code runs. Measured no
+  latency benefit (sonnet 6.61s vs opus 6.48s warm), kept as a knob
+
+- Log the speech-to-speech error as an object; a bare string was spread into
+  `{"0":"c","1":"o",…}` and the message was unreadable
 
 - Voice replies stop reciting identifiers. The directive now forbids ids,
   hashes, byte counts, paths and timestamps explicitly and asks for flowing

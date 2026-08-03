@@ -213,7 +213,9 @@ class Session {
     if (this.closed) return;
     this.ws = new WebSocket(config.s2sUrl, { maxPayload: 0 });
     this.ws.on('open', () => log.info('  voice: s2s connected'));
-    this.ws.on('error', (e) => log.error('  voice: s2s error', e.message));
+    // Object, not a bare string: the logger spreads its second argument, so a
+    // string renders as {"0":"c","1":"o",…} and the message is unreadable.
+    this.ws.on('error', (e) => log.error('  voice: s2s error', { error: e.message }));
     this.ws.on('close', () => {
       if (this.closed) return;
       log.info('  voice: s2s closed, retrying in 2s');

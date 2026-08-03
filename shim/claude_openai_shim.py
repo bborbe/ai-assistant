@@ -50,6 +50,14 @@ MODEL = os.environ.get("SHIM_MODEL", "claude-code")
 CWD = os.environ.get("SHIM_CWD", str(Path.home() / "Documents/Obsidian/Personal"))
 MCP_CONFIG = os.environ.get("SHIM_MCP_CONFIG", str(Path.home() / ".claude/mcp-obsidian-personal.json"))
 TIMEOUT = int(os.environ.get("SHIM_TIMEOUT", "300"))
+# Which model Claude Code itself runs. Distinct from SHIM_MODEL above, which is
+# only the name advertised to OpenAI clients. Empty = the CLI's own default.
+#
+# Worth setting for voice: a warm turn costs ~5.5s even for a trivial reply
+# (measured 2026-08-03), and most spoken requests are retrieval or commands
+# rather than reasoning, so a smaller model shortens the answer itself — unlike
+# an acknowledgement tier, which only shortens the silence before it.
+CLAUDE_MODEL = os.environ.get("SHIM_CLAUDE_MODEL", "").strip()
 
 # Blast radius. Anyone on the Discord allowlist reaches this session, so the
 # tool set is bounded rather than left at "whatever Claude Code can do".
@@ -239,6 +247,26 @@ def strip_panels(text: str) -> str:
 # Identifiers read aloud are pure noise — "bee one eff five zero six bee zero".
 # The directive asks the model not to emit them; this is the backstop, because
 # asking is not the same as guaranteeing.
+# Sentence boundary for streaming text to TTS. Punctuation must be followed by
+# whitespace, so a decimal ("5.5s") or a version ("v1.2.3") never splits.
+_SENTENCE_END = re.compile(r"[.!?…]+[\"')\]]*(?=\s)")
+# Longest run of unpunctuated text to hold before flushing anyway. Without this
+# a list or a long clause would sit in the buffer until the turn ended, which is
+# exactly the dead air streaming is meant to remove.
+SENTENCE_MAX = 200
+# A trailing abbreviation is not a sentence end. Splitting there makes TTS speak
+# "e.g." alone, and CoreAudio clips the first word of every utterance — so the
+# fragment is not merely odd, it is inaudible.
+_ABBREV = {"e.g", "i.e", "etc", "vs", "approx", "no", "fig",
+           "dr", "mr", "mrs", "ms", "prof", "st"}
+
+
+def _ends_with_abbrev(text: str) -> bool:
+    tail = text.rstrip("\"')]").rstrip(".")
+    word = re.split(r"[\s(]", tail)[-1].lower() if tail else ""
+    return word in _ABBREV
+
+
 _HEXISH = re.compile(r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{6,}\b", re.I)
 _UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I)
 _PATHISH = re.compile(r"\S*/\S+\.\w{1,5}\b")
@@ -275,8 +303,15 @@ class ClaudeProcess:
     def __init__(self, key: str, session_id: str, resume: bool, system: str):
         cmd = ["claude", "-p",
                "--input-format", "stream-json", "--output-format", "stream-json",
+               # Without this, only COMPLETE assistant events arrive, so there is
+               # nothing to stream and the whole reply lands at once — measured
+               # first-token == total == 5.5s on a warm process. With it, text
+               # arrives token-by-token and TTS can start on the first sentence.
+               "--include-partial-messages",
                "--verbose", "--permission-mode", "auto",
                "--mcp-config", MCP_CONFIG, "--strict-mcp-config"]
+        if CLAUDE_MODEL:
+            cmd += ["--model", CLAUDE_MODEL]
         if not UNSAFE:
             cmd += ["--allowed-tools", ALLOWED_TOOLS]
         cmd += ["--resume", session_id] if resume else ["--session-id", session_id]
@@ -336,6 +371,43 @@ class ClaudeProcess:
         self.proc.stdin.flush()
 
         seen: list[str] = []
+        pending = ""       # partial text not yet handed to on_text
+        streamed = False   # did any partial reach on_text this turn?
+
+        def emit_sentences(flush: bool = False) -> None:
+            """Hand whole sentences to on_text, never bare tokens.
+
+            TTS synthesises what it is given, so forwarding each delta as it
+            arrives produces one clipped utterance per token. Sentence
+            boundaries are the natural unit; SENTENCE_MAX bounds the wait for
+            text that never punctuates (a long list, a code-ish line).
+            """
+            nonlocal pending, streamed
+            if not on_text:
+                pending = "" if flush else pending
+                return
+            search_from = 0
+            while True:
+                m = _SENTENCE_END.search(pending, search_from)
+                if m and _ends_with_abbrev(pending[:m.end()]):
+                    search_from = m.end()   # "e.g." — keep looking
+                    continue
+                if m:
+                    cut = m.end()
+                elif len(pending) >= SENTENCE_MAX:
+                    cut = pending.rfind(" ", 0, SENTENCE_MAX) + 1 or SENTENCE_MAX
+                else:
+                    break
+                part, pending = pending[:cut].strip(), pending[cut:]
+                search_from = 0
+                if part:
+                    on_text(part)
+                    streamed = True
+            if flush and pending.strip():
+                on_text(pending.strip())
+                streamed = True
+                pending = ""
+
         deadline = time.time() + TIMEOUT
         while time.time() < deadline:
             line = self._readline()
@@ -349,17 +421,36 @@ class ClaudeProcess:
                 continue
 
             kind = event.get("type")
-            if kind == "assistant":
+            if kind == "stream_event":
+                # {"type":"stream_event","event":{"type":"content_block_delta",
+                #   "delta":{"type":"text_delta","text":"…"}}}
+                # Only text_delta: input_json_delta is tool arguments and
+                # thinking_delta is private reasoning — neither is speakable.
+                ev = event.get("event", {})
+                if ev.get("type") == "content_block_delta":
+                    d = ev.get("delta", {})
+                    if d.get("type") == "text_delta":
+                        pending += d.get("text", "")
+                        emit_sentences()
+                elif ev.get("type") == "content_block_stop":
+                    emit_sentences(flush=True)
+            elif kind == "assistant":
                 chunk = "".join(
                     c.get("text", "")
                     for c in event.get("message", {}).get("content", [])
                     if c.get("type") == "text"
                 ).strip()
                 if chunk:
+                    # Authoritative text for the RETURN value only. It repeats
+                    # what the deltas already carried, and it arrives BEFORE
+                    # content_block_stop — so emitting here too would speak the
+                    # block once now and again at the flush. Streaming is left
+                    # entirely to the deltas.
                     seen.append(chunk)
-                    if on_text:
-                        on_text(chunk)
             elif kind == "result":
+                # A block that never closed (turn ended early, or the model
+                # stopped without punctuation) would otherwise be swallowed.
+                emit_sentences(flush=True)
                 self.last_used = time.time()
                 final = str(event.get("result") or "").strip()
                 # `result` repeats the last assistant text; return what was
@@ -596,13 +687,53 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, self._completion(""))
 
         low = system.lower()
-        voice = ("spoken conversation" in low or "voice rules" in low
+        # The session key is the reliable signal, not the prompt: text surfaces
+        # always carry a thread:/dm:/channel: prefix (src/llm.js sessionKeyFor)
+        # while voice uses the bare default key.
+        #
+        # The prompt sniff alone silently failed on every real call — s2s picks
+        # its voice system prompt only when wants_audio is set
+        # (base_openai_compatible_language_model.py:284), and with TTS as a
+        # separate stage it never is. So live voice turns arrived carrying the
+        # TEXT prompt, were classified TEXT, and got neither the voice directive
+        # nor live streaming. Kept as a fallback for clients that do send it.
+        voice = (":" not in key
+                 or "spoken conversation" in low or "voice rules" in low
                  or self.headers.get("X-Output-Mode", "").lower() == "voice")
         print(f"-> {'VOICE' if voice else 'TEXT '} [{key}] {prompt[:70]!r}", flush=True)
 
         parts = [p for p in (system, MEMORY_DIRECTIVE,
                              VOICE_DIRECTIVE if voice else TEXT_DIRECTIVE) if p]
         mine = next_seq(key)
+
+        # Live streaming is VOICE ONLY. strip_panels recognises a closer panel in
+        # a complete answer; chunk-by-chunk it cannot, so a text surface would
+        # leak panel lines into the reply. Text has no latency pressure and keeps
+        # the buffer-then-strip path.
+        live = bool(req.get("stream")) and voice
+        writer = _StreamWriter(self) if live else None
+        dead = False
+
+        def on_text(part: str):
+            # Must never raise: speech-to-speech drops the socket on barge-in,
+            # and an exception here would abandon the read loop mid-turn, leaving
+            # the warm process out of sync with its own session.
+            nonlocal dead
+            if dead:
+                return
+            spoken = strip_markdown(part).strip()
+            if not spoken:
+                return
+            try:
+                # Trailing space matters: each sentence is its own SSE delta and
+                # the client concatenates them verbatim, so without it a reply
+                # arrives as "Still here.That question" — which TTS then reads
+                # as one run-on word.
+                writer.chunk(spoken + " ")
+            except (BrokenPipeError, ConnectionResetError):
+                dead = True
+                self.close_connection = True
+
         with _locks[key]:                 # per key, so other keys run concurrently
             # While we waited for the lock a newer turn may have arrived — this
             # one is a partial hypothesis of the same sentence. Drop it silently
@@ -610,9 +741,14 @@ class Handler(BaseHTTPRequestHandler):
             if superseded(key, mine):
                 print(f"-> STALE [{key}] superseded, dropping: {prompt[:40]!r}", flush=True)
                 return self._stream("") if req.get("stream") else self._json(200, self._completion(""))
-            answer = ask_claude(key, "\n\n".join(parts), prompt)
-        answer = strip_markdown(answer) if voice else strip_panels(answer)
+            answer = ask_claude(key, "\n\n".join(parts), prompt,
+                                on_text=on_text if live else None)
 
+        if live:
+            writer.finish()
+            return
+
+        answer = strip_markdown(answer) if voice else strip_panels(answer)
         if req.get("stream"):
             self._stream(answer)
         else:
@@ -630,8 +766,11 @@ class Handler(BaseHTTPRequestHandler):
         }
 
     def _stream(self, text: str):
-        """Claude Code gives no partial output here, so emit sentence-sized
-        chunks — enough for speech-to-speech to start synthesizing early."""
+        """Send an ALREADY-COMPLETE answer as sentence-sized chunks.
+
+        The non-live path: text surfaces, and voice turns that produced nothing
+        (filler, superseded). Live voice streaming goes through _StreamWriter in
+        do_POST instead, driven by on_text as Claude produces the text."""
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
