@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.0
 
 - Record arrivals and departures in the transcript, from a `voiceStateUpdate`
   handler that did not exist before. Speech alone cannot tell a reader who was
