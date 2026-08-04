@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Write messages posted in a voice channel's own text chat into that channel's
+  transcript, alongside the speech. Previously only the bot's spoken replies were
+  written as text, so a link pasted during a call was invisible to the session
+  and "have a look at what I just posted" had nothing to look at. A voice channel
+  and its integrated chat share an id, which is what links the two. Everyone is
+  captured, matching the audio side: the allowlist governs who may DRIVE the bot,
+  the transcript governs who gets WRITTEN DOWN. Verified live — typed "abc" and a
+  spoken line landed interleaved in one record, ten seconds apart.
+
+  Note that a server may have a text channel and a voice channel with the SAME
+  NAME and different ids; only the voice channel's own chat is captured
+
 ## v0.0.3
 
 - Cap how many sentences are spoken, rather than asking for it. The voice

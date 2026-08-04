@@ -68,9 +68,12 @@ function up(buf) {
 
 /** One live voice session: Discord audio <-> speech-to-speech. */
 class Session {
-  constructor(connection, guildId, guildName, channelName) {
+  constructor(connection, guildId, guildName, channelName, channelId) {
     this.conn = connection;
     this.guildId = guildId;
+    // A Discord voice channel has an integrated text chat sharing its id, so
+    // this is what links a posted message to the running transcript.
+    this.channelId = channelId;
     // Per-speaker buffers. Discord gives a separate stream per user (per SSRC),
     // which is the expensive half of any diarization pipeline — appending them
     // all to one buffer would throw that away AND garble the audio, since the
@@ -441,7 +444,7 @@ async function join(channel) {
   });
   conn.on('stateChange', (o, n) => log.info(`  voice: ${o.status} -> ${n.status}`));
   await entersState(conn, VoiceConnectionStatus.Ready, 30000);
-  const session = new Session(conn, channel.guild.id, channel.guild.name, channel.name);
+  const session = new Session(conn, channel.guild.id, channel.guild.name, channel.name, channel.id);
   // Resolve display names once so the transcript reads with names, not ids.
   for (const [id, member] of channel.members) {
     session.names.set(id, member.displayName ?? member.user.username);
@@ -492,4 +495,16 @@ async function evictGhost(guild) {
   return name;
 }
 
-module.exports = { join, leave, evictGhost, sessions };
+/**
+ * The live transcript for a channel, if that channel's voice session is running.
+ *
+ * A voice channel's text chat shares the voice channel's id, so a message posted
+ * there belongs in the same record as the speech — that is what lets someone
+ * paste a link and then ask about it out loud.
+ */
+function transcriptFor(guildId, channelId) {
+  const s = guildId ? sessions.get(guildId) : null;
+  return s && s.channelId === channelId ? s.transcript : null;
+}
+
+module.exports = { join, leave, evictGhost, sessions, transcriptFor };

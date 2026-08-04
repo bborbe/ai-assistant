@@ -3,6 +3,7 @@
 const config = require('./config');
 const log = require('./log');
 const { chat, sessionKeyFor } = require('./llm');
+const voice = require('./voice');
 
 const DISCORD_LIMIT = 2000;
 
@@ -121,6 +122,23 @@ function register(client) {
       author: msg.author?.tag ?? null,
       bot: Boolean(msg.author?.bot),
     });
+
+    // Anything written in a voice channel's own text chat goes into that
+    // channel's transcript, alongside what was said aloud. One record for the
+    // conversation rather than two half-records — which is what makes "have a
+    // look at the link I just posted" answerable: the link is in the file the
+    // session already reads, in chronological place among the speech.
+    //
+    // Everyone is captured, matching the audio side: who may DRIVE the bot is
+    // the allowlist's business, who gets WRITTEN DOWN is the transcript's.
+    if (!msg.author.bot && msg.content) {
+      const transcript = voice.transcriptFor(msg.guild?.id, msg.channel?.id);
+      if (transcript) {
+        transcript.writeText(msg.member?.displayName ?? msg.author.username, msg.content);
+        log.debug('transcript: text captured', { author: msg.author.tag });
+      }
+    }
+
     if (msg.author.bot) return;
 
     // Answer DMs, mentions in a guild, and anything inside a thread we opened.
