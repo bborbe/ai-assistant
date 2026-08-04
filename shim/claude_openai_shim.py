@@ -117,9 +117,10 @@ ASK_CLAUDE_TOOL = {
     "function": {
         "name": "ask_claude",
         "description": (
-            "Hand the question to the full assistant, which has the user's notes, "
-            "tasks, files, repositories and systems. Use this for ANYTHING factual "
-            "or specific to the user's world — you cannot see any of it."),
+            "Look something up. Reaches the user's notes, tasks, files, "
+            "repositories and systems, none of which you can see. Use it for "
+            "ANYTHING factual or specific to the user's world. It is the normal "
+            "way to answer, not an escalation: call it freely and without asking."),
         "parameters": {
             "type": "object",
             "properties": {
@@ -168,9 +169,18 @@ FRONT_SYSTEM = (
     "For anything else, call ask_claude. You cannot see the user's notes, tasks, "
     "files, code or systems, and you have no memory of their work, so answering "
     "from your own knowledge would be inventing it. This includes questions that "
-    "feel easy. When you call ask_claude, also say one short neutral sentence to "
-    "fill the pause — 'one moment', 'let me check that' — and never state or "
-    "guess the answer in it."
+    "feel easy.\n"
+    "CALL THE TOOL, DO NOT TALK ABOUT CALLING IT. Calling ask_claude is instant "
+    "and costs the user nothing; it needs no permission and no announcement. "
+    "NEVER say 'I'd have to ask', 'shall I check', 'want me to?', 'I don't have "
+    "access to that' or anything else that describes looking something up "
+    "instead of doing it — that ends the turn with the user no closer to an "
+    "answer, and they then have to ask twice. If you find yourself about to "
+    "explain that you would need to check, call ask_claude instead.\n"
+    "When you call it, add one short neutral sentence for the pause — 'one "
+    "moment', 'let me check that' — and never state or guess the answer in it.\n"
+    "You are ONE assistant throughout. Never name or speculate about which model "
+    "or system is answering, and never describe the parts you are made of."
 )
 
 # Full-match, not substring: "hello" is small talk, "hello, what is my most
@@ -196,6 +206,30 @@ _CHITCHAT = re.compile(r"""^(
 # Matches both the well-formed block and the unclosed "<think …" MiniMax
 # actually emitted, which a tag-shaped regex alone would miss.
 _THINK = re.compile(r"<think\b.*?(?:</think>?|$)", re.S | re.I)
+
+# Spoken text that asks permission or describes looking something up instead of
+# having done it. The prompt forbids these and the model produces them anyway —
+# observed "You want me to list the tools?" alongside a correct tool call. Said
+# aloud it invites an answer, so the user replies "yes" into a turn that is
+# already running. Discarded in favour of a neutral filler.
+# The assistant is one thing to the user. Anything naming the machinery breaks
+# that and is usually wrong as well — observed "I have one tool available called
+# ask_claude", and elsewhere it introduced itself as Claude while running on
+# MiniMax. Prompting against this failed three times; the reply is filtered
+# instead, and a filtered reply becomes a consult.
+_LEAK = re.compile(r"""(
+      \bask_claude\b | \bminimax\b | \bclaude\b | \banthropic\b
+    | \bsystem\s+prompt\b | \blanguage\s+model\b | \bmy\s+tools?\b
+    | \btools?\s+available\b | \bi\s+am\s+an?\s+(ai|assistant|model)\b
+)""", re.I | re.X)
+
+_HEDGE = re.compile(r"""(
+      \b(i'?d|i\s+would|i'?ll)\s+(have\s+to|need\s+to)\b
+    | \bwant\s+me\s+to\b | \bshall\s+i\b | \bshould\s+i\b
+    | \bdo\s+you\s+want\s+me\b | \byou\s+want\s+me\s+to\b
+    | \bdon'?t\s+have\s+access\b | \bi\s+can'?t\s+see\b
+    | \blet\s+me\s+know\s+if\s+you\b
+)""", re.I | re.X)
 
 _front_history: dict[str, deque] = defaultdict(lambda: deque(maxlen=FRONT_HISTORY))
 _front_lock = Lock()
@@ -258,7 +292,21 @@ def front_route(key: str, prompt: str) -> tuple[str, bool]:
     text = _THINK.sub("", text).strip()
 
     if called:
+        # The tool call is right; the words alongside it may still ask permission
+        # for work already under way. Drop those and let the caller supply a
+        # neutral filler.
+        if _LEAK.search(text) or _HEDGE.search(text):
+            print(f"  [{key}] discarding hedged filler: {text[:50]!r}", flush=True)
+            text = ""
         return text, True
+
+    # No tool call. A hedge here is worse: it ends the turn having neither
+    # answered nor looked anything up, so the user must ask twice. A leak is
+    # worse still — it is answering a question about the user's setup from
+    # nothing. Both become consults.
+    if _HEDGE.search(text) or _LEAK.search(text):
+        print(f"  [{key}] front hedged or leaked — consulting: {text[:44]!r}", flush=True)
+        return "", True
     if looks_factual(prompt):
         # It chose to answer something it cannot know. Keep the pause-filler if
         # it produced one, discard any claim, and consult anyway.

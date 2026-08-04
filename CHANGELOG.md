@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Filter the front model's words rather than trusting the prompt to govern them.
+  Three rounds of prompt-tightening each surfaced a new phrasing: told to call
+  `ask_claude` it said "want me to?" instead; told never to ask permission it
+  complied on the call and asked permission in the filler; told never to describe
+  its own machinery it announced "I have one tool available called ask_claude".
+  A reply that hedges or names the machinery is now discarded, and a discarded
+  reply becomes a consult — so the bad case costs a lookup rather than reaching
+  the user. Verified with the heuristics switched OFF, the hardest configuration:
+  7/7 routed correctly with nothing leaked
+
+- Tell the front model that consulting is the normal path, not an escalation.
+  The tool description read like a consequential action ("hand the question to
+  the full assistant"), which is most of why it asked permission to use it
+
 - Inject an `ask_claude` tool into the front model's request and run the tool in
   the proxy. The proxy owns the loop, so Claude's answer is returned verbatim
   rather than handed back to the front model to reword — an ordinary agent loop
@@ -18,7 +32,7 @@
 
 - Add `SHIM_FRONT_HEURISTICS=0` to take the whitelist and factual backstop out of
   the path, leaving routing entirely to the front model. Measured on voice, that
-  model defers *verbally* ("to get the list I'd have to ask the full assistant —
+  model defers _verbally_ ("to get the list I'd have to ask the full assistant —
   want me to?") instead of calling the tool, answers about the user's world from
   its own knowledge, and introduces itself as Claude. It fails toward talking
   rather than checking, which is the expensive direction — so the heuristics stay
