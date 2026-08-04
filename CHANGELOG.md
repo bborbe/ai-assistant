@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.3.0
 
 - Make a voice channel ONE conversation: messages typed in its integrated text
   chat now use the same session as what is spoken there. Discord treats that
