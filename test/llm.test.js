@@ -25,6 +25,15 @@ test('threads, channels and DMs each get their own conversation', () => {
   assert.equal(sessionKeyFor(channel({ id: 'D1' }), 'U9'), 'dm:U9');
 });
 
+test('switch rejects free text without calling the endpoint', async () => {
+  // A slash-command option accepts anything, so `/switch speech to speech`
+  // reached the shim and came back as a filesystem path. The shape check has to
+  // sit in front, and must not need a reachable endpoint to say so.
+  const { switchSession } = require('../src/commands');
+  const reply = await switchSession('k', 'speech to speech');
+  assert.match(reply, /not a session id/);
+});
+
 test('a channel object missing the type helpers still yields a key', () => {
   // Partial channels are real: a DM arrives uncached, and an older discord.js
   // object may lack isVoiceBased. Optional calls must not throw.

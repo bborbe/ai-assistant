@@ -76,18 +76,56 @@ async function sessionsList(hereKey) {
   return clip(out.join('\n'));
 }
 
-/** Point this conversation at an existing session. */
+const ID_SHAPE = /^[0-9a-f]{4,8}(-[0-9a-f-]*)?$/i;
+
+/**
+ * Point this conversation at an existing session.
+ *
+ * Accepts a prefix as well as a full id. A uuid is 36 characters and this is a
+ * phone-first surface — retyping one by hand is the kind of friction that stops
+ * a feature being used at all. The prefix must be unambiguous; two matches ask
+ * rather than guess, because guessing here silently continues the wrong
+ * conversation.
+ */
 async function switchSession(key, id) {
   const clean = (id ?? '').trim().replace(/^`|`$/g, '');
   if (!clean) return 'Give me a session id — `sessions` lists them.';
+  // Shape-checked here so free text (a slash-command option takes anything)
+  // fails with something a human can act on, rather than being handed to the
+  // endpoint and coming back as a filesystem path.
+  if (!ID_SHAPE.test(clean)) {
+    return `\`${clean}\` is not a session id. Run \`sessions\` for the list — ids look like \`b1f506b0\`.`;
+  }
+
+  let target = clean;
+  if (clean.length < 36) {
+    try {
+      const { available = [] } = await availableSessions();
+      const hits = available.filter((a) => a.id.startsWith(clean.toLowerCase()));
+      if (hits.length === 0)
+        return `Nothing starts with \`${clean}\`. Run \`sessions\` for the list.`;
+      if (hits.length > 1) {
+        return `\`${clean}\` matches ${hits.length} sessions — give me more of it:\n${hits
+          .map((h) => `• \`${h.id}\`${h.label ? ` — "${h.label}"` : ''}`)
+          .join('\n')}`;
+      }
+      target = hits[0].id;
+    } catch {
+      // No /sessions/available on this endpoint: fall through with what was
+      // typed and let the bind itself decide.
+    }
+  }
+
   try {
-    const r = await bindSession(key, clean);
-    log.info('session switched', { key, id: clean, previous: r.previous || null });
-    return `This conversation now continues \`${clean}\`. Its history is already there — say something to pick it up.`;
+    const r = await bindSession(key, target);
+    log.info('session switched', { key, id: target, previous: r.previous || null });
+    return `This conversation now continues \`${target}\`. Its history is already there — say something to pick it up.`;
   } catch (e) {
-    // The shim refuses an id with no transcript, and one already bound
-    // elsewhere. Both messages name the reason, so pass them through.
-    return `Could not switch: ${e.message}`;
+    // The shim's refusals name their reason, which is what a reader needs — but
+    // the "no transcript" one carries an absolute path that means nothing in a
+    // chat window and reveals more of the host than a Discord reply should.
+    const why = e.message.replace(/ in \/\S+/, '');
+    return `Could not switch: ${why}`;
   }
 }
 

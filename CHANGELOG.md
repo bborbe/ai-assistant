@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Accept a session-id **prefix** in `switch`, check the shape first, and stop
+  answering with a filesystem path. A slash-command option takes any text, so
+  `/switch speech to speech` was handed straight to the endpoint and came back
+  as "no transcript for speech to speech in /Users/…" — an absolute host path in
+  a chat window, in answer to what was plainly a typo. Free text is now refused
+  in front of the endpoint with the shape it wanted, an unknown prefix says so,
+  an ambiguous one lists the candidates rather than guessing, and the remaining
+  refusals have the path stripped.
+
+  The prefix matters more than it looks: a uuid is 36 characters and this is a
+  phone-first surface. `switch b1f506b0` is a thing you will actually do.
+
 ## v0.3.1
 
 - Decide spoken-vs-written output from the **transport**, not the session key.
