@@ -22,6 +22,10 @@ async function chat(messages, { sessionKey, signal } = {}) {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${config.apiKey}`,
       ...(sessionKey ? { 'X-Session-Key': sessionKey } : {}),
+      // Stated rather than inferred. A voice channel's text chat shares the
+      // SPOKEN session, so the key can no longer tell the shim which kind of
+      // output this turn wants — only the transport knows, and this is it.
+      'X-Output-Mode': 'text',
     },
     body: JSON.stringify({ model: config.model, messages, stream: false }),
     signal,

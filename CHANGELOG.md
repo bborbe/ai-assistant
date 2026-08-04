@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- Decide spoken-vs-written output from the **transport**, not the session key.
+  The shim treated a keyless session as voice, which was sound while only
+  speech-to-speech omitted the key — and wrong the moment a voice channel's text
+  chat began sharing the spoken session. A typed `date` came back "It's the fifth
+  of August, twenty twenty-six": numbers spelled out, capped at two sentences,
+  because the session was a voice one. The bot now states `X-Output-Mode: text`
+  on every HTTP turn it makes, and the header wins in both directions; the
+  keyless default survives only as the speech-to-speech case, which owns its own
+  request and can set no headers. Verified on one session: typed gives
+  "2026-08-05 (Wednesday)", spoken gives "the fifth of August, twenty
+  twenty-six".
+
+  Unifying a conversation quietly unified its output style too — the second
+  property was riding on the first without anything naming the dependency.
+
 ## v0.3.0
 
 - Make a voice channel ONE conversation: messages typed in its integrated text

@@ -1419,9 +1419,19 @@ class Handler(BaseHTTPRequestHandler):
         # separate stage it never is. So live voice turns arrived carrying the
         # TEXT prompt, were classified TEXT, and got neither the voice directive
         # nor live streaming. Kept as a fallback for clients that do send it.
-        voice = (":" not in key
-                 or "spoken conversation" in low or "voice rules" in low
-                 or self.headers.get("X-Output-Mode", "").lower() == "voice")
+        # Mode follows the TRANSPORT, not the key. Once a voice channel's text
+        # chat began sharing the spoken session (both key on `default`), keying
+        # off the session alone made typed messages answer in speech: "It's the
+        # fifth of August, twenty twenty-six" — numbers spelled out, capped at two
+        # sentences — to something typed. An explicit header wins in both
+        # directions; the keyless default only applies when nothing says
+        # otherwise, which is exactly the speech-to-speech case (it owns the HTTP
+        # call and can set no headers).
+        mode = self.headers.get("X-Output-Mode", "").lower()
+        voice = (mode == "voice" or
+                 (mode != "text" and (":" not in key
+                                      or "spoken conversation" in low
+                                      or "voice rules" in low)))
         print(f"-> {'VOICE' if voice else 'TEXT '} [{key}] {prompt[:70]!r}", flush=True)
 
         # The transcript directive is voice-only: it is the record of a call,
