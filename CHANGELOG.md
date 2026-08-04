@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.0.4
 
 - Tell the assistant that the transcript exists, and where. Capturing typed
   messages to disk achieved nothing on its own: a path pasted mid-call was
