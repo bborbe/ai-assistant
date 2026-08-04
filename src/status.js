@@ -84,7 +84,7 @@ function humanAge(minutes) {
  * the contract-agnostic rule showing up in the diagnostics: the bot may not
  * assume the endpoint is the shim.
  */
-async function sessionLines(hereKey, inVoice) {
+async function sessionLines(hereKey) {
   let sessions;
   try {
     ({ sessions = [] } = await listSessions());
@@ -104,11 +104,15 @@ async function sessionLines(hereKey, inVoice) {
   // it only means this channel has not had a turn yet.
   else if (hereKey) lines.push(`   • here \`${hereKey}\` — none yet, the next turn opens one`);
 
-  // The voice conversation is worth naming even when you are asking by text:
-  // "which session did I just talk to?" is exactly the question, and voice
-  // cannot ask it of itself while a reply is being spoken.
+  // The voice conversation is shown ALWAYS, not only while the bot is sitting in
+  // a channel. It is the session most worth resuming — every spoken turn from
+  // every channel lands in it, so it is the long one — and it outlives the visit
+  // that created it. Gating it on being in voice pointed the reader at whatever
+  // thin text session they happened to type from: on 2026-08-04 `status` in a
+  // guild channel returned a 1-turn id, which was then resumed and found empty,
+  // while the real 93-turn conversation went unmentioned.
   const spoken = sessions.find((s) => s.key === DEFAULT_SESSION_KEY);
-  if (inVoice && spoken && spoken.key !== hereKey) lines.push(show('voice', spoken));
+  if (spoken && spoken.key !== hereKey) lines.push(show('voice', spoken));
 
   return lines;
 }
@@ -137,7 +141,7 @@ async function report(client, hereKey) {
   }
 
   const ping = Math.round(client.ws.ping);
-  const claude = shimUp ? await sessionLines(hereKey, sessions.length > 0) : [];
+  const claude = shimUp ? await sessionLines(hereKey) : [];
   return [
     `**${client.user.tag}** — up ${humanUptime(process.uptime())}, build \`${config.build.version}\``,
     `${tick(ping >= 0)} gateway — ${ping} ms, ${client.guilds.cache.size} guild(s)`,

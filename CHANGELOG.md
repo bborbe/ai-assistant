@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Always name the voice session in `status`, not only while the bot is sitting
+  in a voice channel. It is the session most worth resuming — every spoken turn
+  from every channel lands on `default`, so it is the long one — and it outlives
+  the visit that created it. Found the same hour the feature shipped: `status`
+  typed in a guild channel offered a 1-turn `channel:` id, which was resumed at
+  the desk and found empty, while the real 93-turn conversation was never
+  mentioned. A diagnostic that names only the conversation you are standing in
+  is most misleading exactly when you are standing in the wrong one
+
 ## v0.1.1
 
 - Name the Claude Code session in `status`: the key answering this channel, its
