@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.2.0
 
 - Add `new`, `sessions` and `switch <id>` — over both transports, as usual.
 
