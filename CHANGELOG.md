@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Pace playback and fill the gaps with silence. Writing audio into the stream as
+  it arrived underran: a turn speaks a one-second filler, then synthesises
+  nothing for several seconds while tools run, so the player drained the stream,
+  found it empty, treated that as the end of the resource and went idle — after
+  which every later write landed in a stream nobody was reading. The filler was
+  heard and the answer never was, although the log showed both synthesised, and
+  Claude itself remarked "short version, since I keep getting cut off".
+
+  The input side of the same file already solved the mirror image of this: a
+  fixed-rate pump that emits silence because speech-to-speech closes a turn on
+  silence. Output needed the same pump for the opposite reason — silence keeps
+  the resource alive. Verified on a live call: one continuous playback session
+  across a 33s turn, filler and answer both audible
+
 - Add a health check reachable as `/status` AND as a typed `status`. Each leg is
   probed live — the endpoint answers, speech-to-speech accepts a connection, the
   transcript directory is writable, which voice channels are held, gateway ping —

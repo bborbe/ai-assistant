@@ -27,6 +27,9 @@ const TICK_MS = 20;
 const UTTERANCE_GAP_MS = parseInt(process.env.UTTERANCE_GAP_MS || '1500', 10);
 const IN_BYTES = (DISCORD_RATE * DISCORD_CH * 2 * TICK_MS) / 1000; // 20ms @48k stereo
 const OUT_SAMPLES = (S2S_RATE * TICK_MS) / 1000; // 20ms @16k mono
+// One 20ms frame of what Discord plays back: 48k, stereo, 16-bit.
+const OUT_FRAME = (DISCORD_RATE * DISCORD_CH * 2 * TICK_MS) / 1000;
+const SILENCE = Buffer.alloc(OUT_FRAME);
 
 // 48k stereo -> 16k mono. Mix channels first, then average groups of 3 (box
 // low-pass). NOT naive striding, which walks alternating channels on an
@@ -74,6 +77,9 @@ class Session {
     // chunks interleave rather than align in time.
     this.inbox = new Map(); // userId -> Buffer
     this.audio = null; // open PassThrough while a reply is playing
+    this.outQueue = Buffer.alloc(0); // 48k stereo PCM waiting to be paced out
+    this.outTick = null;
+    this.ending = false;
     this.speaking = false;
     this.subscribed = new Set();
     this.closed = false;
@@ -321,28 +327,72 @@ class Session {
    * synthesis pauses playback instead of finishing it.
    */
   pushAudio(chunk) {
-    if (!this.audio) {
-      this.audio = new PassThrough();
-      this.speaking = true;
-      log.debug('  voice: playback started');
-      this.player.play(createAudioResource(this.audio, { inputType: StreamType.Raw }));
-    }
-    this.audio.write(up(chunk));
+    this.outQueue = Buffer.concat([this.outQueue, up(chunk)]);
+    if (this.audio) return;
+
+    this.audio = new PassThrough();
+    this.ending = false;
+    this.speaking = true;
+    log.debug('  voice: playback started');
+    this.player.play(createAudioResource(this.audio, { inputType: StreamType.Raw }));
+    // Paced writer, mirroring the input pump above. Writing chunks straight
+    // through as they arrive underruns: a turn speaks a one-second filler, then
+    // synthesises nothing for four seconds while tools run. The player drains
+    // the stream, finds it empty, treats that as the end of the resource and
+    // goes idle — after which every later write lands in a stream nobody reads.
+    // Measured: the filler was heard, the answer never was, though both were
+    // synthesised. Silence between utterances keeps the resource alive.
+    this.outTick = setInterval(() => this.pumpOut(), TICK_MS);
   }
 
-  /** End of response: close the stream so the player can go idle. */
+  /** One 20ms frame out: real audio if we have it, silence if we do not. */
+  pumpOut() {
+    if (!this.audio) return;
+    if (this.outQueue.length >= OUT_FRAME) {
+      this.audio.write(this.outQueue.subarray(0, OUT_FRAME));
+      this.outQueue = this.outQueue.subarray(OUT_FRAME);
+      return;
+    }
+    // Nothing queued. Once the turn has ended, drain the tail and close;
+    // otherwise hold the resource open with silence.
+    if (this.ending) {
+      if (this.outQueue.length) {
+        this.audio.write(this.outQueue);
+        this.outQueue = Buffer.alloc(0);
+        return;
+      }
+      return this.finishAudio();
+    }
+    this.audio.write(SILENCE);
+  }
+
+  /** Turn is over: drain whatever is queued, then let the player go idle. */
   endAudio() {
     if (!this.audio) return;
-    this.audio.end();
+    this.ending = true;
+  }
+
+  finishAudio() {
+    clearInterval(this.outTick);
+    this.outTick = null;
+    try {
+      this.audio?.end();
+    } catch {}
     this.audio = null;
+    this.ending = false;
+    log.debug('  voice: playback finished');
   }
 
   /** Abandon playback mid-stream — barge-in, or teardown. */
   stopAudio() {
+    clearInterval(this.outTick);
+    this.outTick = null;
+    this.outQueue = Buffer.alloc(0);
     if (this.audio) {
       this.audio.destroy();
       this.audio = null;
     }
+    this.ending = false;
     try {
       this.player.stop(true);
     } catch {}
