@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.3.2
 
 - Accept a session-id **prefix** in `switch`, check the shape first, and stop
   answering with a filesystem path. A slash-command option takes any text, so
