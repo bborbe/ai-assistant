@@ -171,25 +171,31 @@ def looks_factual(text: str) -> bool:
     return bool(_FACTUAL.search(text))
 
 
+# A refusal CONTRACT, not a tool. Measured 2026-08-04 across 20 factual trials
+# including deliberately subtle phrasings ("so what's left for today", "did that
+# finish", "anything I should know about"): zero fabrications. The same model
+# given an ask_claude TOOL instead answered "can you list all active tasks?" with
+# an invented task, count and due date — it treats a tool as an action needing
+# permission, but a refusal token as simply the honest reply. Same model, same
+# questions; the channel is what changed.
+FRONT_REFUSAL = '{"cannot_answer": true}'
+
 FRONT_SYSTEM = (
     "You are the voice of an assistant in a spoken conversation. Everything you "
     "say is read aloud: ONE short spoken sentence, no markdown, no lists, no "
     "emoji.\n"
-    "Answer directly ONLY when the reply needs nothing but the conversation "
-    "itself — greetings, thanks, 'can you hear me', 'say that again'.\n"
-    "For anything else, call ask_claude. You cannot see the user's notes, tasks, "
-    "files, code or systems, and you have no memory of their work, so answering "
-    "from your own knowledge would be inventing it. This includes questions that "
-    "feel easy.\n"
-    "CALL THE TOOL, DO NOT TALK ABOUT CALLING IT. Calling ask_claude is instant "
-    "and costs the user nothing; it needs no permission and no announcement. "
-    "NEVER say 'I'd have to ask', 'shall I check', 'want me to?', 'I don't have "
-    "access to that' or anything else that describes looking something up "
-    "instead of doing it — that ends the turn with the user no closer to an "
-    "answer, and they then have to ask twice. If you find yourself about to "
-    "explain that you would need to check, call ask_claude instead.\n"
-    "When you call it, add one short neutral sentence for the pause — 'one "
-    "moment', 'let me check that' — and never state or guess the answer in it.\n"
+    "Answer ONLY from the conversation itself. You have NO access to the user's "
+    "notes, tasks, files, code, systems, calendar or history, and no memory of "
+    "their work.\n"
+    f"If answering would need any of that, reply with EXACTLY this and nothing "
+    f"else:\n{FRONT_REFUSAL}\n"
+    "This is not a failure and needs no apology or explanation — something else "
+    "answers those, instantly, and the user never sees this exchange. Refusing "
+    "costs a second; guessing puts an invented fact in the assistant's mouth. "
+    "When unsure, refuse.\n"
+    "Never say 'I'd have to ask', 'shall I check' or 'I don't have access' — "
+    "return the refusal instead.\n"
+    "Greetings, thanks, 'can you hear me' and small talk you CAN answer.\n"
     "You are ONE assistant throughout. Never name or speculate about which model "
     "or system is answering, and never describe the parts you are made of."
 )
@@ -238,8 +244,17 @@ _HEDGE = re.compile(r"""(
       \b(i'?d|i\s+would|i'?ll)\s+(have\s+to|need\s+to)\b
     | \bwant\s+me\s+to\b | \bshall\s+i\b | \bshould\s+i\b
     | \bdo\s+you\s+want\s+me\b | \byou\s+want\s+me\s+to\b
-    | \bdon'?t\s+have\s+access\b | \bi\s+can'?t\s+see\b
     | \blet\s+me\s+know\s+if\s+you\b
+    # Refusal in prose rather than the contracted JSON. The model gets the
+    # judgement right and the format wrong — observed "I do not have any context
+    # about what finished", which an access-only pattern missed and the shim
+    # then spoke, leaving the user with an apology instead of an answer. Any
+    # admission of missing information means the same thing: send it to Claude.
+    | \b(do\s+not|don'?t)\s+have\s+(any\s+)?(access|context|information|visibility|details|record)
+    | \bno\s+(access|context|information|visibility|record)\s+(to|of|about)\b
+    | \bi\s+(do\s+not|don'?t)\s+know\s+(what|which|when|where|who|about)\b
+    | \bi\s+can'?t\s+(see|tell|access|find|check|look)\b
+    | \b(not|isn'?t)\s+(sure|clear)\s+what\s+you'?re?\s+(referring|talking)\b
 )""", re.I | re.X)
 
 _front_history: dict[str, deque] = defaultdict(lambda: deque(maxlen=FRONT_HISTORY))
@@ -275,8 +290,9 @@ def front_route(key: str, prompt: str) -> tuple[str, bool]:
         "model": FRONT_MODEL,
         "messages": [{"role": "system", "content": FRONT_SYSTEM}] + history +
                     [{"role": "user", "content": prompt}],
-        "tools": [ASK_CLAUDE_TOOL],
-        "tool_choice": "auto",
+        # No tools deliberately — see FRONT_REFUSAL. The tool form was measured
+        # worse at the one job that matters, and two refusal mechanisms would be
+        # two things to reason about when one of them misbehaves.
         "max_tokens": 120,
         "temperature": 0.7,
         # MiniMax emits reasoning inside `content`, not `reasoning_content`, so
@@ -294,6 +310,8 @@ def front_route(key: str, prompt: str) -> tuple[str, bool]:
             data = json.loads(resp.read())
         msg = data["choices"][0]["message"]
         text = (msg.get("content") or "").strip()
+        # Tool calls are no longer requested, but a model may still emit one;
+        # treat it as the deferral it is rather than dropping the turn.
         called = bool(msg.get("tool_calls"))
     except Exception as e:
         print(f"  [{key}] front tier unavailable ({e}) — deferring to Claude", flush=True)
@@ -301,6 +319,12 @@ def front_route(key: str, prompt: str) -> tuple[str, bool]:
     # Belt and braces: the disable flag is honoured only by some models, and a
     # leaked think-block is not cosmetic — it gets read aloud.
     text = _THINK.sub("", text).strip()
+
+    # The contracted refusal. Matched loosely — the model sometimes wraps it in
+    # a code fence or adds a trailing word, and any of those still mean "I
+    # cannot answer this".
+    if "cannot_answer" in text:
+        return "", True
 
     if called:
         # The tool call is right; the words alongside it may still ask permission
@@ -1216,24 +1240,30 @@ class Handler(BaseHTTPRequestHandler):
         # text surface has no latency problem worth a second model.
         pre_spoken = False
         if voice and FRONT_API_KEY:
-            # ALLOWLIST, not blocklist. The front tier is consulted only for
-            # utterances positively recognised as conversation; everything else
-            # goes to Claude without asking it.
+            # Three ways, cheapest first.
             #
-            # It was the other way round — anything not matching a list of
-            # factual-looking patterns was offered to the front model — and that
-            # list had a typo: `\btask\b` does not match "tasks". "Can you list
-            # all active tasks?" reached the front tier, which answered with an
-            # invented task, an invented count and an invented due date, spoken
-            # as fact (2026-08-04 17:24). Every other layer failed too: the model
-            # did not call the tool, and a confident invention trips neither the
-            # hedge nor the leak filter.
+            #   recognised chat  -> front answers                       ~1.0s
+            #   plainly factual  -> Claude, filler decided locally      0.14s
+            #   anything else    -> front under the refusal contract
             #
-            # A blocklist has to enumerate every way of asking about the user's
-            # world and is wrong the moment it misses one. An allowlist is wrong
-            # only by being slow: an unrecognised greeting wakes Claude and costs
-            # a couple of seconds. That is the direction to fail in.
-            if FRONT_HEURISTICS and not is_chitchat(prompt):
+            # The middle case skips the round trip because the wording already
+            # settles it: asking the model costs ~3s of silence to be told what
+            # a regex knew for free.
+            #
+            # The third case is why this is not just an allowlist. A whitelist
+            # cannot enumerate every way of being conversational — "yo what's
+            # up" is chat, "did that finish" is not, and neither matches a
+            # pattern worth writing. The refusal contract handles that band, and
+            # handles it safely: 20 factual trials including subtle phrasings,
+            # zero fabrications.
+            #
+            # The factual patterns stay as defence in depth rather than as the
+            # gate. They were the gate once, and a single missing "s" —
+            # \btask\b cannot match "tasks" — let an invented task, count and
+            # due date be spoken as fact (2026-08-04 17:24).
+            if FRONT_HEURISTICS and is_chitchat(prompt):
+                said, want_claude = front_route(key, prompt)
+            elif FRONT_HEURISTICS and looks_factual(prompt):
                 said, want_claude = random.choice(_CHECK_LINES), True
             else:
                 said, want_claude = front_route(key, prompt)

@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Route by an explicit refusal contract rather than a tool call. The front model
+  is told to reply `{"cannot_answer": true}` when answering would need the user's
+  notes, tasks, files or systems. Measured across 20 factual trials including
+  deliberately subtle phrasings — "so what's left for today", "did that finish",
+  "anything I should know about" — zero fabrications. The same model given an
+  `ask_claude` tool instead invented a task name, count and due date for "can you
+  list all active tasks?": it treats a tool as an action needing permission, but
+  a refusal token as simply the honest reply. Same model, same questions; only
+  the channel changed. Tools are no longer requested
+
+- Route three ways instead of two: recognised chat answers locally (~1s), plainly
+  factual skips the round trip and takes a locally-decided filler (0.14s), and
+  everything else goes to the front model under the refusal contract. The third
+  band is the point — a whitelist cannot enumerate every way of being
+  conversational ("yo what's up" is chat, "did that finish" is not), and that
+  band is exactly where an allowlist was blunt and a blocklist was unsafe
+
+- Recognise a refusal written in prose. The model gets the judgement right and
+  the format wrong often enough to matter: "I do not have any context about what
+  finished" was spoken to the user as if it were an answer, because the filter
+  only matched "don't have access". Any admission of missing information now
+  becomes a consult
+
 - Consult the front tier only for utterances positively recognised as
   conversation; send everything else to Claude without asking. Routing was the
   other way round — anything not matching a list of factual-looking patterns was
