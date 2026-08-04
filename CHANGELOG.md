@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.3.1
 
 - Decide spoken-vs-written output from the **transport**, not the session key.
   The shim treated a keyless session as voice, which was sound while only
