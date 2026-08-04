@@ -48,6 +48,31 @@ async function resetSession(sessionKey) {
   return res.json();
 }
 
+/** Point this conversation at an existing session. The shim validates and may refuse. */
+async function bindSession(sessionKey, id) {
+  const res = await fetch(`${config.baseUrl}/sessions/bind`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Session-Key': sessionKey,
+      Authorization: `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify({ id }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error?.message ?? `endpoint ${res.status}`);
+  return data;
+}
+
+/** Transcripts on disk that a conversation could be switched to. */
+async function availableSessions() {
+  const res = await fetch(`${config.baseUrl}/sessions/available`, {
+    headers: { Authorization: `Bearer ${config.apiKey}` },
+  });
+  if (!res.ok) throw new Error(`endpoint ${res.status} — does it support sessions?`);
+  return res.json();
+}
+
 async function listSessions() {
   const res = await fetch(`${config.baseUrl}/sessions`, {
     headers: { Authorization: `Bearer ${config.apiKey}` },
@@ -77,4 +102,12 @@ function sessionKeyFor(channel, userId) {
   return `channel:${channel.id}`;
 }
 
-module.exports = { chat, resetSession, listSessions, sessionKeyFor, DEFAULT_SESSION_KEY };
+module.exports = {
+  chat,
+  resetSession,
+  listSessions,
+  bindSession,
+  availableSessions,
+  sessionKeyFor,
+  DEFAULT_SESSION_KEY,
+};

@@ -100,6 +100,18 @@ Each thread is likewise its own conversation, not a view onto a shared one. An e
 
 Threading requires **Create Public Threads** and **Send Messages in Threads**. Without them the bot logs a warning and answers in the channel instead of losing the reply.
 
+Three commands manage them, as slash commands or typed words:
+
+| Command       | Effect                                                                            |
+| ------------- | --------------------------------------------------------------------------------- |
+| `new`         | Fresh session here. The old one stays on disk and the reply quotes its id         |
+| `sessions`    | What is bound where, plus transcripts you can switch to, labelled by first prompt |
+| `switch <id>` | Point this conversation at an existing session                                    |
+
+Because voice keys on `default`, `switch` from a voice channel repoints the **spoken** conversation — pick up a session you started at the desk and continue it by talking.
+
+`switch` refuses two things: an id with no transcript (otherwise `--resume` fails on the _next_ turn, far from the cause), and an id already bound to another key (two keys on one session file defeats per-key locking). It cannot see a session open in an interactive `claude` at the desk, since that is not in the shim's mapping — binding to one puts two writers on a single transcript.
+
 Inspect with `status` in Discord, or `curl -s localhost:8080/v1/sessions`. The `id` is an ordinary Claude Code session id: `claude --resume <id>` opens the same conversation at the desk. Resetting is safe only because the session is a cache — the vault is the record.
 
 ## `status` — checking the legs live

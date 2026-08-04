@@ -13,7 +13,7 @@ const {
 const config = require('./config');
 const voice = require('./voice');
 const text = require('./text');
-const { resetSession, listSessions, sessionKeyFor } = require('./llm');
+const { sessionKeyFor } = require('./llm');
 const log = require('./log');
 const { startHealthServer } = require('./health');
 
@@ -45,6 +45,20 @@ const commands = [
   new SlashCommandBuilder()
     .setName('status')
     .setDescription('Health of the bot, endpoint, speech-to-speech and transcripts'),
+  // These two had working handlers below for weeks and were unreachable: a
+  // handler is not a command until it is in this array.
+  new SlashCommandBuilder()
+    .setName('new')
+    .setDescription('Start a fresh Claude Code session for this conversation'),
+  new SlashCommandBuilder()
+    .setName('sessions')
+    .setDescription('List Claude Code sessions, and transcripts you can switch to'),
+  new SlashCommandBuilder()
+    .setName('switch')
+    .setDescription('Point this conversation at an existing Claude Code session')
+    .addStringOption((o) =>
+      o.setName('id').setDescription('Session id from /sessions').setRequired(true),
+    ),
 ].map((c) => c.toJSON());
 
 const client = new Client({
@@ -160,35 +174,15 @@ client.on('interactionCreate', async (i) => {
     }
   }
 
-  if (i.commandName === 'new') {
+  if (i.commandName === 'new' || i.commandName === 'sessions' || i.commandName === 'switch') {
+    // Deferred: each of these calls the endpoint, which can outlast the 3s
+    // interaction deadline precisely when the endpoint is the thing misbehaving.
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
     const key = sessionKeyFor(i.channel, i.user.id);
-    try {
-      const r = await resetSession(key);
-      log.info('session reset', { key, previous: r.previous || null });
-      return i.reply({
-        content: `Fresh start here. Anything that mattered is in the vault.`,
-        flags: MessageFlags.Ephemeral,
-      });
-    } catch (e) {
-      log.error('session reset failed', { key, error: e.message });
-      return i.reply({ content: `Could not reset: ${e.message}`, flags: MessageFlags.Ephemeral });
-    }
-  }
-
-  if (i.commandName === 'sessions') {
-    try {
-      const { sessions = [] } = await listSessions();
-      const here = sessionKeyFor(i.channel, i.user.id);
-      const lines = sessions.length
-        ? sessions.map(
-            (s) =>
-              `${s.key === here ? '**here** ' : ''}\`${s.key}\` — ${s.turns} turns, ${s.age_minutes}m old`,
-          )
-        : ['none yet'];
-      return i.reply({ content: lines.join('\n').slice(0, 1900), flags: MessageFlags.Ephemeral });
-    } catch (e) {
-      return i.reply({ content: `Could not list: ${e.message}`, flags: MessageFlags.Ephemeral });
-    }
+    const { newSession, sessionsList, switchSession } = require('./commands');
+    if (i.commandName === 'new') return i.editReply(await newSession(key));
+    if (i.commandName === 'sessions') return i.editReply(await sessionsList(key));
+    return i.editReply(await switchSession(key, i.options.getString('id')));
   }
 
   if (i.commandName === 'leave') {

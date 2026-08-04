@@ -430,6 +430,76 @@ def mark_started(key: str) -> None:
             _save(data)
 
 
+def transcript_dir() -> Path:
+    """Where Claude Code keeps this working directory's session transcripts.
+
+    The slug is the absolute path with every separator replaced by a dash — the
+    same scheme `claude --resume` uses to find a session, which is why binding to
+    an id from a DIFFERENT cwd would resolve to nothing.
+    """
+    return Path.home() / ".claude/projects" / str(Path(CWD).resolve()).replace("/", "-")
+
+
+def available_sessions(limit: int = 15) -> list[dict]:
+    """Resumable transcripts for this cwd, newest first, labelled by first prompt.
+
+    A bare uuid is unusable as a choice — you cannot tell the 90-turn voice
+    conversation from a one-turn probe. The first user message is the cheapest
+    thing that distinguishes them.
+    """
+    out = []
+    for f in sorted(transcript_dir().glob("*.jsonl"),
+                    key=lambda p: p.stat().st_mtime, reverse=True)[:limit]:
+        label, turns = "", 0
+        try:
+            with f.open() as fh:
+                for line in fh:
+                    try:
+                        d = json.loads(line)
+                    except ValueError:
+                        continue
+                    if d.get("type") != "user":
+                        continue
+                    c = d.get("message", {}).get("content")
+                    if isinstance(c, list):
+                        c = " ".join(x.get("text", "") for x in c if isinstance(x, dict))
+                    if isinstance(c, str) and c.strip():
+                        turns += 1
+                        label = label or " ".join(c.split())[:60]
+        except OSError:
+            continue
+        out.append({"id": f.stem, "label": label, "turns": turns,
+                    "age_minutes": round((time.time() - f.stat().st_mtime) / 60, 1)})
+    return out
+
+
+def bind_session(key: str, sid: str) -> dict:
+    """Point a key at an EXISTING session id. Returns {} on success, else {error}.
+
+    Two refusals, both learned rather than guessed:
+
+    - An id with no transcript makes `claude --resume` fail with "No conversation
+      found" on the NEXT turn, long after the bind looked like it worked. Verified
+      2026-08-04 against a freshly generated uuid.
+    - An id already held by another key would put two keys — each with its own
+      lock — on one session file at once. Per-key locking is exactly what makes
+      concurrent turns safe, and sharing an id defeats it.
+    """
+    if not (transcript_dir() / f"{sid}.jsonl").exists():
+        return {"error": f"no transcript for {sid} in {transcript_dir()}"}
+    with _sessions_lock:
+        data = _load()
+        for k, v in data.items():
+            if k != key and v.get("id") == sid:
+                return {"error": f"{sid} is already bound to {k}"}
+        old = data.get(key, {}).get("id", "")
+        data[key] = {"id": sid, "started": True, "created": time.time(),
+                     "turns": data.get(key, {}).get("turns", 0), "last": time.time()}
+        _save(data)
+    drop_process(key)   # the running process still holds the OLD id
+    return {"bound": key, "id": sid, "previous": old}
+
+
 def reset_session(key: str) -> str:
     """Drop the key's session so the next turn starts a fresh conversation."""
     with _sessions_lock:
@@ -1275,6 +1345,8 @@ class Handler(BaseHTTPRequestHandler):
         if path.endswith("/models"):
             return self._json(200, {"object": "list", "data": [
                 {"id": MODEL, "object": "model", "owned_by": "anthropic"}]})
+        if path.endswith("/sessions/available"):
+            return self._json(200, {"available": available_sessions()})
         if path.endswith("/sessions"):
             now = time.time()
             # `live` is the difference between an id that answers immediately and
@@ -1291,6 +1363,22 @@ class Handler(BaseHTTPRequestHandler):
         self._json(404, {"error": {"message": "not found"}})
 
     def do_POST(self):
+        if self.path.rstrip("/").endswith("/sessions/bind"):
+            key = self._key()
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                sid = (json.loads(self.rfile.read(n) or b"{}").get("id") or "").strip()
+            except ValueError:
+                return self._json(400, {"error": {"message": "bad json"}})
+            if not sid:
+                return self._json(400, {"error": {"message": "id required"}})
+            res = bind_session(key, sid)
+            if "error" in res:
+                print(f"-> BIND [{key}] refused: {res['error']}", flush=True)
+                return self._json(409, {"error": {"message": res["error"]}})
+            print(f"-> BIND [{key}] {sid} (was {res['previous'] or 'none'})", flush=True)
+            return self._json(200, res)
+
         if self.path.rstrip("/").endswith("/sessions/reset"):
             key = self._key()
             drop_process(key)          # kill the live process, not just the mapping

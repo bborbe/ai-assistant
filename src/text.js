@@ -171,16 +171,31 @@ function register(client) {
     // no way to start voice at all. Two transports for the same action removes
     // that single point of failure, and typing "join" is no worse than the slash
     // command anyway.
-    const cmd = content.match(/^\/?\s*(join|leave|status|selfcheck)\s*$/i);
+    // The reply stays in the channel rather than opening a thread, so the key is
+    // the one this channel/DM already answers on — not a new one.
+    const hereKey = sessionKeyFor(msg.channel, msg.author.id);
+
+    const cmd = content.match(/^\/?\s*(join|leave|status|selfcheck|new|sessions)\s*$/i);
     if (cmd) {
       const name = cmd[1].toLowerCase();
       if (name === 'status' || name === 'selfcheck') {
         const { report } = require('./status');
-        // The reply stays in the channel rather than opening a thread, so the
-        // key is the one this channel/DM already answers on — not a new one.
-        return msg.reply(await report(client, sessionKeyFor(msg.channel, msg.author.id)));
+        return msg.reply(await report(client, hereKey));
+      }
+      if (name === 'new' || name === 'sessions') {
+        const { newSession, sessionsList } = require('./commands');
+        return msg.reply(name === 'new' ? await newSession(hereKey) : await sessionsList(hereKey));
       }
       return handleVoiceCommand(msg, client, name);
+    }
+
+    // `switch <id>` takes an argument, so it cannot join the bare-word set. The
+    // id shape is required in the pattern: "switch to the other approach" is a
+    // sentence for Claude, not a command.
+    const sw = content.match(/^\/?\s*switch\s+`?([0-9a-f-]{8,36})`?\s*$/i);
+    if (sw) {
+      const { switchSession } = require('./commands');
+      return msg.reply(await switchSession(hereKey, sw[1]));
     }
 
     let target = msg.channel;

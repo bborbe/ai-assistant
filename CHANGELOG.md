@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+- Add `new`, `sessions` and `switch <id>` — over both transports, as usual.
+
+  `new` and `sessions` had working handlers for weeks and were **unreachable**:
+  neither was in the slash-command registration array. A handler is not a
+  command until it is registered, and nothing failed loudly to say so.
+
+  `switch` is new work: the shim could only ever _create_ a session id for a
+  key, so `POST /v1/sessions/bind` now points a key at an existing one. Since
+  voice always keys on `default`, switching from a voice channel repoints the
+  spoken conversation — you can pick up a session started at the desk and
+  continue it by talking.
+
+  Two refusals, both learned rather than guessed. An id with no transcript is
+  rejected at bind time, because `claude --resume` on an unknown id fails with
+  "No conversation found" on the _next_ turn, long after the bind looked fine.
+  And an id already held by another key is rejected outright: per-key locking is
+  what makes concurrent turns safe, so two keys on one session file defeats it.
+  `sessions` marks the taken ones rather than hiding them — seeing where a
+  session already lives answers "which one is the voice one".
+
+  Known hole: a session open in an interactive `claude` at the desk is not in
+  the shim's mapping, so the collision guard cannot see it. Binding to one puts
+  two writers on a single transcript.
+
 ## v0.1.2
 
 - Always name the voice session in `status`, not only while the bot is sitting
