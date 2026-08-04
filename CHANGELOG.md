@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.2
 
 - Always name the voice session in `status`, not only while the bot is sitting
   in a voice channel. It is the session most worth resuming — every spoken turn
