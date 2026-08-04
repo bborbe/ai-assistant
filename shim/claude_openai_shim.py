@@ -562,6 +562,20 @@ KEEPALIVE_EVERY = float(os.environ.get("SHIM_KEEPALIVE_EVERY", "8.0"))
 # Fallback for a turn that is slow WITHOUT using tools. Rare, so the threshold is
 # generous: better to say nothing than to interject into an answer that is coming.
 HOLD_MAX = float(os.environ.get("SHIM_HOLD_MAX", "8.0"))
+# One filler covers a 6-15s turn. A vault question can take 30s — measured at
+# 30.4s live — and past about ten seconds silence reads as failure again, which
+# is exactly what the filler existed to prevent. Repeating it keeps the turn
+# audibly alive. 0 disables.
+PROGRESS_EVERY = float(os.environ.get("SHIM_PROGRESS_EVERY", "12.0"))
+# Two sentences each, for the same reason as _CHECK_LINES: speech-to-speech
+# releases a sentence only once the next has started, so a lone line would wait
+# for the answer and arrive just before it — useless.
+_PROGRESS_LINES = (
+    "Still looking. Won't be much longer.",
+    "Still on it. Nearly there.",
+    "Still working through this. One moment.",
+    "Give me a little longer. Almost done.",
+)
 # TWO sentences, deliberately. speech-to-speech releases a sentence to TTS only
 # once the NEXT one has started (base_openai_compatible_language_model.py:404) —
 # a lone holding line is held as incomplete text until the answer begins, which
@@ -777,6 +791,12 @@ class ClaudeProcess:
         first_out = True   # next emitted sentence is the model's first
         gone = False       # listener hung up; abandon as soon as we notice
         tool_seen = False  # Claude reached for a tool, so a real wait is coming
+        # When the listener last heard anything, filler included. A list so the
+        # watcher thread can read a value the request thread updates.
+        last_spoken = [time.monotonic()]
+
+        def mark_spoken():
+            last_spoken[0] = time.monotonic()
 
         def push(part: str) -> None:
             """The ONLY route from model text to the wire.
@@ -790,8 +810,13 @@ class ClaudeProcess:
             if gone or not part:
                 return
             if first_out and held and _HOLDISH.match(part):
-                first_out = False       # we already said it; do not say it twice
-                streamed = True
+                # Suppressed as a duplicate of the filler we already spoke.
+                # Deliberately does NOT set `streamed`: that flag means real
+                # text reached the listener, and it silences the progress
+                # watcher. Setting it here left a 34s turn with one filler and
+                # then nothing, because the watcher believed we were mid-reply
+                # while the only thing produced had just been thrown away.
+                first_out = False
                 return
             first_out = False
             try:
@@ -800,6 +825,7 @@ class ClaudeProcess:
                 gone = True
                 return
             streamed = True
+            mark_spoken()
 
         def emit_sentences(flush: bool = False) -> None:
             """Hand whole sentences to on_text, never bare tokens.
@@ -839,6 +865,7 @@ class ClaudeProcess:
             held = True
             try:
                 on_text(random.choice(_HOLD_LINES))
+                mark_spoken()
             except ClientGone:
                 gone = True     # the write is also how we learn they left
             except Exception:
@@ -850,17 +877,54 @@ class ClaudeProcess:
         # all. A tool_use block is the signal that a wait is genuinely coming.
         hold_stop = Event()
 
-        def hold_watch():
-            began = time.monotonic()
-            while not hold_stop.wait(0.4):
-                if streamed or gone:
-                    return
-                waited = time.monotonic() - began
-                if (tool_seen and waited >= HOLD_AFTER) or waited >= HOLD_MAX:
-                    speak_holding_line()
-                    return
+        said_before: list[str] = []
 
-        if on_text and HOLD_AFTER > 0 and not already_held:
+        def speak_progress_line():
+            nonlocal gone
+            if gone or not on_text:
+                return
+            # Never the same line twice running. Random choice repeats about a
+            # quarter of the time with four options, and hearing "still looking"
+            # verbatim twice in a row sounds like the bot is stuck rather than
+            # working.
+            choices = [ln for ln in _PROGRESS_LINES if ln not in said_before[-1:]]
+            line = random.choice(choices or list(_PROGRESS_LINES))
+            said_before.append(line)
+            try:
+                on_text(line)
+                mark_spoken()
+            except ClientGone:
+                gone = True
+            except Exception:
+                pass
+
+        def hold_watch():
+            """Keep the turn audible: speak whenever the listener has heard
+            nothing for a while.
+
+            The test is time since the last thing SPOKEN, not whether anything
+            has been spoken at all. A turn commonly says "let me take a look",
+            then works silently for another twenty seconds — an
+            anything-yet test stops watching at the first word and leaves
+            exactly the dead air it was added to prevent.
+            """
+            began = time.monotonic()
+            opened = already_held          # front tier already spoke for us
+            while not hold_stop.wait(0.4):
+                if gone:
+                    return
+                now = time.monotonic()
+                if not opened:
+                    if (tool_seen and now - began >= HOLD_AFTER) or now - began >= HOLD_MAX:
+                        speak_holding_line()
+                        opened = True
+                    continue
+                if PROGRESS_EVERY > 0 and now - last_spoken[0] >= PROGRESS_EVERY:
+                    speak_progress_line()
+
+        # Runs even when the front tier already spoke: the first filler is then
+        # skipped, but the progress lines still cover the long tail.
+        if on_text and (HOLD_AFTER > 0 or PROGRESS_EVERY > 0):
             Thread(target=hold_watch, daemon=True).start()
 
         def stop_timer():

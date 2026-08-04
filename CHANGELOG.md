@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Keep speaking during a long turn. One filler was sized for a 6-15s turn; a
+  vault question measured 30.4s live, and the listener heard "I'll look that up"
+  followed by half a minute of silence and reasonably concluded it had died. A
+  progress line now goes out whenever nothing has been heard for 12s
+  (`SHIM_PROGRESS_EVERY`, 0 disables), never repeating the previous line — random
+  choice over four options repeats about a quarter of the time, and hearing the
+  same sentence twice running sounds stuck rather than busy
+
+- Measure silence from the last thing SPOKEN, not from whether anything has been
+  spoken at all. A turn commonly says "let me take a look" and then works
+  silently for another twenty seconds; an anything-yet test stops watching at the
+  first word and leaves exactly the dead air it was added to prevent
+
+- Do not treat a suppressed duplicate as speech. When the model produced its own
+  holding sentence and we discarded it as a duplicate of the filler, the flag
+  meaning "text reached the listener" was set anyway — so a 34s turn spoke once
+  and then went quiet, the watcher believing a reply was in flight while the only
+  thing produced had just been thrown away
+
 - Route by an explicit refusal contract rather than a tool call. The front model
   is told to reply `{"cannot_answer": true}` when answering would need the user's
   notes, tasks, files or systems. Measured across 20 factual trials including
