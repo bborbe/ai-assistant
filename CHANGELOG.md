@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Tell the assistant that the transcript exists, and where. Capturing typed
+  messages to disk achieved nothing on its own: a path pasted mid-call was
+  written correctly, and "can you check the file I posted in the chat?" was
+  answered "I can't see it — the bot has no attachment handling", after reading
+  the bot's own source to check. Nothing had ever mentioned the file that
+  contained it, and typed messages reach the model ONLY through that file — they
+  are never in its context. The directive now names the directory, explains that
+  it holds both speech and typed lines, and says that "posted" usually means a
+  line in the transcript rather than an attachment. Voice turns only; a text
+  thread already carries its own history
+
+- Do not count a lead-in ending in a colon against the spoken-sentence cap. "Typed
+  messages only reach me through the transcript." / "Let me read it:" exhausted
+  the two-sentence budget before a word of the answer, so the caller heard the
+  preamble followed by "there's more if you want it"
+
+- Forbid narrating the work in spoken replies. The user already hears a filler
+  while tools run and does not need a second account of what is about to happen
+
 - Write messages posted in a voice channel's own text chat into that channel's
   transcript, alongside the speech. Previously only the bot's spoken replies were
   written as text, so a link pasted during a call was invisible to the session

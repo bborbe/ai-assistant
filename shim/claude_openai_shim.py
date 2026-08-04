@@ -444,6 +444,28 @@ def reset_session(key: str) -> str:
 # panels, markdown, bullet lists — which are right for a terminal and unusable
 # as speech. The voice prompt is advisory and loses to them, so the shim
 # enforces: belt (instruction) and braces (post-strip).
+# Where the live transcript of the call is written. The assistant is NOT told
+# this anywhere else, and without it a whole half of the conversation is
+# invisible: text typed into the voice channel's chat never reaches the model —
+# it goes to disk only. Observed 2026-08-04: a file path was pasted mid-call and
+# captured correctly, then "can you check the file I posted in the chat?" was
+# answered "I can't see it", because nothing had ever mentioned the file that
+# contained it.
+TRANSCRIPT_DIR = os.environ.get("SHIM_TRANSCRIPT_DIR", "").strip()
+
+TRANSCRIPT_DIRECTIVE = (
+    f"A live transcript of this call is written to {TRANSCRIPT_DIR}, one folder "
+    "per channel per day — the most recently modified is this conversation, in "
+    "`transcript.md`.\n"
+    "It holds BOTH what everyone said aloud and everything typed into the voice "
+    "channel's text chat, in order, with names. Typed messages reach you ONLY "
+    "this way; they are never in your context.\n"
+    "So when the user refers to anything from earlier — 'the link I posted', "
+    "'the path I pasted', 'what we just discussed' — READ that file before "
+    "answering. Do not say you cannot see it, and do not assume 'posted' means "
+    "an attachment: it usually means a line in that transcript."
+) if TRANSCRIPT_DIR else ""
+
 VOICE_DIRECTIVE = (
     "SPOKEN OUTPUT MODE. Your reply is read aloud, not displayed. Speak the way a person "
     "speaks: full, flowing sentences, one or two of them, in a natural conversational "
@@ -460,6 +482,10 @@ VOICE_DIRECTIVE = (
     "check that' — then do the lookup and answer. Speaking before the tool runs is what "
     "keeps the silence from feeling broken; your first sentence is spoken while the work "
     "happens.\n"
+    "NEVER NARRATE THE WORK. No 'let me read that', no 'right, so that means', no "
+    "explaining where you are about to look or what you just realised. The user "
+    "hears a filler while you work and does not need a second one from you — say "
+    "the answer and nothing else.\n"
     "LENGTH IS A HARD LIMIT, and it is the rule most often broken: TWO SENTENCES. "
     "Not three. This holds however much you found and however interesting it is — a "
     "spoken answer cannot be skimmed, re-read, or interrupted politely, so a third "
@@ -835,6 +861,21 @@ class ClaudeProcess:
             # what the directive asks for anyway, and the full text is still
             # returned to the caller and written to the transcript.
             nonlocal spoken, truncated
+            # A sentence ending in a colon promises the answer rather than being
+            # it. Counting those spent the budget on throat-clearing: "typed
+            # messages only reach me through the transcript." / "Let me read
+            # it:" hit the cap before a single word of the answer, so the user
+            # heard the preamble and then "there's more if you want it".
+            lead_in = part.rstrip().endswith(":")
+            if lead_in:
+                try:
+                    on_text(part)
+                    mark_spoken()
+                    streamed = True
+                except ClientGone:
+                    gone = True
+                return
+
             if SPOKEN_MAX > 0 and spoken >= SPOKEN_MAX:
                 if truncated:
                     # Still producing, just not voicing it. Count it as speech
@@ -1289,8 +1330,11 @@ class Handler(BaseHTTPRequestHandler):
                  or self.headers.get("X-Output-Mode", "").lower() == "voice")
         print(f"-> {'VOICE' if voice else 'TEXT '} [{key}] {prompt[:70]!r}", flush=True)
 
+        # The transcript directive is voice-only: it is the record of a call,
+        # and a text surface already has its own history in the thread.
         parts = [p for p in (system, MEMORY_DIRECTIVE,
-                             VOICE_DIRECTIVE if voice else TEXT_DIRECTIVE) if p]
+                             VOICE_DIRECTIVE if voice else TEXT_DIRECTIVE,
+                             TRANSCRIPT_DIRECTIVE if voice else "") if p]
         mine = next_seq(key)
 
         # Live streaming is VOICE ONLY. strip_panels recognises a closer panel in
