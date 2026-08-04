@@ -208,7 +208,23 @@ process.on('unhandledRejection', (reason) => {
   log.error('unhandled rejection', { error: String(reason) });
   process.exit(1);
 });
+// A single bad voice packet must not take the bot down. Discord's decryption
+// layer throws asynchronously, from a UDP callback with no listener to catch it,
+// so it surfaces here rather than anywhere it could be handled locally. Observed
+// mid-conversation: "Failed to decrypt: DecryptionFailed(
+// UnencryptedWhenPassthroughDisabled)" killed the process and the call simply
+// stopped, with the last thing in the log being a normal transcript line.
+//
+// Deliberately narrow. Exiting on an unknown exception is right — the process
+// state is unknowable — so only this known-recoverable class is survived, and it
+// is still logged every time.
+const RECOVERABLE = /Failed to decrypt|DecryptionFailed|Unencrypted/i;
+
 process.on('uncaughtException', (err) => {
+  if (RECOVERABLE.test(err?.message ?? '')) {
+    log.warn('dropped an undecryptable voice packet', { error: err.message });
+    return;
+  }
   log.error('uncaught exception', { error: err.message, stack: err.stack });
   process.exit(1);
 });

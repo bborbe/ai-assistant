@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Survive an undecryptable voice packet. "Failed to decrypt:
+  DecryptionFailed(UnencryptedWhenPassthroughDisabled)" reached the
+  `uncaughtException` handler and exited the process mid-conversation — the call
+  simply stopped, with the last log line a perfectly normal transcript. Discord's
+  decryption throws from a UDP callback with no listener, so it cannot be caught
+  where it happens. Only this known-recoverable class is survived, still logged
+  each time; anything else still exits, because an unknown exception leaves
+  unknowable state
+
 - Keep speaking during a long turn. One filler was sized for a 6-15s turn; a
   vault question measured 30.4s live, and the listener heard "I'll look that up"
   followed by half a minute of silence and reasonably concluded it had died. A
