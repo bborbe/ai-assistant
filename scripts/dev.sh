@@ -49,6 +49,14 @@ if already "$SHIM_PORT"; then
   echo "  shim already running on :$SHIM_PORT, reusing"
 else
   echo "starting shim…"
+  # The shim needs the transcript directory to tell the assistant where the
+  # record of a call lives. Without it the pointer is silently omitted and typed
+  # messages become invisible to the model — a failure with no error, so it is
+  # wired here rather than left to whoever remembers to export it.
+  export SHIM_TRANSCRIPT_DIR="$TRANSCRIPT_DIR"
+  if [ -n "${FRONT_API_KEY_ID:-}" ] && [ -z "${SHIM_FRONT_API_KEY:-}" ]; then
+    SHIM_FRONT_API_KEY=$(teamvault-cli password "$FRONT_API_KEY_ID") && export SHIM_FRONT_API_KEY
+  fi
   python3 -u shim/claude_openai_shim.py > "$LOGDIR/shim.log" 2>&1 &
   pids+=($!)
   wait_for_port "$SHIM_PORT" shim 15 || exit 1

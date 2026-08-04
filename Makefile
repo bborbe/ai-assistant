@@ -56,6 +56,7 @@ transcriber:
 # Run the Claude Code OpenAI-compatible shim
 shim:
 	@set -a; [ -f local.env ] && . ./local.env; set +a; \
+	SHIM_TRANSCRIPT_DIR="$$TRANSCRIPT_DIR"; export SHIM_TRANSCRIPT_DIR; \
 	if [ -n "$$FRONT_API_KEY_ID" ]; then \
 	  SHIM_FRONT_API_KEY=$$(teamvault-cli password $$FRONT_API_KEY_ID); \
 	  export SHIM_FRONT_API_KEY; \
