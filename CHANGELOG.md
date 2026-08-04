@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.0.3
 
 - Cap how many sentences are spoken, rather than asking for it. The voice
   directive requests two and fresh sessions obey; a session with hundreds of
