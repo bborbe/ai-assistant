@@ -82,23 +82,42 @@ async function listSessions() {
 }
 
 /**
- * One conversation per thread, per DM, per channel.
+ * The key a request carries when it sends none — voice, which reaches the
+ * endpoint through speech-to-speech and cannot set headers. Mirrors the shim's
+ * own `DEFAULT_KEY`; kept here so `status` can name the voice conversation
+ * rather than printing a bare "default" the reader has to decode.
+ */
+const DEFAULT_SESSION_KEY = 'default';
+
+/**
+ * One conversation per thread, per DM, per channel — and **one per voice
+ * channel, shared with what is spoken in it**.
+ *
+ * A voice channel's integrated text chat is a normal text channel as far as
+ * Discord is concerned, so it would otherwise get its own `channel:<id>`
+ * session: you could paste a link during a call and the voice conversation
+ * would never see it, because it is a different Claude Code session. Mapping it
+ * to the same key speech uses makes the call ONE conversation regardless of
+ * whether a turn was spoken or typed.
+ *
+ * It also makes the session commands reach voice at all. They derive their key
+ * from the channel they are typed in, so before this, `switch` and `new` in a
+ * voice channel operated on a `channel:` session nothing was using, and the
+ * spoken conversation was unmanageable from Discord.
+ *
+ * The consequence to know: `default` is one key for ALL voice, because
+ * speech-to-speech has no notion of which channel a turn came from. Two voice
+ * channels therefore share a conversation — already true of speech, and now
+ * true of their text chats too.
  *
  * Clearing a session is only safe because anything worth keeping is written to
  * the vault — see the shim's MEMORY_DIRECTIVE. The session is a cache; the
  * vault is the record.
  */
-/**
- * The key a request carries when it sends none — voice, which reaches the
- * endpoint through speech-to-speech and cannot set headers. Mirrors the shim's
- * own `DEFAULT_KEY`; kept here so `/status` can name the voice conversation
- * rather than printing a bare "default" the reader has to decode.
- */
-const DEFAULT_SESSION_KEY = 'default';
-
 function sessionKeyFor(channel, userId) {
   if (channel?.isThread?.()) return `thread:${channel.id}`;
   if (!channel?.guild) return `dm:${userId}`;
+  if (channel?.isVoiceBased?.()) return DEFAULT_SESSION_KEY;
   return `channel:${channel.id}`;
 }
 

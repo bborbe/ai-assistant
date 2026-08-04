@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- Make a voice channel ONE conversation: messages typed in its integrated text
+  chat now use the same session as what is spoken there. Discord treats that
+  chat as an ordinary text channel, so it was getting its own `channel:` session
+  — a link pasted mid-call went to a Claude session the voice conversation could
+  not see.
+
+  This also repairs a claim shipped an hour earlier. The session commands derive
+  their key from the channel they are typed in, so `switch` and `new` in a voice
+  channel acted on a `channel:` session nothing was using, and the spoken
+  conversation — the long one, the one worth switching — was unreachable from
+  Discord. The README said otherwise. It is now true rather than corrected.
+
+  Consequence worth knowing: `default` is one key for ALL voice, because
+  speech-to-speech cannot say which channel a turn came from. Two voice channels
+  share a conversation — already true of speech, now true of their chats too.
+
 ## v0.2.0
 
 - Add `new`, `sessions` and `switch <id>` — over both transports, as usual.

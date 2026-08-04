@@ -87,14 +87,18 @@ For voice it additionally **enforces** speakable output — a session with a per
 
 The bot sends an extra-spec `X-Session-Key`; the shim maps it to a Claude Code session uuid, persisted in `~/.claude/shim-sessions.json` so the mapping outlives both processes. Locks are per key, so two threads answer at once rather than queueing.
 
-| Surface                    | Key                   |
-| -------------------------- | --------------------- |
-| Guild thread               | `thread:<channelId>`  |
-| DM                         | `dm:<userId>`         |
-| Guild channel, un-threaded | `channel:<channelId>` |
-| Voice                      | `default`             |
+| Surface                              | Key                   |
+| ------------------------------------ | --------------------- |
+| Guild thread                         | `thread:<channelId>`  |
+| DM                                   | `dm:<userId>`         |
+| Guild channel, un-threaded           | `channel:<channelId>` |
+| Voice — spoken **and** its text chat | `default`             |
 
-**Voice and text do not share a conversation.** Voice reaches the endpoint through speech-to-speech, which owns the HTTP call and cannot set a header, so every spoken turn lands on `default` — one long session for all speech, separate from any text session. Saying something aloud and then typing it reaches two different sessions with different histories.
+**A voice channel is one conversation.** Speech reaches the endpoint through speech-to-speech, which owns the HTTP call and cannot set a header, so every spoken turn lands on `default`; messages typed in that channel's chat are mapped to the same key deliberately. Talking and typing during a call therefore reach one session — and the session commands, which take their key from the channel they are typed in, reach the spoken conversation rather than an unused one beside it.
+
+**Text elsewhere is separate.** A DM or a thread is its own conversation with its own history; saying something aloud and then DMing it reaches two different sessions.
+
+Note that `default` is a single key for **all** voice, because speech-to-speech has no notion of which channel a turn came from. Two voice channels share one conversation.
 
 Each thread is likewise its own conversation, not a view onto a shared one. An endpoint that ignores the header (any hosted model) treats every turn as stateless and relies on the resent history instead — the bot behaves the same either way.
 
@@ -108,7 +112,7 @@ Three commands manage them, as slash commands or typed words:
 | `sessions`    | What is bound where, plus transcripts you can switch to, labelled by first prompt |
 | `switch <id>` | Point this conversation at an existing session                                    |
 
-Because voice keys on `default`, `switch` from a voice channel repoints the **spoken** conversation — pick up a session you started at the desk and continue it by talking.
+Typed in a **voice channel's chat**, all three act on the spoken conversation — so `switch <id>` there picks up a session you started at the desk and lets you continue it by talking.
 
 `switch` refuses two things: an id with no transcript (otherwise `--resume` fails on the _next_ turn, far from the cause), and an id already bound to another key (two keys on one session file defeats per-key locking). It cannot see a session open in an interactive `claude` at the desk, since that is not in the shim's mapping — binding to one puts two writers on a single transcript.
 
