@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Say what is happening when we know it. The filler was deliberately vague
+  ("hang on") back when a blind timer fired it and "checking that" could be a
+  lie in reply to "thank you". It now fires only once a lookup is established —
+  the question was recognised as factual, or the model asked for the tool — so
+  the informative wording is true, and it tells the user their request landed
+  rather than merely that something is alive. Measured at 0.16s
+
 - Filter the front model's words rather than trusting the prompt to govern them.
   Three rounds of prompt-tightening each surfaced a new phrasing: told to call
   `ask_claude` it said "want me to?" instead; told never to ask permission it

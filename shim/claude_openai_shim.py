@@ -543,6 +543,18 @@ _HOLD_LINES = (
     "One second. Bear with me.",
     "Just a moment. Nearly there.",
 )
+
+# Spoken when we KNOW a lookup is under way — the question was recognised as
+# factual, or the model asked for the tool. Saying so is more use than "hang on":
+# it tells the user the request landed and is being worked, which is the whole
+# point of speaking early. Kept separate from _HOLD_LINES because the timer path
+# fires on silence alone and cannot know what, if anything, is happening.
+_CHECK_LINES = (
+    "Let me check that. One second.",
+    "I'll look that up. Won't be long.",
+    "Checking that now. One moment.",
+    "Let me find that. Just a second.",
+)
 # When the model DOES comply, its own holding sentence lands after ours and the
 # listener hears two. Recognise the shape and drop the duplicate — only ever the
 # first sentence, and only when we already spoke.
@@ -1197,7 +1209,7 @@ class Handler(BaseHTTPRequestHandler):
                 # No point asking whether this needs Claude — it plainly does,
                 # and the round trip costs ~3s of silence to be told so.
                 # Measured: filler at 3.07s via the model, 0.14s by skipping it.
-                said, want_claude = random.choice(_HOLD_LINES), True
+                said, want_claude = random.choice(_CHECK_LINES), True
             else:
                 said, want_claude = front_route(key, prompt)
             # Models commonly return EITHER content OR tool calls, so asking for
@@ -1205,7 +1217,7 @@ class Handler(BaseHTTPRequestHandler):
             # our own when it does not — unless fillers are switched off, in
             # which case the pause is left bare on purpose.
             if want_claude and not said and HOLD_AFTER > 0:
-                said = random.choice(_HOLD_LINES)
+                said = random.choice(_CHECK_LINES)
             if said and live:
                 try:
                     writer.chunk(strip_markdown(said) + " ")
