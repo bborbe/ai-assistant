@@ -12,7 +12,7 @@ const {
   getVoiceConnection,
 } = require('@discordjs/voice');
 const prism = require('prism-media');
-const { Readable } = require('stream');
+const { PassThrough } = require('stream');
 const WebSocket = require('ws');
 const config = require('./config');
 const log = require('./log');
@@ -73,7 +73,7 @@ class Session {
     // all to one buffer would throw that away AND garble the audio, since the
     // chunks interleave rather than align in time.
     this.inbox = new Map(); // userId -> Buffer
-    this.reply = [];
+    this.audio = null; // open PassThrough while a reply is playing
     this.speaking = false;
     this.subscribed = new Set();
     this.closed = false;
@@ -269,14 +269,15 @@ class Session {
     log.debug('  voice: s2s event', {
       type: e.type,
       bytes: e.delta ? Buffer.byteLength(e.delta, 'base64') : undefined,
-      buffered: this.reply.length,
+      playing: Boolean(this.audio),
     });
     switch (e.type) {
       case 'input_audio_buffer.speech_started':
         if (this.speaking) {
           log.info('  voice: barge-in — stopping playback');
-          this.player.stop(true);
-          this.speaking = false;
+          // Must destroy the stream too: stopping the player alone leaves it
+          // open, and the next chunk would resume the abandoned reply.
+          this.stopAudio();
         }
         break;
       case 'conversation.item.input_audio_transcription.completed':
@@ -285,7 +286,7 @@ class Session {
       // NOTE: response.output_audio.delta — NOT response.audio.delta, which is
       // what OpenAI's hosted Realtime uses and what most write-ups quote.
       case 'response.output_audio.delta':
-        if (e.delta) this.reply.push(Buffer.from(e.delta, 'base64'));
+        if (e.delta) this.pushAudio(Buffer.from(e.delta, 'base64'));
         break;
       case 'response.output_audio_transcript.done':
         if (e.transcript) {
@@ -297,7 +298,7 @@ class Session {
         break;
       case 'response.output_audio.done':
       case 'response.done':
-        this.play();
+        this.endAudio();
         break;
       case 'error':
         log.error('  voice: s2s event error', JSON.stringify(e).slice(0, 200));
@@ -305,22 +306,47 @@ class Session {
     }
   }
 
-  play() {
-    if (!this.reply.length) return;
-    const pcm = up(Buffer.concat(this.reply));
-    this.reply = [];
-    this.speaking = true;
-    // Is the buffer literally the same audio twice? Comparing the halves settles
-    // "played twice" against "one buffer containing two copies" — they sound
-    // identical but have completely different causes.
-    const half = Math.floor(pcm.length / 2);
-    const twice = pcm.length > 2000 && pcm.subarray(0, half).equals(pcm.subarray(half, half * 2));
-    log.debug('  voice: playing', {
-      samples: pcm.length,
-      ms: Math.round(pcm.length / 192),
-      halvesIdentical: twice,
-    });
-    this.player.play(createAudioResource(Readable.from(pcm), { inputType: StreamType.Raw }));
+  /**
+   * Start playback on the FIRST audio chunk, not when the response completes.
+   *
+   * Waiting for `response.output_audio.done` buffers the whole reply and plays
+   * it in one go — measured: 211 deltas held, then 33.6s of audio at once. The
+   * shim emits its "checking that now" at 0.16s and speech-to-speech synthesises
+   * it separately, but the listener still heard it immediately before the
+   * answer, because nothing reached the speaker until the answer existed. Every
+   * upstream latency fix was being discarded here.
+   *
+   * A PassThrough lets the player consume audio while more is still arriving:
+   * the stream stays open between chunks rather than ending, so a gap in
+   * synthesis pauses playback instead of finishing it.
+   */
+  pushAudio(chunk) {
+    if (!this.audio) {
+      this.audio = new PassThrough();
+      this.speaking = true;
+      log.debug('  voice: playback started');
+      this.player.play(createAudioResource(this.audio, { inputType: StreamType.Raw }));
+    }
+    this.audio.write(up(chunk));
+  }
+
+  /** End of response: close the stream so the player can go idle. */
+  endAudio() {
+    if (!this.audio) return;
+    this.audio.end();
+    this.audio = null;
+  }
+
+  /** Abandon playback mid-stream — barge-in, or teardown. */
+  stopAudio() {
+    if (this.audio) {
+      this.audio.destroy();
+      this.audio = null;
+    }
+    try {
+      this.player.stop(true);
+    } catch {}
+    this.speaking = false;
   }
 
   destroy() {
@@ -335,9 +361,7 @@ class Session {
     for (const userId of [...this.utterance.keys()]) this.flush(userId);
     this.closed = true;
     clearInterval(this.pump);
-    try {
-      this.player.stop(true);
-    } catch {}
+    this.stopAudio(); // also destroys an open playback stream, not just the player
     try {
       this.ws?.close();
     } catch {}

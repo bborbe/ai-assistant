@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Play audio as it arrives instead of when the response completes. The bot
+  accumulated every `response.output_audio.delta` and started playback only on
+  `response.output_audio.done` — measured on a live turn: 211 deltas held, then
+  33.6s of audio released at once. So the early "checking that now", emitted by
+  the shim at 0.16s and synthesised separately by speech-to-speech, still reached
+  the listener immediately before the answer. Every latency fix upstream was
+  being discarded at the last step. Playback now writes into an open PassThrough,
+  which pauses on a gap in synthesis rather than ending, and barge-in destroys
+  the stream as well as stopping the player
+
 - Say what is happening when we know it. The filler was deliberately vague
   ("hang on") back when a blind timer fired it and "checking that" could be a
   lie in reply to "thank you". It now fires only once a lookup is established —
