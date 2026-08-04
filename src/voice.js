@@ -355,6 +355,13 @@ class Session {
     }
     // Nothing queued. Once the turn has ended, drain the tail and close;
     // otherwise hold the resource open with silence.
+    //
+    // The silence is also load-bearing for the UI, which is easy to miss: while
+    // a resource is live Discord shows the bot's speaking ring, so the ring
+    // stays lit for the whole turn — through the pauses while tools run, not
+    // only while words are coming out. That is a free "still working" signal,
+    // and it is the same signal that keeps the audio alive. An optimisation
+    // that skips silence during long gaps would remove both.
     if (this.ending) {
       if (this.outQueue.length) {
         this.audio.write(this.outQueue);
