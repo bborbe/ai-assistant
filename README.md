@@ -23,7 +23,7 @@ Both surfaces work, verified end to end against a real Claude Code session:
 - **Text** — DM, or `@mention` in a guild channel. A mention opens a **thread** and the conversation continues there, so follow-ups need no `@` and history stays scoped to the thread rather than to whatever else the channel was discussing. DMs stay flat — Discord has no threads in DMs.
 - **Voice** — `/join` from a voice channel, talk, hear the reply. Barge-in supported.
 - **Sender allowlist** on both surfaces, failing closed.
-- **Cross-surface continuity** — a stateful endpoint means a voice turn and a text turn share one conversation.
+- **One conversation per surface** — each thread, DM and channel keeps its own Claude Code session; voice keeps a single one of its own. Voice and text do _not_ share a conversation — see [Sessions](#sessions).
 
 Not built yet: proactive outbound (the bot speaking unprompted, e.g. reporting a finished job), a session reset policy, and Telegram as a second transport.
 
@@ -69,7 +69,7 @@ There is **no committed env file** on purpose. Make variables override the envir
 
 ## The shim — Claude Code behind an OpenAI endpoint
 
-`shim/claude_openai_shim.py` exposes **one persistent Claude Code session** as `/v1/chat/completions`, so both surfaces (and anything else speaking OpenAI) continue the _same_ conversation.
+`shim/claude_openai_shim.py` exposes **persistent, keyed Claude Code sessions** as `/v1/chat/completions` — one per conversation, so a turn continues where that conversation left off instead of starting cold.
 
 It is OpenAI-**shaped but stateful**, a deliberate deviation:
 
@@ -79,15 +79,28 @@ It is OpenAI-**shaped but stateful**, a deliberate deviation:
 | latest `user`   | the turn     | the actual new input                                       |
 | everything else | **discard**  | the session already has the history                        |
 
-Clients resend full history per the spec; appending it to a session that already has it would double context every turn and fork into a second, divergent history. Dropping it is also what makes cross-surface continuity work: the session is the conversation, not the transport.
+Clients resend full history per the spec; appending it to a session that already has it would double context every turn and fork into a second, divergent history. Dropping it is what lets a _stateful_ endpoint slot in under a bot written for a stateless one, with only a base-URL change.
 
 For voice it additionally **enforces** speakable output — a session with a personal `CLAUDE.md` follows its own formatting rules (status panels, markdown, bullet lists), which are unusable as speech and which the voice prompt alone does not override.
 
-### Threads and the stateful endpoint
+### Sessions
 
-Threads tidy the channel and scope history; they do **not** create separate conversations. With the stateful shim every thread maps onto the same Claude Code session, so context carries across them — which is the intended behaviour (it is what makes voice and text share a conversation), but it will surprise you if you expect one thread to be a sandbox. Against a _stateless_ endpoint, threads would be genuinely independent.
+The bot sends an extra-spec `X-Session-Key`; the shim maps it to a Claude Code session uuid, persisted in `~/.claude/shim-sessions.json` so the mapping outlives both processes. Locks are per key, so two threads answer at once rather than queueing.
 
-Requires **Create Public Threads** and **Send Messages in Threads**. Without them the bot logs a warning and answers in the channel instead of losing the reply.
+| Surface                    | Key                   |
+| -------------------------- | --------------------- |
+| Guild thread               | `thread:<channelId>`  |
+| DM                         | `dm:<userId>`         |
+| Guild channel, un-threaded | `channel:<channelId>` |
+| Voice                      | `default`             |
+
+**Voice and text do not share a conversation.** Voice reaches the endpoint through speech-to-speech, which owns the HTTP call and cannot set a header, so every spoken turn lands on `default` — one long session for all speech, separate from any text session. Saying something aloud and then typing it reaches two different sessions with different histories.
+
+Each thread is likewise its own conversation, not a view onto a shared one. An endpoint that ignores the header (any hosted model) treats every turn as stateless and relies on the resent history instead — the bot behaves the same either way.
+
+Threading requires **Create Public Threads** and **Send Messages in Threads**. Without them the bot logs a warning and answers in the channel instead of losing the reply.
+
+Inspect with `status` in Discord, or `curl -s localhost:8080/v1/sessions`. The `id` is an ordinary Claude Code session id: `claude --resume <id>` opens the same conversation at the desk. Resetting is safe only because the session is a cache — the vault is the record.
 
 ## `status` — checking the legs live
 

@@ -19,6 +19,15 @@
   A backend without a `/sessions` route says so and the rest of the report is
   unaffected — the bot may not assume its endpoint is the shim.
 
+- Correct the README on session scope. It claimed voice and text share one
+  conversation, and that threads do not create separate ones. Both are the
+  reverse of what the code does: text keys on `thread:` / `dm:` / `channel:`,
+  while voice reaches the endpoint through speech-to-speech, which owns the HTTP
+  call and cannot set a header — so all speech lands on `default`. Confirmed
+  against the live shim: `default` at 84 turns beside single-digit text
+  sessions. The README now carries the key table and says plainly that saying
+  something aloud and typing it reach two different sessions
+
 ## v0.1.0
 
 - Record arrivals and departures in the transcript, from a `voiceStateUpdate`
