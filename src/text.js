@@ -176,7 +176,9 @@ function register(client) {
       const name = cmd[1].toLowerCase();
       if (name === 'status' || name === 'selfcheck') {
         const { report } = require('./status');
-        return msg.reply(await report(client));
+        // The reply stays in the channel rather than opening a thread, so the
+        // key is the one this channel/DM already answers on — not a new one.
+        return msg.reply(await report(client, sessionKeyFor(msg.channel, msg.author.id)));
       }
       return handleVoiceCommand(msg, client, name);
     }

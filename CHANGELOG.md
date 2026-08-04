@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- Name the Claude Code session in `status`: the key answering this channel, its
+  session **id**, whether it is **warm** or **cold**, turn count and age.
+
+  The id is the actionable part. Shim sessions are ordinary Claude Code
+  sessions, so `claude --resume <id>` opens at the desk the same conversation
+  the bot has been holding — previously that id existed only in shim logs, and
+  the surface that could tell you it had no way to say it.
+
+  `warm` / `cold` is new information rather than a restatement: the persisted
+  key/id mapping outlives the process it named, so an id alone says nothing
+  about whether the next turn answers immediately or pays a cold spawn. The
+  shim's `/sessions` route now reports `live` per key, read from the live
+  process table rather than the file.
+
+  A backend without a `/sessions` route says so and the rest of the report is
+  unaffected — the bot may not assume its endpoint is the shim.
+
 ## v0.1.0
 
 - Record arrivals and departures in the transcript, from a `voiceStateUpdate`

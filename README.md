@@ -89,6 +89,21 @@ Threads tidy the channel and scope history; they do **not** create separate conv
 
 Requires **Create Public Threads** and **Send Messages in Threads**. Without them the bot logs a warning and answers in the channel instead of losing the reply.
 
+## `status` — checking the legs live
+
+`/status`, or a typed `status` / `selfcheck`. Every leg is probed rather than reported from config: "the endpoint is configured at :8080" is a different claim from "the endpoint answers", and only the second is worth reading when something is broken. Available over both transports on purpose — a diagnostic sharing a transport with the thing it diagnoses is useless exactly when it is needed.
+
+It also names the **Claude Code session** answering the current channel:
+
+```
+🧠 claude sessions — 3 known
+   • here `dm:2657…` — `b64cfb24-fa1f-4f1e-9903-48568e30d9f3`, warm, 12 turn(s), 41m
+```
+
+The id is what `claude --resume <id>` takes, so the conversation the bot has been holding can be opened at the desk. `warm` / `cold` says whether a live process is behind it — the key/id mapping is persisted and outlives the process, so a cold session answers correctly but pays a spawn first.
+
+Against an endpoint with no `/sessions` route the line says so and the rest still works.
+
 ## Service endpoints
 
 `/healthz` (liveness), `/readiness` (gateway connected — 503 while draining), `/version`.

@@ -132,7 +132,7 @@ client.on('interactionCreate', async (i) => {
     // the thing that is broken.
     await i.deferReply({ flags: MessageFlags.Ephemeral });
     const { report } = require('./status');
-    return i.editReply(await report(client));
+    return i.editReply(await report(client, sessionKeyFor(i.channel, i.user.id)));
   }
 
   if (i.commandName === 'join') {

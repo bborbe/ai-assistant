@@ -63,10 +63,18 @@ async function listSessions() {
  * the vault — see the shim's MEMORY_DIRECTIVE. The session is a cache; the
  * vault is the record.
  */
+/**
+ * The key a request carries when it sends none — voice, which reaches the
+ * endpoint through speech-to-speech and cannot set headers. Mirrors the shim's
+ * own `DEFAULT_KEY`; kept here so `/status` can name the voice conversation
+ * rather than printing a bare "default" the reader has to decode.
+ */
+const DEFAULT_SESSION_KEY = 'default';
+
 function sessionKeyFor(channel, userId) {
   if (channel?.isThread?.()) return `thread:${channel.id}`;
   if (!channel?.guild) return `dm:${userId}`;
   return `channel:${channel.id}`;
 }
 
-module.exports = { chat, resetSession, listSessions, sessionKeyFor };
+module.exports = { chat, resetSession, listSessions, sessionKeyFor, DEFAULT_SESSION_KEY };

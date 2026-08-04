@@ -1277,8 +1277,14 @@ class Handler(BaseHTTPRequestHandler):
                 {"id": MODEL, "object": "model", "owned_by": "anthropic"}]})
         if path.endswith("/sessions"):
             now = time.time()
+            # `live` is the difference between an id that answers immediately and
+            # one that costs a cold spawn (~3s more) on its next turn: the mapping
+            # outlives the process, so a persisted id says nothing about warmth.
+            with _procs_lock:
+                live = {k for k, p in _procs.items() if p.alive()}
             return self._json(200, {"sessions": [
                 {"key": k, "id": v["id"], "turns": v.get("turns", 0),
+                 "live": k in live,
                  "age_minutes": round((now - v.get("created", now)) / 60, 1)}
                 for k, v in sorted(_load().items())
             ]})
