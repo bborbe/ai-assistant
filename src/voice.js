@@ -262,6 +262,15 @@ class Session {
     } catch {
       return;
     }
+    // LOG_LEVEL=debug traces the audio path: which events arrive, how much PCM
+    // each carries, and how many times playback is triggered per turn. Cheap to
+    // leave in — a doubled reply is invisible in the transcript, because it is
+    // the same text played twice rather than said twice.
+    log.debug('  voice: s2s event', {
+      type: e.type,
+      bytes: e.delta ? Buffer.byteLength(e.delta, 'base64') : undefined,
+      buffered: this.reply.length,
+    });
     switch (e.type) {
       case 'input_audio_buffer.speech_started':
         if (this.speaking) {
@@ -301,6 +310,16 @@ class Session {
     const pcm = up(Buffer.concat(this.reply));
     this.reply = [];
     this.speaking = true;
+    // Is the buffer literally the same audio twice? Comparing the halves settles
+    // "played twice" against "one buffer containing two copies" — they sound
+    // identical but have completely different causes.
+    const half = Math.floor(pcm.length / 2);
+    const twice = pcm.length > 2000 && pcm.subarray(0, half).equals(pcm.subarray(half, half * 2));
+    log.debug('  voice: playing', {
+      samples: pcm.length,
+      ms: Math.round(pcm.length / 192),
+      halvesIdentical: twice,
+    });
     this.player.play(createAudioResource(Readable.from(pcm), { inputType: StreamType.Raw }));
   }
 

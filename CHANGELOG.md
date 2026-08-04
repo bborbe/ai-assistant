@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Inject an `ask_claude` tool into the front model's request and run the tool in
+  the proxy. The proxy owns the loop, so Claude's answer is returned verbatim
+  rather than handed back to the front model to reword — an ordinary agent loop
+  would let it restate facts about the user's vault in its own words. s2s needs
+  no changes because it never learns tools exist
+
+- Skip the front round trip when the question is plainly factual. Asking the
+  model whether a lookup is needed costs ~3s to be told what the wording already
+  says; the filler lands at 0.14s by deciding locally
+
+- Supply the pause-filler ourselves when the front model returns a tool call with
+  no text. Models commonly emit either content or tool calls, so a filler that
+  depends on getting both arrives only sometimes
+
+- Add `SHIM_FRONT_HEURISTICS=0` to take the whitelist and factual backstop out of
+  the path, leaving routing entirely to the front model. Measured on voice, that
+  model defers *verbally* ("to get the list I'd have to ask the full assistant —
+  want me to?") instead of calling the tool, answers about the user's world from
+  its own knowledge, and introduces itself as Claude. It fails toward talking
+  rather than checking, which is the expensive direction — so the heuristics stay
+  on by default and the model's tool call is a second chance to defer, not the
+  only one
+
 - Leave exactly one live speech-to-speech socket behind on reconnect. Replacing
   `this.ws` did not silence the socket it replaced — the old object kept its
   message listener and went on feeding the player, so every reply was heard once

@@ -106,16 +106,71 @@ FRONT_MODEL = os.environ.get("SHIM_FRONT_MODEL", "MiniMax-M3")
 FRONT_API_KEY = os.environ.get("SHIM_FRONT_API_KEY", "").strip()
 FRONT_TIMEOUT = float(os.environ.get("SHIM_FRONT_TIMEOUT", "4.0"))
 FRONT_HISTORY = int(os.environ.get("SHIM_FRONT_HISTORY", "8"))
+# The hand-written whitelist and factual backstop below are a bet that pattern
+# matching routes better than the model does. SHIM_FRONT_HEURISTICS=0 takes them
+# out of the path so the front model decides every turn on its own — slower, but
+# it is the honest baseline the heuristics have to beat.
+FRONT_HEURISTICS = os.environ.get("SHIM_FRONT_HEURISTICS", "1") != "0"
+
+ASK_CLAUDE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "ask_claude",
+        "description": (
+            "Hand the question to the full assistant, which has the user's notes, "
+            "tasks, files, repositories and systems. Use this for ANYTHING factual "
+            "or specific to the user's world — you cannot see any of it."),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string",
+                             "description": "The user's question, in full."},
+            },
+            "required": ["question"],
+        },
+    },
+}
+
+# Backstop for the case the tool contract cannot cover: the front model deciding
+# it knows the answer to something factual. A wrong "I'll check" costs a second;
+# a wrong "the answer is X" invents something about the user's world and says it
+# in the assistant's voice. So anything shaped like a question about the user's
+# things goes to Claude no matter what the front model chose.
+_FACTUAL = re.compile(r"""(
+      \b(what|which|when|where|who|why|how\s+(many|much|long|often))\b
+    | \b(did|do|does|have|has|is|are|was|were)\s+(i|we|you|it|there|my|the)\b
+    | \b(status|task|note|file|vault|repo|repository|deploy|log|transcript
+        |objective|goal|commit|branch|test|error|meeting|calendar|plan)\b
+    | \b(my|our)\b
+)""", re.I | re.X)
+
+
+def looks_factual(text: str) -> bool:
+    """Would answering this require knowing something about the user's world?
+
+    Deliberately over-broad — "my", a bare "did we", any interrogative — because
+    the cost is asymmetric: a needless consult loses a second, a missed one puts
+    an invented fact in the assistant's mouth. The conversational whitelist is
+    the exemption that keeps that breadth from swallowing "how are you", which
+    matches on "are you" alone.
+    """
+    if is_chitchat(text):
+        return False
+    return bool(_FACTUAL.search(text))
+
 
 FRONT_SYSTEM = (
-    "You are the voice of an assistant in a spoken conversation, handling ONLY "
-    "small talk and conversational repair — greetings, thanks, 'can you hear me', "
-    "'say that again'. Reply in ONE short spoken sentence. No markdown, no lists, "
-    "no emoji.\n"
-    "You have no tools, no files, no memory of the user's work, and no way to look "
-    "anything up. If the user asks anything factual — about tasks, notes, plans, "
-    "code, systems, or anything that happened — do NOT answer or guess. Say only "
-    "that you are checking, in one short sentence."
+    "You are the voice of an assistant in a spoken conversation. Everything you "
+    "say is read aloud: ONE short spoken sentence, no markdown, no lists, no "
+    "emoji.\n"
+    "Answer directly ONLY when the reply needs nothing but the conversation "
+    "itself — greetings, thanks, 'can you hear me', 'say that again'.\n"
+    "For anything else, call ask_claude. You cannot see the user's notes, tasks, "
+    "files, code or systems, and you have no memory of their work, so answering "
+    "from your own knowledge would be inventing it. This includes questions that "
+    "feel easy. When you call ask_claude, also say one short neutral sentence to "
+    "fill the pause — 'one moment', 'let me check that' — and never state or "
+    "guess the answer in it."
 )
 
 # Full-match, not substring: "hello" is small talk, "hello, what is my most
@@ -125,6 +180,11 @@ _CHITCHAT = re.compile(r"""^(
     | good\s+(morning|afternoon|evening)
     | (thanks|thank\s+you|cheers)(\s+(a\s+lot|very\s+much))?
     | how\s+are\s+you(\s+doing)?
+    # Informal greetings that READ as questions — "yo what is up" trips the
+    # factual backstop on "what" and would wake Claude to say hello.
+    | (yo\s+)?(what'?s|what\s+is)\s+up
+    | how'?s?\s+(it\s+going|things)
+    | sup
     | (can|do)\s+you\s+hear\s+me(\s+now)?
     | are\s+you\s+(there|awake|ok|okay|still\s+there)
     | (say\s+that\s+again|repeat\s+that|come\s+again|pardon)
@@ -142,20 +202,27 @@ _front_lock = Lock()
 
 
 def is_chitchat(text: str) -> bool:
-    """Whole utterance is conversational filler with no factual content."""
-    if not FRONT_API_KEY:
-        return False
+    """Whole utterance is conversational filler with no factual content.
+
+    Whole-utterance, not substring: "hello" is small talk, "hello, what is my
+    most important task" is not, and a substring test would exempt the second
+    from the factual backstop.
+    """
     norm = re.sub(r"[.!?,]+$", "", text.strip().lower())
     norm = re.sub(r"\s+", " ", norm)
     return bool(_CHITCHAT.fullmatch(norm))
 
 
-def front_reply(key: str, prompt: str) -> str | None:
-    """One short spoken reply from the front model, or None to fall through.
+def front_route(key: str, prompt: str) -> tuple[str, bool]:
+    """Ask the front model to answer or defer. Returns (spoken_text, want_claude).
 
-    Every failure path returns None so the turn continues to Claude: a front tier
-    that swallows a question when the API is slow or down is worse than one that
-    never existed.
+    The PROXY owns the tool loop, not the model: when ask_claude is called we run
+    it here and hand Claude's words to the caller verbatim. Feeding them back to
+    the front model for a final answer — the ordinary agent loop — would let it
+    reword facts about the user's vault, which is the one thing it must never do.
+
+    Every failure path returns ("", True) so the turn continues to Claude. A front
+    tier that swallows a question when the API is slow is worse than none.
     """
     with _front_lock:
         history = list(_front_history[key])
@@ -163,7 +230,9 @@ def front_reply(key: str, prompt: str) -> str | None:
         "model": FRONT_MODEL,
         "messages": [{"role": "system", "content": FRONT_SYSTEM}] + history +
                     [{"role": "user", "content": prompt}],
-        "max_tokens": 80,
+        "tools": [ASK_CLAUDE_TOOL],
+        "tool_choice": "auto",
+        "max_tokens": 120,
         "temperature": 0.7,
         # MiniMax emits reasoning inside `content`, not `reasoning_content`, so
         # without this the whole think-aloud is spoken. Only M3 honours the flag;
@@ -178,14 +247,24 @@ def front_reply(key: str, prompt: str) -> str | None:
     try:
         with urllib.request.urlopen(req, timeout=FRONT_TIMEOUT) as resp:
             data = json.loads(resp.read())
-        text = (data["choices"][0]["message"].get("content") or "").strip()
+        msg = data["choices"][0]["message"]
+        text = (msg.get("content") or "").strip()
+        called = bool(msg.get("tool_calls"))
     except Exception as e:
-        print(f"  [{key}] front tier unavailable ({e}) — falling through", flush=True)
-        return None
-    # Belt and braces: the flag above is honoured only by some models, and a
-    # leaked think-block is not a cosmetic problem — it gets read aloud.
+        print(f"  [{key}] front tier unavailable ({e}) — deferring to Claude", flush=True)
+        return "", True
+    # Belt and braces: the disable flag is honoured only by some models, and a
+    # leaked think-block is not cosmetic — it gets read aloud.
     text = _THINK.sub("", text).strip()
-    return text or None
+
+    if called:
+        return text, True
+    if looks_factual(prompt):
+        # It chose to answer something it cannot know. Keep the pause-filler if
+        # it produced one, discard any claim, and consult anyway.
+        print(f"  [{key}] front answered a factual question — forcing consult", flush=True)
+        return (text if _HOLDISH.match(text) else ""), True
+    return text, False
 
 
 def remember(key: str, user: str, assistant: str) -> None:
@@ -578,7 +657,7 @@ class ClaudeProcess:
                 self._buf = b""
                 return line
 
-    def ask(self, prompt: str, on_text=None, is_gone=None) -> str:
+    def ask(self, prompt: str, on_text=None, is_gone=None, already_held=False) -> str:
         """Run one turn. `on_text` receives assistant text as it arrives.
 
         The `assistant` event carries the reply BEFORE `result` — measured 6.1s
@@ -596,7 +675,10 @@ class ClaudeProcess:
         seen: list[str] = []
         pending = ""       # partial text not yet handed to on_text
         streamed = False   # did any partial reach on_text this turn?
-        held = False       # did the timer below speak for us?
+        # `already_held` means the front tier has spoken a filler for this turn.
+        # Marking it held both stops us adding a second one and suppresses
+        # Claude's own opening "let me check that" as a duplicate.
+        held = already_held
         first_out = True   # next emitted sentence is the model's first
         gone = False       # listener hung up; abandon as soon as we notice
         tool_seen = False  # Claude reached for a tool, so a real wait is coming
@@ -683,7 +765,7 @@ class ClaudeProcess:
                     speak_holding_line()
                     return
 
-        if on_text and HOLD_AFTER > 0:
+        if on_text and HOLD_AFTER > 0 and not already_held:
             Thread(target=hold_watch, daemon=True).start()
 
         def stop_timer():
@@ -797,13 +879,15 @@ def drop_process(key: str) -> None:
         proc.close()
 
 
-def ask_claude(key: str, system: str, prompt: str, on_text=None, is_gone=None) -> str:
+def ask_claude(key: str, system: str, prompt: str, on_text=None, is_gone=None,
+               already_held=False) -> str:
     """Ask over the persistent process, respawning once if it has died."""
     for attempt in (1, 2):
         proc = get_process(key, system)
         began = time.monotonic()
         try:
-            out = proc.ask(prompt, on_text=on_text, is_gone=is_gone)
+            out = proc.ask(prompt, on_text=on_text, is_gone=is_gone,
+                           already_held=already_held)
             mark_started(key)
             print(f"  [{key}] {time.monotonic() - began:.1f}s, {len(out)} chars", flush=True)
             return out
@@ -1019,19 +1103,6 @@ class Handler(BaseHTTPRequestHandler):
                  or self.headers.get("X-Output-Mode", "").lower() == "voice")
         print(f"-> {'VOICE' if voice else 'TEXT '} [{key}] {prompt[:70]!r}", flush=True)
 
-        # Front tier: pure conversation never reaches Claude Code. Voice only —
-        # a text surface has no latency problem worth a second model.
-        if voice and is_chitchat(prompt):
-            said = front_reply(key, prompt)
-            if said:
-                said = strip_markdown(said)
-                print(f"-> FRONT [{key}] {said[:60]!r}", flush=True)
-                remember(key, prompt, said)
-                return self._stream(said) if req.get("stream") else \
-                    self._json(200, self._completion(said))
-            # None = the front tier failed; fall through to Claude rather than
-            # leave the user talking to silence.
-
         parts = [p for p in (system, MEMORY_DIRECTIVE,
                              VOICE_DIRECTIVE if voice else TEXT_DIRECTIVE) if p]
         mine = next_seq(key)
@@ -1068,6 +1139,43 @@ class Handler(BaseHTTPRequestHandler):
                 # interrupt instead of running on holding the lock.
                 raise ClientGone from None
 
+        # Front tier decides, proxy executes. The front model either answers pure
+        # conversation itself — which never wakes Claude — or asks for the tool
+        # and gives us a pause-filler to speak while Claude works. Voice only: a
+        # text surface has no latency problem worth a second model.
+        pre_spoken = False
+        if voice and FRONT_API_KEY:
+            if FRONT_HEURISTICS and looks_factual(prompt):
+                # No point asking whether this needs Claude — it plainly does,
+                # and the round trip costs ~3s of silence to be told so.
+                # Measured: filler at 3.07s via the model, 0.14s by skipping it.
+                said, want_claude = random.choice(_HOLD_LINES), True
+            else:
+                said, want_claude = front_route(key, prompt)
+            # Models commonly return EITHER content OR tool calls, so asking for
+            # a pause-filler alongside the call gets one only sometimes. Supply
+            # our own when it does not — unless fillers are switched off, in
+            # which case the pause is left bare on purpose.
+            if want_claude and not said and HOLD_AFTER > 0:
+                said = random.choice(_HOLD_LINES)
+            if said and live:
+                try:
+                    writer.chunk(strip_markdown(said) + " ")
+                    pre_spoken = True
+                except (BrokenPipeError, ConnectionResetError):
+                    dead = True
+            if not want_claude:
+                said = strip_markdown(said)
+                print(f"-> FRONT [{key}] {said[:60]!r}", flush=True)
+                remember(key, prompt, said)
+                if live:
+                    writer.finish()
+                    return
+                return self._stream(said) if req.get("stream") else \
+                    self._json(200, self._completion(said))
+            print(f"-> ASK   [{key}] front deferred{' (said filler)' if said else ''}",
+                  flush=True)
+
         # Keepalive for the whole turn, including the wait for the lock: a turn
         # queued behind another can easily exceed the client's 20s read timeout
         # before it even starts.
@@ -1094,7 +1202,8 @@ class Handler(BaseHTTPRequestHandler):
                 answer = ask_claude(
                     key, "\n\n".join(parts), prompt,
                     on_text=on_text if live else None,
-                    is_gone=(lambda: peer_hung_up(self.connection)) if live else None)
+                    is_gone=(lambda: peer_hung_up(self.connection)) if live else None,
+                    already_held=pre_spoken)
         finally:
             stop_keepalive.set()
 
