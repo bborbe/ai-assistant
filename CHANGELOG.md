@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.0.2
 
 - Pace playback and fill the gaps with silence. Writing audio into the stream as
   it arrived underran: a turn speaks a one-second filler, then synthesises
