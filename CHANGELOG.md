@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Consult the front tier only for utterances positively recognised as
+  conversation; send everything else to Claude without asking. Routing was the
+  other way round — anything not matching a list of factual-looking patterns was
+  offered to the front model — and that list had a typo: `\btask\b` cannot match
+  "tasks", because `\b` requires a non-word character and "s" is not one. "Can
+  you list all active tasks?" reached the front tier, which answered with an
+  invented task name, an invented count and an invented due date, spoken as fact.
+  No such task exists.
+
+  Every other layer failed with it: the model did not call the tool, and a
+  confident invention trips neither the hedge nor the leak filter — so a single
+  regex was all that stood between a fabrication and the user. A blocklist must
+  enumerate every way of asking about the user's world and is wrong the moment it
+  misses one; an allowlist is wrong only by being slow, costing a couple of
+  seconds when an unrecognised greeting wakes Claude. Verified: both
+  fabrication-shaped prompts now route to Claude, greetings still do not
+
+- Widen the factual patterns anyway, as defence in depth: plurals throughout,
+  plus "list", "show", "summarise", "remind me", and session/project/ticket
+  vocabulary
+
 - Play audio as it arrives instead of when the response completes. The bot
   accumulated every `response.output_audio.delta` and started playback only on
   `response.output_audio.done` — measured on a live turn: 211 deltas held, then

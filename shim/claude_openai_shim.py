@@ -140,8 +140,19 @@ ASK_CLAUDE_TOOL = {
 _FACTUAL = re.compile(r"""(
       \b(what|which|when|where|who|why|how\s+(many|much|long|often))\b
     | \b(did|do|does|have|has|is|are|was|were)\s+(i|we|you|it|there|my|the)\b
-    | \b(status|task|note|file|vault|repo|repository|deploy|log|transcript
-        |objective|goal|commit|branch|test|error|meeting|calendar|plan)\b
+    # Asking to enumerate something is asking about the user's world by
+    # definition — and it arrives as "can you list…", which matches no
+    # interrogative and no auxiliary above.
+    | \b(list|show|tell\s+me\s+about|summari[sz]e|remind\s+me)\b
+    # PLURALS MATTER: \btask\b cannot match "tasks", because \b needs a
+    # non-word character after "task" and "s" is not one. That single missing
+    # letter let "can you list all active tasks?" reach the front tier, which
+    # answered with an invented task name, an invented count and an invented
+    # due date — spoken as fact. Observed 2026-08-04 17:24.
+    | \b(status(es)?|tasks?|notes?|files?|vaults?|repos?|repositor(y|ies)
+        |deploys?|logs?|transcripts?|objectives?|goals?|commits?
+        |branch(es)?|tests?|errors?|meetings?|calendars?|plans?
+        |sessions?|projects?|tickets?|issues?|prs?|reviews?)\b
     | \b(my|our)\b
 )""", re.I | re.X)
 
@@ -1205,10 +1216,24 @@ class Handler(BaseHTTPRequestHandler):
         # text surface has no latency problem worth a second model.
         pre_spoken = False
         if voice and FRONT_API_KEY:
-            if FRONT_HEURISTICS and looks_factual(prompt):
-                # No point asking whether this needs Claude — it plainly does,
-                # and the round trip costs ~3s of silence to be told so.
-                # Measured: filler at 3.07s via the model, 0.14s by skipping it.
+            # ALLOWLIST, not blocklist. The front tier is consulted only for
+            # utterances positively recognised as conversation; everything else
+            # goes to Claude without asking it.
+            #
+            # It was the other way round — anything not matching a list of
+            # factual-looking patterns was offered to the front model — and that
+            # list had a typo: `\btask\b` does not match "tasks". "Can you list
+            # all active tasks?" reached the front tier, which answered with an
+            # invented task, an invented count and an invented due date, spoken
+            # as fact (2026-08-04 17:24). Every other layer failed too: the model
+            # did not call the tool, and a confident invention trips neither the
+            # hedge nor the leak filter.
+            #
+            # A blocklist has to enumerate every way of asking about the user's
+            # world and is wrong the moment it misses one. An allowlist is wrong
+            # only by being slow: an unrecognised greeting wakes Claude and costs
+            # a couple of seconds. That is the direction to fail in.
+            if FRONT_HEURISTICS and not is_chitchat(prompt):
                 said, want_claude = random.choice(_CHECK_LINES), True
             else:
                 said, want_claude = front_route(key, prompt)
