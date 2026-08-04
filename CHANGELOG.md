@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.1
 
 - Name the Claude Code session in `status`: the key answering this channel, its
   session **id**, whether it is **warm** or **cold**, turn count and age.
