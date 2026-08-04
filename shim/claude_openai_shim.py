@@ -567,6 +567,14 @@ HOLD_MAX = float(os.environ.get("SHIM_HOLD_MAX", "8.0"))
 # is exactly what the filler existed to prevent. Repeating it keeps the turn
 # audibly alive. 0 disables.
 PROGRESS_EVERY = float(os.environ.get("SHIM_PROGRESS_EVERY", "12.0"))
+# Hard cap on how many sentences are SPOKEN. The voice directive asks for two and
+# fresh sessions obey, but a long-running one does not: measured 741 characters,
+# five or six sentences, on a session with hundreds of turns behind it. In-context
+# precedent beats an instruction — the model imitates its own earlier answers,
+# and every long answer makes the next one likelier. A directive cannot win that
+# argument, so it is enforced here instead. 0 disables.
+SPOKEN_MAX = int(os.environ.get("SHIM_SPOKEN_MAX", "2"))
+_MORE_LINE = "There's more if you want it."
 # Two sentences each, for the same reason as _CHECK_LINES: speech-to-speech
 # releases a sentence only once the next has started, so a lone line would wait
 # for the answer and arrive just before it — useless.
@@ -794,6 +802,8 @@ class ClaudeProcess:
         # When the listener last heard anything, filler included. A list so the
         # watcher thread can read a value the request thread updates.
         last_spoken = [time.monotonic()]
+        spoken = 0         # sentences of real answer actually voiced
+        truncated = False  # the "there's more" line has been said once
 
         def mark_spoken():
             last_spoken[0] = time.monotonic()
@@ -819,11 +829,28 @@ class ClaudeProcess:
                 first_out = False
                 return
             first_out = False
+
+            # Past the cap: say so once, then stay quiet. Cutting mid-answer
+            # without acknowledging it sounds like a fault; offering the rest is
+            # what the directive asks for anyway, and the full text is still
+            # returned to the caller and written to the transcript.
+            nonlocal spoken, truncated
+            if SPOKEN_MAX > 0 and spoken >= SPOKEN_MAX:
+                if truncated:
+                    # Still producing, just not voicing it. Count it as speech
+                    # anyway or the progress watcher decides we have gone quiet
+                    # and interjects "still on it" after "there's more if you
+                    # want it" — which sounds like the turn broke.
+                    mark_spoken()
+                    return
+                truncated = True
+                part = _MORE_LINE
             try:
                 on_text(part)
             except ClientGone:
                 gone = True
                 return
+            spoken += 1
             streamed = True
             mark_spoken()
 

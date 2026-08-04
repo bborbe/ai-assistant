@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- Cap how many sentences are spoken, rather than asking for it. The voice
+  directive requests two and fresh sessions obey; a session with hundreds of
+  turns behind it produced 741 characters, five or six sentences. In-context
+  precedent beats an instruction — the model imitates its own earlier answers,
+  and each long one makes the next likelier, so the directive loses ground the
+  longer a session runs. Enforced in the shim instead (`SHIM_SPOKEN_MAX`, 0
+  disables): 741 chars became 178-225. Past the cap it says "there's more if you
+  want it" once and then stays quiet, since cutting off mid-answer with no
+  acknowledgement sounds like a fault. The full text is still returned and
+  written to the transcript
+
+- Count suppressed sentences as speech for the progress watcher. Without it the
+  watcher sees no output while the model is still producing and interjects
+  "still on it" immediately after "there's more if you want it"
+
 ## v0.0.2
 
 - Pace playback and fill the gaps with silence. Writing audio into the stream as
