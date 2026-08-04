@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+- Record arrivals and departures in the transcript, from a `voiceStateUpdate`
+  handler that did not exist before. Speech alone cannot tell a reader who was
+  present, so a gap in someone's contributions was ambiguous between "said
+  nothing" and "was not there" — and an SSRC change left no trace at all, which
+  made rejoin behaviour effectively untestable. It is now visible in the file:
+  `(left the channel)` / `(joined the channel)` between the speech.
+
+  That instrumentation immediately settled a real question. Predicted defect:
+  `listen()` early-returns on `subscribed.has(userId)` and nothing clears that
+  set, so a rejoining user should never be re-subscribed and their audio should
+  vanish. Measured 2026-08-04 — audio survives, with no re-subscribe, because
+  `@discordjs/voice` keys `receiver.subscribe()` by user id rather than SSRC and
+  re-attaches on return. The prepared fix was deliberately withheld until after
+  the test; applying it first would have made the bug disappear for the wrong
+  reason and left the behaviour unrecorded
+
+- Refresh display names on arrival. They were resolved once at join, so anyone
+  entering later was written into the transcript as a raw user id
+
+- Mark typed lines `(typed)` in the transcript. The two have different
+  reliability — a spoken line is STT output and can be wrong (real speech once
+  became "when they have something that's the young job"), a typed line is
+  exact. A reader deciding whether to act on a pasted path or URL needs to know
+  which one it is holding
+
 ## v0.0.4
 
 - Tell the assistant that the transcript exists, and where. Capturing typed

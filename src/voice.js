@@ -502,9 +502,41 @@ async function evictGhost(guild) {
  * there belongs in the same record as the speech — that is what lets someone
  * paste a link and then ask about it out loud.
  */
+/**
+ * Record arrivals and departures in the transcript.
+ *
+ * Two reasons beyond tidiness. A reader — human or the assistant — cannot tell
+ * from speech alone who was present, so a gap in someone's contributions is
+ * ambiguous between "said nothing" and "was not there". And it makes SSRC churn
+ * self-evidencing: a rejoin appears in the record, so whether audio survived it
+ * is visible in the file rather than only in a debug log.
+ *
+ * Also the moment to refresh display names. They are resolved once at join
+ * (see `join` below), so anyone arriving later was previously written down as a
+ * raw user id.
+ */
+function noteVoiceState(oldState, newState) {
+  const guildId = newState.guild?.id ?? oldState.guild?.id;
+  const session = guildId ? sessions.get(guildId) : null;
+  if (!session?.transcript) return;
+
+  const here = session.channelId;
+  const was = oldState.channelId === here;
+  const is = newState.channelId === here;
+  if (was === is) return; // mute/deafen/camera — not an arrival or departure
+
+  const member = newState.member ?? oldState.member;
+  const userId = member?.id ?? newState.id ?? oldState.id;
+  const name = member?.displayName ?? member?.user?.username ?? userId;
+  if (userId && name) session.names.set(userId, name);
+
+  session.transcript.writeText(name, is ? '(joined the channel)' : '(left the channel)');
+  log.info(`voice: ${is ? 'joined' : 'left'}`, { user: name });
+}
+
 function transcriptFor(guildId, channelId) {
   const s = guildId ? sessions.get(guildId) : null;
   return s && s.channelId === channelId ? s.transcript : null;
 }
 
-module.exports = { join, leave, evictGhost, sessions, transcriptFor };
+module.exports = { join, leave, evictGhost, sessions, transcriptFor, noteVoiceState };

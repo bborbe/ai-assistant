@@ -134,7 +134,15 @@ function register(client) {
     if (!msg.author.bot && msg.content) {
       const transcript = voice.transcriptFor(msg.guild?.id, msg.channel?.id);
       if (transcript) {
-        transcript.writeText(msg.member?.displayName ?? msg.author.username, msg.content);
+        // Marked, because the two have different reliability: a spoken line is
+        // STT output and can be wrong — real speech once became "when they have
+        // something that's the young job" — while a typed line is exact. A
+        // reader deciding whether to act on a pasted path or URL needs to know
+        // which it is holding.
+        transcript.writeText(
+          msg.member?.displayName ?? msg.author.username,
+          `(typed) ${msg.content}`,
+        );
         log.debug('transcript: text captured', { author: msg.author.tag });
       }
     }

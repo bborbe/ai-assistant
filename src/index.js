@@ -99,6 +99,16 @@ client.on('shardReady', () => {
   gatewayReady = true;
 });
 
+// Arrivals and departures go into the transcript, and display names are
+// refreshed as people arrive — they are otherwise resolved only at join time.
+client.on('voiceStateUpdate', (oldState, newState) => {
+  try {
+    voice.noteVoiceState(oldState, newState);
+  } catch (e) {
+    log.warn('voice state note failed', { error: e.message });
+  }
+});
+
 client.on('interactionCreate', async (i) => {
   // Logged before any filtering: when a slash command hangs on "Sending
   // command…", the only question that matters is whether it reached this
