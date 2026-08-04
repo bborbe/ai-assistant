@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Add a health check reachable as `/status` AND as a typed `status`. Each leg is
+  probed live — the endpoint answers, speech-to-speech accepts a connection, the
+  transcript directory is writable, which voice channels are held, gateway ping —
+  because "configured at :8080" is a different claim from "answers at :8080", and
+  only the second is worth reading when something is broken. The slash form
+  defers first, since the probes can outlast the 3s interaction deadline exactly
+  when one of them is the thing that is down
+
+- Accept `join` and `leave` as typed messages, not only slash commands. Slash
+  commands arrive as INTERACTIONS, a different Discord subsystem from messages:
+  during an API outage on 2026-08-04 the gateway stayed up and messages flowed
+  normally while every interaction was silently dropped, leaving no way to start
+  voice at all. A diagnostic or a control that shares a transport with the thing
+  it controls is unavailable exactly when it is needed. Only the bare word
+  triggers, so "join the meeting notes" is still a question for Claude
+
+- Log every interaction and message before any filtering. When a command hangs,
+  the only question that matters first is whether it reached the process — and
+  an event that was filtered out is indistinguishable from one that never
+  arrived. That distinction is what identified the outage as external
+
 - Survive an undecryptable voice packet. "Failed to decrypt:
   DecryptionFailed(UnencryptedWhenPassthroughDisabled)" reached the
   `uncaughtException` handler and exited the process mid-conversation — the call

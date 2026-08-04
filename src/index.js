@@ -42,6 +42,9 @@ const commands = [
   new SlashCommandBuilder()
     .setName('leave')
     .setDescription('Stop listening and leave the voice channel'),
+  new SlashCommandBuilder()
+    .setName('status')
+    .setDescription('Health of the bot, endpoint, speech-to-speech and transcripts'),
 ].map((c) => c.toJSON());
 
 const client = new Client({
@@ -97,11 +100,29 @@ client.on('shardReady', () => {
 });
 
 client.on('interactionCreate', async (i) => {
+  // Logged before any filtering: when a slash command hangs on "Sending
+  // command…", the only question that matters is whether it reached this
+  // process at all. Silence here means Discord never delivered it, and no
+  // amount of reading the handler will show that.
+  log.info('interaction received', {
+    type: i.type,
+    command: i.commandName ?? null,
+    user: i.user?.tag ?? null,
+  });
   if (!i.isChatInputCommand()) return;
 
   if (!config.isAllowed(i.user.id)) {
     log.warn('slash command dropped', { command: i.commandName, user: i.user.tag, id: i.user.id });
     return i.reply({ content: 'Not authorised.', flags: MessageFlags.Ephemeral });
+  }
+
+  if (i.commandName === 'status') {
+    // Deferred: the checks open sockets to the shim and to speech-to-speech,
+    // which can exceed the 3s interaction deadline when one of them is exactly
+    // the thing that is broken.
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    const { report } = require('./status');
+    return i.editReply(await report(client));
   }
 
   if (i.commandName === 'join') {

@@ -30,6 +30,51 @@ async function history(channel, botId) {
     .map((m) => ({ role: m.author.id === botId ? 'assistant' : 'user', content: m.content }));
 }
 
+/**
+ * Which voice channel is this user in, anywhere the bot can see?
+ *
+ * A DM carries no guild, so `msg.member` is null and the voice state has to be
+ * looked up across guilds. The cache is usually warm from GuildVoiceStates;
+ * the fetch is the fallback for a member the bot has not seen speak yet.
+ */
+async function voiceChannelOf(client, userId) {
+  for (const [, guild] of client.guilds.cache) {
+    const member =
+      guild.members.cache.get(userId) ?? (await guild.members.fetch(userId).catch(() => null));
+    if (member?.voice?.channel) return member.voice.channel;
+  }
+  return null;
+}
+
+/** `join` / `leave` typed as a message — same effect as the slash command. */
+async function handleVoiceCommand(msg, client, cmd) {
+  const voice = require('./voice');
+  if (cmd === 'leave') {
+    const guildId = msg.guild?.id ?? [...client.guilds.cache.keys()][0];
+    const left = guildId ? voice.leave(guildId) : false;
+    log.info('voice command via text', { cmd, ok: left });
+    return msg.reply(left ? 'Left the voice channel.' : 'I am not in a voice channel.');
+  }
+
+  const channel = msg.member?.voice?.channel ?? (await voiceChannelOf(client, msg.author.id));
+  if (!channel) {
+    return msg.reply('Join a voice channel first, then say join.');
+  }
+  try {
+    const session = await voice.join(channel);
+    log.info('voice command via text', { cmd, channel: channel.name });
+    await msg.reply(`Listening in ${channel.name}.`);
+    if (session?.transcript && config.announceTranscription) {
+      await channel
+        .send(`🎙️ Transcribing **${channel.name}** — every speaker is written down.`)
+        .catch(() => {});
+    }
+  } catch (e) {
+    log.error('voice join via text failed', { error: e.message });
+    await msg.reply(`Could not join: ${e.message}`);
+  }
+}
+
 /** A thread this bot started — messages in it are turns, no mention needed. */
 function isOwnThread(channel, botId) {
   return Boolean(channel?.isThread?.() && channel.ownerId === botId);
@@ -67,6 +112,15 @@ async function conversationChannel(msg, botId) {
 
 function register(client) {
   client.on('messageCreate', async (msg) => {
+    // Logged before any filtering, as a liveness probe for the gateway itself:
+    // when slash commands hang with nothing arriving, the question is whether
+    // ANY event is being delivered or only interactions are broken. Without
+    // this, a message that gets filtered out looks identical to a dead socket.
+    log.debug('message seen', {
+      dm: !msg.guild,
+      author: msg.author?.tag ?? null,
+      bot: Boolean(msg.author?.bot),
+    });
     if (msg.author.bot) return;
 
     // Answer DMs, mentions in a guild, and anything inside a thread we opened.
@@ -83,6 +137,23 @@ function register(client) {
     const content = msg.content.replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '').trim();
     if (!content) return;
     log.info('text in', { user: msg.author.tag, content: content.slice(0, 80) });
+
+    // Voice control over text as well as slash commands. Slash commands are
+    // delivered as INTERACTIONS, a separate Discord subsystem from messages —
+    // during an API outage on 2026-08-04 the gateway stayed up and messages flowed
+    // normally while every interaction was silently dropped, so `/join` hung with
+    // no way to start voice at all. Two transports for the same action removes
+    // that single point of failure, and typing "join" is no worse than the slash
+    // command anyway.
+    const cmd = content.match(/^\/?\s*(join|leave|status|selfcheck)\s*$/i);
+    if (cmd) {
+      const name = cmd[1].toLowerCase();
+      if (name === 'status' || name === 'selfcheck') {
+        const { report } = require('./status');
+        return msg.reply(await report(client));
+      }
+      return handleVoiceCommand(msg, client, name);
+    }
 
     let target = msg.channel;
     try {
