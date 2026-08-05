@@ -49,12 +49,86 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Event, Lock, Thread
 
-HOST = os.environ.get("SHIM_HOST", "127.0.0.1")
-PORT = int(os.environ.get("SHIM_PORT", "8080"))
-MODEL = os.environ.get("SHIM_MODEL", "claude-code")
-CWD = os.environ.get("SHIM_CWD", str(Path.home() / "Documents/Obsidian/Personal"))
-MCP_CONFIG = os.environ.get("SHIM_MCP_CONFIG", str(Path.home() / ".claude/mcp-obsidian-personal.json"))
-TIMEOUT = int(os.environ.get("SHIM_TIMEOUT", "300"))
+# ── configuration ──────────────────────────────────────────────────────────
+# One flat config for one instance. Deliberately NOT multi-profile: two
+# configurations means two deployments, which k8s already expresses better than
+# a profile key would, and a single active profile is the only thing this
+# process could ever use anyway.
+#
+# Precedence is env > file > default, in that order. Environment last-word is
+# what keeps this k8s-native — a ConfigMap or a plain `SHIM_*` var still wins,
+# and an instance with no config file behaves exactly as before.
+#
+# Secrets are named, never carried: `front.api_key_id` is a TeamVault key id,
+# resolved by the launcher into `SHIM_FRONT_API_KEY`. This file is not
+# gitignored the way `local.env` is, so it must stay safe to read.
+CONFIG_FILE = Path(os.environ.get(
+    "DISCORD_ASSISTANT_CONFIG", Path.home() / ".config/discord-assistant/config.yaml"))
+
+
+def _load_config() -> dict:
+    if not CONFIG_FILE.exists():
+        return {}
+    try:
+        import yaml
+    except ImportError:
+        print(f"  config: {CONFIG_FILE} present but PyYAML is not installed — ignoring", flush=True)
+        return {}
+    try:
+        return yaml.safe_load(CONFIG_FILE.read_text()) or {}
+    except Exception as e:
+        # Loud but not fatal: a typo in the config must not take the endpoint
+        # down, and every value has a working default behind it.
+        print(f"  config: {CONFIG_FILE} unreadable ({e}) — using defaults", flush=True)
+        return {}
+
+
+_CFG = _load_config()
+
+
+def setting(env: str, path: str, default):
+    """One value, resolved env > config file > default.
+
+    `path` is dotted (`front.model`). Types follow the default: an int default
+    parses an int, so config and env agree rather than one yielding a string.
+    """
+    raw = os.environ.get(env)
+    if raw is None:
+        node = _CFG
+        for part in path.split("."):
+            node = node.get(part) if isinstance(node, dict) else None
+            if node is None:
+                break
+        raw = node
+    if raw is None:
+        return default
+    if isinstance(default, bool):
+        return str(raw).strip().lower() not in ("0", "false", "no", "")
+    if isinstance(default, int) and not isinstance(default, bool):
+        return int(raw)
+    if isinstance(default, float):
+        return float(raw)
+    return str(raw)
+
+
+def _expand(p: str) -> str:
+    return str(Path(p).expanduser())
+
+
+HOST = setting("SHIM_HOST", "host", "127.0.0.1")
+PORT = setting("SHIM_PORT", "port", 8080)
+MODEL = setting("SHIM_MODEL", "model", "claude-code")
+CWD = _expand(setting("SHIM_CWD", "cwd", str(Path.home() / "Documents/Obsidian/Personal")))
+MCP_CONFIG = _expand(setting(
+    "SHIM_MCP_CONFIG", "mcp_config", str(Path.home() / ".claude/mcp-obsidian-personal.json")))
+# The launcher that starts Claude, e.g. ~/Documents/workspaces/scripts/cc-personal.
+# Naming a script rather than restating its flags is the point: the wrapper
+# already pins the router, model, effort and --add-dir set that every other
+# entry point uses, and a second copy of that list here drifts from it silently.
+# vault-cli solves the same problem the same way, with `claude_script` per vault.
+_script = setting("SHIM_CLAUDE_SCRIPT", "claude_script", "").strip()
+CLAUDE_SCRIPT = _expand(_script) if _script else ""
+TIMEOUT = setting("SHIM_TIMEOUT", "timeout", 300)
 # Which model Claude Code itself runs. Distinct from SHIM_MODEL above, which is
 # only the name advertised to OpenAI clients. Empty = the CLI's own default.
 #
@@ -62,7 +136,7 @@ TIMEOUT = int(os.environ.get("SHIM_TIMEOUT", "300"))
 # (measured 2026-08-03), and most spoken requests are retrieval or commands
 # rather than reasoning, so a smaller model shortens the answer itself — unlike
 # an acknowledgement tier, which only shortens the silence before it.
-CLAUDE_MODEL = os.environ.get("SHIM_CLAUDE_MODEL", "").strip()
+CLAUDE_MODEL = setting("SHIM_CLAUDE_MODEL", "claude_model", "").strip()
 
 # Blast radius. Anyone on the Discord allowlist reaches this session, so the
 # tool set is bounded rather than left at "whatever Claude Code can do".
@@ -82,9 +156,10 @@ DEFAULT_ALLOWED_TOOLS = ",".join([
     "mcp__semantic-search__search_related",
     "mcp__semantic-search__check_duplicates",
 ])
-ALLOWED_TOOLS = os.environ.get("SHIM_ALLOWED_TOOLS", DEFAULT_ALLOWED_TOOLS)
-UNSAFE = os.environ.get("SHIM_UNSAFE") == "1"
-SESSIONS_FILE = Path(os.environ.get("SHIM_SESSIONS_FILE", Path.home() / ".claude/shim-sessions.json"))
+ALLOWED_TOOLS = setting("SHIM_ALLOWED_TOOLS", "allowed_tools", DEFAULT_ALLOWED_TOOLS)
+UNSAFE = setting("SHIM_UNSAFE", "unsafe", False)
+SESSIONS_FILE = Path(_expand(setting(
+    "SHIM_SESSIONS_FILE", "sessions_file", str(Path.home() / ".claude/shim-sessions.json"))))
 DEFAULT_KEY = "default"
 
 # ── front tier ─────────────────────────────────────────────────────────────
@@ -101,16 +176,16 @@ DEFAULT_KEY = "default"
 #
 # Disabled unless a key is present, so a missing credential degrades to today's
 # behaviour rather than breaking voice.
-FRONT_BASE_URL = os.environ.get("SHIM_FRONT_BASE_URL", "https://api.minimax.io/v1").rstrip("/")
-FRONT_MODEL = os.environ.get("SHIM_FRONT_MODEL", "MiniMax-M3")
+FRONT_BASE_URL = setting("SHIM_FRONT_BASE_URL", "front.base_url", "https://api.minimax.io/v1").rstrip("/")
+FRONT_MODEL = setting("SHIM_FRONT_MODEL", "front.model", "MiniMax-M3")
 FRONT_API_KEY = os.environ.get("SHIM_FRONT_API_KEY", "").strip()
-FRONT_TIMEOUT = float(os.environ.get("SHIM_FRONT_TIMEOUT", "4.0"))
-FRONT_HISTORY = int(os.environ.get("SHIM_FRONT_HISTORY", "8"))
+FRONT_TIMEOUT = setting("SHIM_FRONT_TIMEOUT", "front.timeout", 4.0)
+FRONT_HISTORY = setting("SHIM_FRONT_HISTORY", "front.history", 8)
 # The hand-written whitelist and factual backstop below are a bet that pattern
 # matching routes better than the model does. SHIM_FRONT_HEURISTICS=0 takes them
 # out of the path so the front model decides every turn on its own — slower, but
 # it is the honest baseline the heuristics have to beat.
-FRONT_HEURISTICS = os.environ.get("SHIM_FRONT_HEURISTICS", "1") != "0"
+FRONT_HEURISTICS = setting("SHIM_FRONT_HEURISTICS", "front.heuristics", True)
 
 ASK_CLAUDE_TOOL = {
     "type": "function",
@@ -521,7 +596,7 @@ def reset_session(key: str) -> str:
 # captured correctly, then "can you check the file I posted in the chat?" was
 # answered "I can't see it", because nothing had ever mentioned the file that
 # contained it.
-TRANSCRIPT_DIR = os.environ.get("SHIM_TRANSCRIPT_DIR", "").strip()
+TRANSCRIPT_DIR = setting("SHIM_TRANSCRIPT_DIR", "transcript_dir", "").strip()
 
 TRANSCRIPT_DIRECTIVE = (
     f"A live transcript of this call is written to {TRANSCRIPT_DIR}, one folder "
@@ -651,25 +726,25 @@ SENTENCE_MAX = 200
 # already arriving at ~2.4s. Once a tool is running the answer is provably many
 # seconds away, so there is nothing left to interrupt and the delay was pure
 # cost: it was the largest single slice of the ~4s before the user heard anything.
-HOLD_AFTER = float(os.environ.get("SHIM_HOLD_AFTER", "0.5"))
+HOLD_AFTER = setting("SHIM_HOLD_AFTER", "voice.hold_after", 0.5)
 # Well inside speech-to-speech's 20s read timeout, and cheap: an empty SSE delta
 # is a few dozen bytes and produces no speech.
-KEEPALIVE_EVERY = float(os.environ.get("SHIM_KEEPALIVE_EVERY", "8.0"))
+KEEPALIVE_EVERY = setting("SHIM_KEEPALIVE_EVERY", "voice.keepalive_every", 8.0)
 # Fallback for a turn that is slow WITHOUT using tools. Rare, so the threshold is
 # generous: better to say nothing than to interject into an answer that is coming.
-HOLD_MAX = float(os.environ.get("SHIM_HOLD_MAX", "8.0"))
+HOLD_MAX = setting("SHIM_HOLD_MAX", "voice.hold_max", 8.0)
 # One filler covers a 6-15s turn. A vault question can take 30s — measured at
 # 30.4s live — and past about ten seconds silence reads as failure again, which
 # is exactly what the filler existed to prevent. Repeating it keeps the turn
 # audibly alive. 0 disables.
-PROGRESS_EVERY = float(os.environ.get("SHIM_PROGRESS_EVERY", "12.0"))
+PROGRESS_EVERY = setting("SHIM_PROGRESS_EVERY", "voice.progress_every", 12.0)
 # Hard cap on how many sentences are SPOKEN. The voice directive asks for two and
 # fresh sessions obey, but a long-running one does not: measured 741 characters,
 # five or six sentences, on a session with hundreds of turns behind it. In-context
 # precedent beats an instruction — the model imitates its own earlier answers,
 # and every long answer makes the next one likelier. A directive cannot win that
 # argument, so it is enforced here instead. 0 disables.
-SPOKEN_MAX = int(os.environ.get("SHIM_SPOKEN_MAX", "2"))
+SPOKEN_MAX = setting("SHIM_SPOKEN_MAX", "voice.spoken_max", 2)
 _MORE_LINE = "There's more if you want it."
 # Two sentences each, for the same reason as _CHECK_LINES: speech-to-speech
 # releases a sentence only once the next has started, so a lone line would wait
@@ -797,15 +872,25 @@ class ClientGone(Exception):
 
 class ClaudeProcess:
     def __init__(self, key: str, session_id: str, resume: bool, system: str):
-        cmd = ["claude", "-p",
+        # A launcher, when configured, OWNS the environment flags: model,
+        # effort, router base URL, --add-dir set, MCP config. Restating them
+        # here is how the bot's Claude silently drifted from the desk's —
+        # different model, no --add-dir, so a session resumed through `switch`
+        # lost capabilities its own history showed it once had.
+        cmd = ([CLAUDE_SCRIPT] if CLAUDE_SCRIPT else ["claude"]) + [
+               "-p",
                "--input-format", "stream-json", "--output-format", "stream-json",
                # Without this, only COMPLETE assistant events arrive, so there is
                # nothing to stream and the whole reply lands at once — measured
                # first-token == total == 5.5s on a warm process. With it, text
                # arrives token-by-token and TTS can start on the first sentence.
                "--include-partial-messages",
-               "--verbose", "--permission-mode", "auto",
-               "--mcp-config", MCP_CONFIG, "--strict-mcp-config"]
+               "--verbose", "--permission-mode", "auto"]
+        # Only assert the MCP set when nothing else is: a launcher passes its
+        # own --mcp-config, and while the CLI tolerates the flag twice, which
+        # copy wins is not something to depend on.
+        if not CLAUDE_SCRIPT:
+            cmd += ["--mcp-config", MCP_CONFIG, "--strict-mcp-config"]
         if CLAUDE_MODEL:
             cmd += ["--model", CLAUDE_MODEL]
         if not UNSAFE:
@@ -1638,4 +1723,6 @@ if __name__ == "__main__":
     print(f"  sessions {len(existing)} known ({SESSIONS_FILE})")
     print(f"  tools    {'UNRESTRICTED (SHIM_UNSAFE=1)' if UNSAFE else str(ALLOWED_TOOLS.count(',') + 1) + ' allowed'}")
     print(f"  cwd      {CWD}")
+    print(f"  claude   {CLAUDE_SCRIPT or 'claude (bare — no launcher configured)'}")
+    print(f"  config   {CONFIG_FILE if _CFG else str(CONFIG_FILE) + ' (absent, using env + defaults)'}")
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

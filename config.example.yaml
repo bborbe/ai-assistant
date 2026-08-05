@@ -1,0 +1,64 @@
+# discord-assistant — endpoint configuration
+#
+# Copy to ~/.config/discord-assistant/config.yaml, or point
+# DISCORD_ASSISTANT_CONFIG somewhere else. Every value is optional; with no file
+# at all the shim runs exactly as it did before this existed.
+#
+# Precedence: environment > this file > default. Environment wins last so a k8s
+# ConfigMap, a `SHIM_*` var or a one-off `SHIM_SPOKEN_MAX=0 make shim` still
+# overrides the file without editing it.
+#
+# ONE INSTANCE, ONE CONFIG — deliberately no profiles. Two configurations means
+# two deployments, which is what k8s is for, and only one profile could ever be
+# active in a single process anyway.
+#
+# NO SECRETS HERE. Unlike local.env this file is not gitignored. Reference
+# TeamVault key *ids*; the launcher resolves them into the environment.
+
+# ── which Claude ───────────────────────────────────────────────────────────
+# The launcher that starts Claude. Naming a script beats restating its flags:
+# the wrapper already pins the router, model, effort and --add-dir set that
+# every other entry point uses, and a second copy of that list drifts from it
+# silently. Left unset, a bare `claude` is spawned — which cannot see anything
+# outside `cwd`.
+#
+# ⚠️ A launcher's --add-dir set becomes readable by everyone on the Discord
+# allowlist. cc-personal adds ~/Documents/workspaces — every repo on the
+# machine. Widen this deliberately, not by default.
+# claude_script: ~/Documents/workspaces/scripts/cc-personal
+
+cwd: ~/Documents/Obsidian/Personal
+# mcp_config is ignored when claude_script is set — the launcher passes its own.
+mcp_config: ~/.claude/mcp-obsidian-personal.json
+sessions_file: ~/.claude/shim-sessions.json
+# claude_model: ""          # empty = whatever the launcher or CLI defaults to
+# unsafe: false             # true removes the tool allowlist entirely
+# allowed_tools: Read,Edit,Write,Glob,Grep,Bash(vault-cli:*),...
+
+# Told to the assistant so it knows the call is being written down, and where.
+transcript_dir: ~/Documents/Obsidian/Personal/60 Periodic Notes/Transcripts
+
+# ── serving ────────────────────────────────────────────────────────────────
+host: 127.0.0.1
+port: 8080
+model: claude-code # the name echoed back in OpenAI responses
+timeout: 300
+
+# ── fast front tier ────────────────────────────────────────────────────────
+# Answers conversation directly; defers anything else to Claude Code, which
+# costs ~3.4s per turn before its model starts.
+front:
+  base_url: https://api.minimax.io/v1
+  model: MiniMax-M3 # only M3 can disable reasoning; M2.x leak <think>
+  # api_key_id: XXXXXX      # TeamVault key id — the launcher exports the value
+  timeout: 4.0
+  history: 8
+  heuristics: true
+
+# ── voice pacing ───────────────────────────────────────────────────────────
+voice:
+  spoken_max: 2 # sentences spoken before "there's more if you want it"; 0 = uncapped
+  hold_after: 0.5 # silence before a holding line
+  hold_max: 8.0
+  progress_every: 12.0
+  keepalive_every: 8.0 # must stay under speech-to-speech's 20s read timeout

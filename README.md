@@ -23,9 +23,10 @@ Both surfaces work, verified end to end against a real Claude Code session:
 - **Text** — DM, or `@mention` in a guild channel. A mention opens a **thread** and the conversation continues there, so follow-ups need no `@` and history stays scoped to the thread rather than to whatever else the channel was discussing. DMs stay flat — Discord has no threads in DMs.
 - **Voice** — `/join` from a voice channel, talk, hear the reply. Barge-in supported.
 - **Sender allowlist** on both surfaces, failing closed.
-- **One conversation per surface** — each thread, DM and channel keeps its own Claude Code session; voice keeps a single one of its own. Voice and text do _not_ share a conversation — see [Sessions](#sessions).
+- **One conversation per surface** — each thread, DM and channel keeps its own Claude Code session. A voice channel is a single conversation covering both what is spoken and what is typed in its chat; a DM is a different one. See [Sessions](#sessions).
+- **Session control** — `new`, `sessions`, `switch <id>`: start fresh, see what is bound where, or pick up a session started at the desk.
 
-Not built yet: proactive outbound (the bot speaking unprompted, e.g. reporting a finished job), a session reset policy, and Telegram as a second transport.
+Not built yet: proactive outbound (the bot speaking unprompted, e.g. reporting a finished job), automatic session expiry, and Telegram as a second transport.
 
 ## Requirements
 
@@ -70,6 +71,24 @@ There is **no committed env file** on purpose. Make variables override the envir
 ## The shim — Claude Code behind an OpenAI endpoint
 
 `shim/claude_openai_shim.py` exposes **persistent, keyed Claude Code sessions** as `/v1/chat/completions` — one per conversation, so a turn continues where that conversation left off instead of starting cold.
+
+### Configuring it
+
+Optional YAML at `~/.config/discord-assistant/config.yaml` (`DISCORD_ASSISTANT_CONFIG` to move it) — see `config.example.yaml`. Precedence is **environment > file > default**, so a k8s ConfigMap or a one-off `SHIM_*` var still wins and an instance with no file behaves as it always did.
+
+One instance, one config — no profiles. Two configurations means two deployments, which is what k8s is for. **No secrets**: this file is not gitignored, so it names TeamVault key _ids_ and the launcher resolves them.
+
+The setting worth knowing is `claude_script`:
+
+```yaml
+claude_script: ~/Documents/workspaces/scripts/cc-personal
+```
+
+Without it the shim spawns a bare `claude`, which sees nothing outside `cwd` — so the bot could read the vault and nothing else, while a desk session launched by the same wrapper could read every repo. That gap is invisible until `switch` picks up a desk session and it can no longer open a file its own history shows it reading. Naming the launcher instead of restating its flags is how `vault-cli` avoids the same drift.
+
+⚠️ It widens blast radius on purpose: the launcher's `--add-dir` set becomes readable by everyone on the Discord allowlist, and `cc-personal` adds `~/Documents/workspaces`. Unset by default.
+
+### The contract
 
 It is OpenAI-**shaped but stateful**, a deliberate deviation:
 

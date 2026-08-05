@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+- Configure the endpoint from a file, and let it launch Claude the way
+  everything else does. `~/.config/discord-assistant/config.yaml` (optional,
+  `config.example.yaml` documents it) resolves **environment > file > default**,
+  so a k8s ConfigMap or a one-off `SHIM_*` var still wins and an instance with
+  no file behaves exactly as before. Single flat config, no profiles: two
+  configurations means two deployments.
+
+  The setting that matters is `claude_script`. The shim spawned a bare `claude`
+  with its own flag list while every other entry point goes through a wrapper
+  (`cc-personal`), so the bot's Claude quietly had no `--add-dir`, no router,
+  no model or effort pinning — it could read the vault and nothing else. That
+  gap is invisible until `switch` picks up a desk session and it can no longer
+  open a file its own history shows it reading. Naming the launcher rather than
+  restating its flags is how `vault-cli` avoids the same drift, via
+  `claude_script` per vault.
+
+  Verified: through the launcher the endpoint read a file under
+  `~/Documents/workspaces` that the bare spawn had no access to. Left unset by
+  default on purpose — a launcher's `--add-dir` set becomes readable by everyone
+  on the Discord allowlist, and `cc-personal` adds every repo on the machine.
+
+  `SHIM_FRONT_API_KEY` stays environment-only. The config file is not gitignored
+  the way `local.env` is, so it names TeamVault key ids and never values.
+
 ## v0.3.2
 
 - Accept a session-id **prefix** in `switch`, check the shape first, and stop
