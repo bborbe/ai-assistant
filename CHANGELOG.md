@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.4.0
+## Unreleased
 
 - Survive a gateway network fault instead of dying of it, and restart if the
   process does die. On 2026-08-05 the laptop slept; "Opening handshake has timed
@@ -20,6 +20,8 @@
   `scripts/supervise.sh` restarts the bot on exit with exponential backoff,
   giving up on exit 2 (bad config, which restarting cannot fix) and on a clean
   exit. It is the local stand-in for what a k8s Deployment does for free.
+
+## v0.4.0
 
 - Configure the endpoint from a file, and let it launch Claude the way
   everything else does. `~/.config/discord-assistant/config.yaml` (optional,
