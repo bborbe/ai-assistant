@@ -29,6 +29,20 @@ const IN_BYTES = (DISCORD_RATE * DISCORD_CH * 2 * TICK_MS) / 1000; // 20ms @48k 
 const OUT_SAMPLES = (S2S_RATE * TICK_MS) / 1000; // 20ms @16k mono
 // One 20ms frame of what Discord plays back: 48k, stereo, 16-bit.
 const OUT_FRAME = (DISCORD_RATE * DISCORD_CH * 2 * TICK_MS) / 1000;
+
+/**
+ * A sentence ending welded to the next sentence's capital: `long.No`.
+ *
+ * Seen once in a real transcript — a holding line and an answer with nothing
+ * between them. Every layer we can inspect preserves the space (the endpoint
+ * ends each SSE chunk with one, speech-to-speech joins sentence batches with
+ * one), so the next occurrence has to be caught in flight rather than
+ * reconstructed afterwards.
+ *
+ * Requiring an uppercase letter keeps abbreviations, decimals and URLs out —
+ * `e.g`, `3.5` and `example.com` do not match.
+ */
+const RUN_ON = /[.!?][A-Z]/;
 const SILENCE = Buffer.alloc(OUT_FRAME);
 
 // 48k stereo -> 16k mono. Mix channels first, then average groups of 3 (box
@@ -297,8 +311,26 @@ class Session {
       case 'response.output_audio.delta':
         if (e.delta) this.pushAudio(Buffer.from(e.delta, 'base64'));
         break;
+      // Deltas are logged only to settle where a missing separator comes from.
+      // A transcript once read "Won't be long.No — I didn't send anything
+      // anywhere": a holding line and an answer with nothing between them. The
+      // endpoint demonstrably ends every SSE chunk with a trailing space, and
+      // speech-to-speech joins sentence batches with a space, so the loss is
+      // somewhere between — and unquoted logging cannot show it, because the
+      // whole question is whitespace.
+      case 'response.output_audio_transcript.delta':
+        if (e.delta) log.debug('  voice BOT delta', { raw: JSON.stringify(e.delta) });
+        break;
       case 'response.output_audio_transcript.done':
         if (e.transcript) {
+          // Fires only on the defect, so it costs nothing until it happens and
+          // needs no log level raised to catch it — the failure is rare, comes
+          // from a live call, and is invisible in unquoted output.
+          if (RUN_ON.test(e.transcript)) {
+            log.warn('transcript run-on: sentence end with no separator', {
+              raw: JSON.stringify(e.transcript.slice(0, 200)),
+            });
+          }
           log.info(`  voice BOT: ${e.transcript}`);
           // The bot's own speech never returns through Discord, so without this
           // the transcript is one-sided: questions with no answers.

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Catch the transcript run-on in flight instead of reconstructing it afterwards.
+  A holding line and an answer once arrived welded together, a full stop
+  immediately followed by the next capital, and every layer that can be
+  inspected preserves the space:
+  the endpoint ends each SSE chunk with one (verified on a live turn), and
+  speech-to-speech strips each sentence and joins batches with one. So the
+  defect is now detected where it lands: a sentence end followed directly by a
+  capital logs a warning with the raw text quoted.
+
+  Warning rather than debug on purpose. It fires only on the defect, so it costs
+  nothing until it happens, and needs no log level raised to catch something
+  that only occurs on a live call. Requiring a capital keeps `e.g`, `3.5` and
+  `example.com` out; checked against both.
+
 - Stop losing a transcript line when two are written in the same millisecond.
   The segment name was `${Date.now()}-<speaker>-000000`, so a second write
   inside one millisecond produced the same filename and `writeFileSync`
