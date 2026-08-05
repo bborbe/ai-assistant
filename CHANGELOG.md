@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.0
 
 - Configure the endpoint from a file, and let it launch Claude the way
   everything else does. `~/.config/discord-assistant/config.yaml` (optional,
