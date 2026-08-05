@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.1
 
 - Survive a gateway network fault instead of dying of it, and restart if the
   process does die. On 2026-08-05 the laptop slept; "Opening handshake has timed
