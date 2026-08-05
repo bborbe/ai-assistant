@@ -2,6 +2,25 @@
 
 ## v0.4.0
 
+- Survive a gateway network fault instead of dying of it, and restart if the
+  process does die. On 2026-08-05 the laptop slept; "Opening handshake has timed
+  out" was thrown from inside `ws` with no listener to catch it, reached
+  `uncaughtException`, and killed a bot that had run fine for eight hours.
+  `make run` exited and nothing brought it back, so the first sign was `/join`
+  doing nothing — the endpoint and speech-to-speech were still up, which made it
+  look like Discord's problem.
+
+  Network faults are now survived, but **only after the gateway has connected
+  once**. That condition is the design: past login, discord.js reconnects on its
+  own and swallowing the throw lets it, while before login there is nothing to
+  reconnect to and surviving would leave a process that is alive, passing
+  liveness, and permanently disconnected — worse than exiting, because a crash
+  is at least visible. Readiness drops so traffic drains meanwhile.
+
+  `scripts/supervise.sh` restarts the bot on exit with exponential backoff,
+  giving up on exit 2 (bad config, which restarting cannot fix) and on a clean
+  exit. It is the local stand-in for what a k8s Deployment does for free.
+
 - Configure the endpoint from a file, and let it launch Claude the way
   everything else does. `~/.config/discord-assistant/config.yaml` (optional,
   `config.example.yaml` documents it) resolves **environment > file > default**,

@@ -245,9 +245,35 @@ process.on('unhandledRejection', (reason) => {
 // is still logged every time.
 const RECOVERABLE = /Failed to decrypt|DecryptionFailed|Unencrypted/i;
 
+// Transient network faults, survivable ONLY once the gateway has connected at
+// least once. Observed 2026-08-05: the laptop slept, and "Opening handshake has
+// timed out" arrived from inside `ws` with no listener to catch it, killing a
+// bot that had been running fine for eight hours. `make run` exited and nothing
+// brought it back, so the first anyone knew was `/join` doing nothing.
+//
+// The `connectedOnce` condition is the whole point. After login, discord.js
+// reconnects on its own and swallowing the throw lets it. BEFORE login there is
+// nothing to reconnect — surviving would leave a process that is alive, passing
+// liveness, and permanently disconnected, which is strictly worse than exiting,
+// because a crash is at least visible.
+const RECOVERABLE_NET =
+  /Opening handshake has timed out|socket hang up|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|WebSocket was closed/i;
+
+let connectedOnce = false;
+client.once('clientReady', () => {
+  connectedOnce = true;
+});
+
 process.on('uncaughtException', (err) => {
   if (RECOVERABLE.test(err?.message ?? '')) {
     log.warn('dropped an undecryptable voice packet', { error: err.message });
+    return;
+  }
+  if (connectedOnce && RECOVERABLE_NET.test(err?.message ?? '')) {
+    // Readiness already reports the disconnect, so traffic drains while
+    // discord.js retries. Logged at error level: it is not routine.
+    log.error('survived a gateway network fault, waiting for reconnect', { error: err.message });
+    gatewayReady = false;
     return;
   }
   log.error('uncaught exception', { error: err.message, stack: err.stack });
