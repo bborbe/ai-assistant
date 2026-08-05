@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.2
 
 - Catch the transcript run-on in flight instead of reconstructing it afterwards.
   A holding line and an answer once arrived welded together, a full stop
