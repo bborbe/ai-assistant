@@ -30,7 +30,7 @@ run: require-config
 	@set -a; . ./local.env; set +a; \
 	DISCORD_TOKEN=$$(teamvault-cli password $$DISCORD_TOKEN_KEY); \
 	[ -n "$$DISCORD_TOKEN" ] || { echo "empty token from TeamVault key $$DISCORD_TOKEN_KEY" >&2; exit 1; }; \
-	export DISCORD_TOKEN; node src/index.js
+	export DISCORD_TOKEN; bash scripts/supervise.sh node src/index.js
 
 .PHONY: dev
 # Start the whole local stack: shim, speech-to-speech, bot. Ctrl-C stops all.
