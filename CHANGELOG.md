@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.3
 
 - docs: Add `CLAUDE.md` — coding-guideline pointers, non-obvious invariants (fail-closed allowlist, transcription/consent separation, health transport), the non-code surfaces (patches, Python shim, tools), the real-voice-session verification requirement, and the two known deviations from the Node service guide
 
