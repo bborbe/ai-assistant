@@ -105,7 +105,17 @@ class TranscriptSession {
  */
 TranscriptSession.prototype.writeText = function writeText(speaker, text) {
   if (!text?.trim()) return null;
-  const file = path.join(this.segments, `${Date.now()}-${slug(speaker)}-000000.txt`);
+  // The counter is not decoration. The name was `${Date.now()}-<speaker>-000000`,
+  // and two writes in the same millisecond produced ONE file — the second
+  // silently overwriting the first, losing a line with nothing logged. That is
+  // not rare here: a holding line and the first sentence of the answer arrive
+  // together, which is exactly when the record matters most. Proven by writing
+  // twice with a fixed timestamp: one file, second content.
+  //
+  // It also fixes ordering. Same-millisecond names sorted equal, so the reader's
+  // order was arbitrary; the counter makes it insertion order.
+  const seq = String((this.textSeq = (this.textSeq ?? 0) + 1)).padStart(6, '0');
+  const file = path.join(this.segments, `${Date.now()}-${slug(speaker)}-${seq}.txt`);
   try {
     fs.writeFileSync(file, text.trim());
     return file;

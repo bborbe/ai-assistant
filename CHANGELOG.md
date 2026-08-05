@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- Stop losing a transcript line when two are written in the same millisecond.
+  The segment name was `${Date.now()}-<speaker>-000000`, so a second write
+  inside one millisecond produced the same filename and `writeFileSync`
+  overwrote the first — a line gone, nothing logged. Not a rare race: a holding
+  line and the first sentence of the answer arrive together, which is exactly
+  when the record is worth having. A per-session counter replaces the fixed
+  `000000`, which also makes same-millisecond lines sort in insertion order
+  rather than arbitrarily. Covered by a test.
+
+  Found while chasing a different symptom: a holding line and an answer run
+  together in a transcript with no separator between them. That one is **not**
+  fixed and does not appear to be ours — the endpoint's SSE
+  deltas each end with a trailing space (verified against a live turn), and
+  speech-to-speech strips each sentence and joins batches with a space, so the
+  missing separator arises downstream and could not be reproduced here.
+
 ## v0.4.1
 
 - Survive a gateway network fault instead of dying of it, and restart if the
