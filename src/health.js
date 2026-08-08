@@ -1,6 +1,7 @@
 'use strict';
 
 const http = require('node:http');
+const crypto = require('node:crypto');
 const log = require('./log');
 const config = require('./config');
 const voice = require('./voice');
@@ -40,9 +41,14 @@ async function handleChatPost(req, send) {
   if (!config.chatBridgeToken) {
     return send(503, { error: 'chat bridge not configured' });
   }
-  const auth = req.headers['authorization'] || '';
-  const expected = `Bearer ${config.chatBridgeToken}`;
-  if (auth !== expected) {
+  // Constant-time: `!==` short-circuits at the first mismatched byte, which
+  // is a timing side-channel on the token — and healthHost defaults to
+  // 0.0.0.0 (see config.js), so this route is reachable from anything on the
+  // pod network, not just localhost.
+  const auth = Buffer.from(req.headers['authorization'] || '');
+  const expected = Buffer.from(`Bearer ${config.chatBridgeToken}`);
+  const authorized = auth.length === expected.length && crypto.timingSafeEqual(auth, expected);
+  if (!authorized) {
     return send(401, { error: 'unauthorized' });
   }
 
@@ -99,7 +105,19 @@ function startHealthServer({ port, host, isReady, build }) {
     };
 
     if (req.method === 'POST' && req.url === '/chat') {
-      return void handleChatPost(req, send);
+      // No outer try/catch inside handleChatPost covers a throw from send()
+      // itself (e.g. a future JSON.stringify edge case) — without this, that
+      // becomes an unhandled rejection, which by default kills the whole
+      // process and drops every live voice call with it.
+      handleChatPost(req, send).catch((e) => {
+        log.error('chat bridge: unhandled', { error: e.message });
+        try {
+          send(500, { error: 'internal error' });
+        } catch {
+          // Response already sent or the socket is gone; nothing more to do.
+        }
+      });
+      return;
     }
 
     switch (req.url) {

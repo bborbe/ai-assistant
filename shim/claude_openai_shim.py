@@ -878,12 +878,12 @@ def post_chat_message(text: str) -> None:
     if not CHAT_BRIDGE_TOKEN:
         print("  chat bridge: CHAT_BRIDGE_TOKEN not set — skipping post", flush=True)
         return
-    body = json.dumps({"text": text}).encode()
-    req = urllib.request.Request(
-        CHAT_BRIDGE_URL, data=body, method="POST",
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {CHAT_BRIDGE_TOKEN}"})
     try:
+        body = json.dumps({"text": text}).encode()
+        req = urllib.request.Request(
+            CHAT_BRIDGE_URL, data=body, method="POST",
+            headers={"Content-Type": "application/json",
+                     "Authorization": f"Bearer {CHAT_BRIDGE_TOKEN}"})
         with urllib.request.urlopen(req, timeout=CHAT_BRIDGE_TIMEOUT) as resp:
             resp.read()
         print(f"  chat bridge: posted ({len(text)} chars)", flush=True)
@@ -1336,11 +1336,16 @@ def drop_process(key: str) -> None:
 
 
 def ask_claude(key: str, system: str, prompt: str, on_text=None, is_gone=None,
-               already_held=False) -> tuple[str, bool]:
+               already_held=False) -> tuple[str, bool, bool]:
     """Ask over the persistent process, respawning once if it has died.
 
-    Returns `(text, truncated)` — every path, including every error/timeout
-    fallback, supplies both; an error message is by definition not truncated.
+    Returns `(text, truncated, ok)`. `ok` is False on every error/timeout
+    fallback path — those return a synthetic sentence like "(claude
+    unavailable: ...)" for the ordinary text/voice reply, which is fine to
+    speak or show inline, but the chat-bridge trigger must never mistake one
+    for a real answer: `_has_postable_shape` can match a local filesystem
+    path or an error class name inside the sentinel text and post it to the
+    channel as if it were content. See do_POST's `if answer and ok and ...`.
     """
     for attempt in (1, 2):
         proc = get_process(key, system)
@@ -1350,16 +1355,16 @@ def ask_claude(key: str, system: str, prompt: str, on_text=None, is_gone=None,
                                        already_held=already_held)
             mark_started(key)
             print(f"  [{key}] {time.monotonic() - began:.1f}s, {len(out)} chars", flush=True)
-            return out, truncated
+            return out, truncated, True
         except (RuntimeError, BrokenPipeError, OSError) as e:
             print(f"  [{key}] process failed ({e}), attempt {attempt}", flush=True)
             drop_process(key)
             if attempt == 2:
-                return f"(claude unavailable: {e})", False
+                return f"(claude unavailable: {e})", False, False
         except TimeoutError as e:
             print(f"  [{key}] {e}", flush=True)
-            return f"(timed out after {TIMEOUT}s)", False
-    return "(claude unavailable)", False
+            return f"(timed out after {TIMEOUT}s)", False, False
+    return "(claude unavailable)", False, False
 
 
 def _legacy_ask_claude(key: str, system: str, prompt: str) -> str:
@@ -1385,7 +1390,7 @@ def _legacy_ask_claude(key: str, system: str, prompt: str) -> str:
         if started and "session" in err.lower():
             reset_session(key)
             print(f"  [{key}] resume failed, starting fresh: {err[:120]}", flush=True)
-            text, _truncated = ask_claude(key, system, prompt)
+            text, _truncated, _ok = ask_claude(key, system, prompt)
             return text
         print(f"  [{key}] claude failed rc={r.returncode}: {err}", flush=True)
         return f"(claude error: {err[:200]})"
@@ -1717,7 +1722,7 @@ class Handler(BaseHTTPRequestHandler):
                 if superseded(key, mine):
                     print(f"-> STALE [{key}] superseded, dropping: {prompt[:40]!r}", flush=True)
                     return self._stream("") if req.get("stream") else self._json(200, self._completion(""))
-                answer, truncated = ask_claude(
+                answer, truncated, ok = ask_claude(
                     key, "\n\n".join(parts), prompt,
                     on_text=on_text if live else None,
                     is_gone=(lambda: peer_hung_up(self.connection)) if live else None,
@@ -1738,8 +1743,11 @@ class Handler(BaseHTTPRequestHandler):
             # The chat bridge: post the FULL answer, not what was spoken.
             # Two triggers, either is enough — see `# Design`, "What still
             # needs deciding during implementation": length alone misses a
-            # short pure-payload answer that never hit SPOKEN_MAX.
-            if answer and (truncated or _has_postable_shape(answer)):
+            # short pure-payload answer that never hit SPOKEN_MAX. `ok` guards
+            # against posting a sentinel failure string as if it were content
+            # — "(claude unavailable: ...)" routinely contains a local path or
+            # an error-class name that _has_postable_shape happily matches.
+            if answer and ok and (truncated or _has_postable_shape(answer)):
                 post_chat_message(answer)
             return
 
