@@ -12,6 +12,22 @@
   station name — is posted even when never truncated. Also: a reply to a
   message typed during a live call is now written into the session
   transcript, matching the question side that was already captured.
+- Honour an explicit request to write something down. Found on a live call:
+  "write it to the chat" produced a two-sentence plain-prose answer, so
+  neither the truncation nor the content-shape trigger fired and nothing was
+  posted — correct by the letter of both, and exactly wrong. Intent lives in
+  the user's turn, where no inspection of the answer can see it, so it is now
+  a third trigger read off the prompt. Still code-side: an unmatched phrasing
+  falls back to the other two rather than asking the model to decide.
+- Stop the assistant claiming it cannot type. With no tool and no knowledge of
+  the bridge it truthfully reported the old limitation — "I can only speak,
+  not type into the channel" — while the bridge was armed. A voice-only
+  directive now states that the full written answer reaches the channel. It
+  corrects a belief; it does not ask the model to decide anything.
+- Log every chat-bridge decision with its reason, including the decision not
+  to post. Without it a declined trigger and a broken bridge are
+  indistinguishable from outside — the blindness that made the 2026-08-04
+  Discord outage take four restarts to diagnose.
 
 ## v0.4.3
 

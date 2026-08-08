@@ -203,6 +203,27 @@ CHAT_BRIDGE_URL = setting("SHIM_CHAT_BRIDGE_URL", "chat_bridge.url", "http://127
 CHAT_BRIDGE_TOKEN = os.environ.get("CHAT_BRIDGE_TOKEN", "").strip()
 CHAT_BRIDGE_TIMEOUT = setting("SHIM_CHAT_BRIDGE_TIMEOUT", "chat_bridge.timeout", 5.0)
 
+# The model has no tool for this and makes no decision about it — the posting
+# is done here, in code. But it still has to know the channel is reachable,
+# because otherwise it truthfully reports the old limitation: caught on a live
+# call 2026-08-09, asked to "write it to the chat", it answered "I can only
+# speak, not type into the channel" while this very bridge was armed.
+#
+# Note what this directive does NOT say: it never asks the model to decide, to
+# emit a marker, or to call anything. It corrects a factual belief and gets out
+# of the way. The LENGTH rule above still binds what is SPOKEN; the full text
+# reaching the channel is exactly the point of the cap.
+CHAT_BRIDGE_DIRECTIVE = (
+    "WRITTEN COPY. Everything you write this turn is ALSO posted into the voice "
+    "channel's text chat, in full, automatically — the spoken version is capped at "
+    "two sentences, the written one is not.\n"
+    "So NEVER say you can only speak, that you cannot type, or that you have no way "
+    "to put something in the chat. That was true once and is not true now.\n"
+    "When asked to write something down — a name, a list, a link, a price — just "
+    "answer with it in full. Say one short sentence aloud pointing at it ('it's in "
+    "the chat') and let the written copy carry the detail."
+)
+
 ASK_CLAUDE_TOOL = {
     "type": "function",
     "function": {
@@ -852,6 +873,27 @@ _CODE_RE = re.compile(r"\b(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+\
 # Two or more consecutive Capitalized Words — catches a proper noun with no
 # digit in it at all, e.g. "Wide Forest Station", which _CODE_RE cannot see.
 _TITLE_RUN_RE = re.compile(r"\b(?:[A-Z][a-z]+\s+){1,}[A-Z][a-z]+\b")
+
+
+# Asking for it in writing is an intent, and intent lives in the USER's turn —
+# no amount of looking at the answer can see it. Found on a live call
+# 2026-08-09: "can you check what we last bought and write it to the chat?" was
+# answered in two sentences of plain prose, so neither trigger fired and
+# nothing was posted. Correct by the letter of both triggers, and exactly wrong.
+#
+# Still a code-side decision, not a model judgement — and the failure mode is
+# safe in the direction that matters: an unmatched phrasing just falls back to
+# the other two triggers, it never posts something it shouldn't.
+_CHAT_REQUEST_RE = re.compile(
+    r"\b(?:write|put|post|type|send|drop|paste|share)\b[^.?!]{0,40}?"
+    r"\b(?:in|into|to|on)\b\s+(?:the\s+)?(?:chat|channel|text)\b"
+    r"|\bin\s+writing\b|\bwrite\s+(?:it|that|this|them)\s+down\b",
+    re.I)
+
+
+def _wants_chat_post(prompt: str) -> bool:
+    """Did the user ASK for this in writing? Third trigger, read off their turn."""
+    return bool(_CHAT_REQUEST_RE.search(prompt))
 
 
 def _has_postable_shape(text: str) -> bool:
@@ -1607,7 +1649,9 @@ class Handler(BaseHTTPRequestHandler):
         # and a text surface already has its own history in the thread.
         parts = [p for p in (system, MEMORY_DIRECTIVE,
                              VOICE_DIRECTIVE if voice else TEXT_DIRECTIVE,
-                             TRANSCRIPT_DIRECTIVE if voice else "") if p]
+                             TRANSCRIPT_DIRECTIVE if voice else "",
+                             CHAT_BRIDGE_DIRECTIVE
+                             if (voice and CHAT_BRIDGE_TOKEN) else "") if p]
         mine = next_seq(key)
 
         # Live streaming is VOICE ONLY. strip_panels recognises a closer panel in
@@ -1747,8 +1791,27 @@ class Handler(BaseHTTPRequestHandler):
             # against posting a sentinel failure string as if it were content
             # — "(claude unavailable: ...)" routinely contains a local path or
             # an error-class name that _has_postable_shape happily matches.
-            if answer and ok and (truncated or _has_postable_shape(answer)):
-                post_chat_message(answer)
+            #
+            # Every decision is logged WITH ITS REASON, including the decision
+            # not to post. Without it a non-post and a broken bridge look
+            # identical from the outside — the same class of blindness that made
+            # the 2026-08-04 Discord outage take four restarts to diagnose,
+            # where a filtered event and an event that never arrived were
+            # indistinguishable until both were logged before filtering.
+            if not answer or not ok:
+                reason = "no answer" if not answer else "failed turn"
+                print(f"  chat bridge: not posting ({reason})", flush=True)
+            else:
+                why = ("asked for it in writing" if _wants_chat_post(prompt)
+                       else "spoken reply was truncated" if truncated
+                       else "answer has postable shape" if _has_postable_shape(answer)
+                       else "")
+                if why:
+                    print(f"  chat bridge: posting — {why}", flush=True)
+                    post_chat_message(answer)
+                else:
+                    print("  chat bridge: not posting (short, plain, "
+                          "and not requested)", flush=True)
             return
 
         answer = strip_markdown(answer) if voice else strip_panels(answer)
