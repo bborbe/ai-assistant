@@ -17,6 +17,7 @@ const WebSocket = require('ws');
 const config = require('./config');
 const log = require('./log');
 const { TranscriptSession } = require('./transcript');
+const { chunk } = require('./discord-chunk');
 
 const DISCORD_RATE = 48000,
   DISCORD_CH = 2;
@@ -82,12 +83,16 @@ function up(buf) {
 
 /** One live voice session: Discord audio <-> speech-to-speech. */
 class Session {
-  constructor(connection, guildId, guildName, channelName, channelId) {
+  constructor(connection, guildId, guildName, channelName, channelId, channel) {
     this.conn = connection;
     this.guildId = guildId;
     // A Discord voice channel has an integrated text chat sharing its id, so
     // this is what links a posted message to the running transcript.
     this.channelId = channelId;
+    // The channel object itself, kept for postToChannel — the shim's
+    // chat-bridge posts arrive with no channel id (see postToChannel below),
+    // so this is what lets the bot answer "which channel" on its own.
+    this.channel = channel;
     // Per-speaker buffers. Discord gives a separate stream per user (per SSRC),
     // which is the expensive half of any diarization pipeline — appending them
     // all to one buffer would throw that away AND garble the audio, since the
@@ -476,7 +481,14 @@ async function join(channel) {
   });
   conn.on('stateChange', (o, n) => log.info(`  voice: ${o.status} -> ${n.status}`));
   await entersState(conn, VoiceConnectionStatus.Ready, 30000);
-  const session = new Session(conn, channel.guild.id, channel.guild.name, channel.name, channel.id);
+  const session = new Session(
+    conn,
+    channel.guild.id,
+    channel.guild.name,
+    channel.name,
+    channel.id,
+    channel,
+  );
   // Resolve display names once so the transcript reads with names, not ids.
   for (const [id, member] of channel.members) {
     session.names.set(id, member.displayName ?? member.user.username);
@@ -571,4 +583,47 @@ function transcriptFor(guildId, channelId) {
   return s && s.channelId === channelId ? s.transcript : null;
 }
 
-module.exports = { join, leave, evictGhost, sessions, transcriptFor, noteVoiceState };
+/**
+ * Post the shim's full answer into the live voice call's channel.
+ *
+ * The payload that reaches here carries no channel id on purpose (see the
+ * shim's `post_chat_message`) — speech-to-speech owns the voice HTTP call and
+ * cannot set one, so the shim cannot know which call is live even in
+ * principle. This bot can: `sessions` holds exactly the calls it is actually
+ * in. Two concurrent calls is therefore ambiguous by construction rather than
+ * by a missing feature, and is dropped rather than guessed at (see the task's
+ * Out of Scope).
+ */
+async function postToChannel(text) {
+  const live = [...sessions.values()].filter((s) => !s.closed);
+  if (live.length === 0) {
+    log.warn('chat bridge: no live voice session, dropping', { chars: text.length });
+    return { posted: false, reason: 'no-live-session' };
+  }
+  if (live.length > 1) {
+    log.warn('chat bridge: multiple live voice sessions, dropping (ambiguous)', {
+      count: live.length,
+    });
+    return { posted: false, reason: 'ambiguous-multiple-sessions' };
+  }
+  const session = live[0];
+  try {
+    for (const part of chunk(text)) await session.channel.send(part);
+    session.transcript?.writeText(config.botName, text);
+    log.info('chat bridge: posted to channel', { channel: session.channelId, chars: text.length });
+    return { posted: true, channel: session.channelId };
+  } catch (e) {
+    log.error('chat bridge: post failed', { error: e.message });
+    return { posted: false, reason: 'send-failed' };
+  }
+}
+
+module.exports = {
+  join,
+  leave,
+  evictGhost,
+  sessions,
+  transcriptFor,
+  noteVoiceState,
+  postToChannel,
+};

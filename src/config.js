@@ -50,6 +50,12 @@ const config = {
   healthHost: process.env.HEALTH_HOST || '0.0.0.0',
   healthPort: parseInt(process.env.HEALTH_PORT || '8080', 10),
 
+  // Shared secret for the shim's POST /chat back-edge (health.js). Both
+  // processes read the SAME env var name — a mismatch between a bot-side and
+  // shim-side name is exactly the class of bug that loses a secret silently.
+  // Empty means the route refuses every request (fails closed).
+  chatBridgeToken: (process.env.CHAT_BRIDGE_TOKEN || '').trim(),
+
   // Must stay below the pod's terminationGracePeriodSeconds.
   shutdownTimeoutMs: parseInt(process.env.SHUTDOWN_TIMEOUT_MS || '10000', 10),
 

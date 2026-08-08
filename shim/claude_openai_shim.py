@@ -187,6 +187,22 @@ FRONT_HISTORY = setting("SHIM_FRONT_HISTORY", "front.history", 8)
 # it is the honest baseline the heuristics have to beat.
 FRONT_HEURISTICS = setting("SHIM_FRONT_HEURISTICS", "front.heuristics", True)
 
+# ── chat bridge ────────────────────────────────────────────────────────────
+# The back-edge that lets a spoken answer also land in the channel as text.
+# See the task's `# Design`: the shim already computes the full answer and
+# discards everything past SPOKEN_MAX — this posts what would otherwise be
+# thrown away to the bot's health server, which owns channel routing because
+# it (not the shim) knows which voice call is actually live.
+#
+# CHAT_BRIDGE_TOKEN is read directly from the environment, never via
+# `setting()`'s config-file fallback and never via argv — the secret-in-argv
+# class has bitten this repo twice (visible in `ps`, logged by supervisors).
+# Both processes read the SAME env var name by convention (see local.env.example)
+# so a name mismatch cannot silently strand the secret on one side.
+CHAT_BRIDGE_URL = setting("SHIM_CHAT_BRIDGE_URL", "chat_bridge.url", "http://127.0.0.1:8081/chat")
+CHAT_BRIDGE_TOKEN = os.environ.get("CHAT_BRIDGE_TOKEN", "").strip()
+CHAT_BRIDGE_TIMEOUT = setting("SHIM_CHAT_BRIDGE_TIMEOUT", "chat_bridge.timeout", 5.0)
+
 ASK_CLAUDE_TOOL = {
     "type": "function",
     "function": {
@@ -822,6 +838,59 @@ def strip_markdown(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+# ── postable-shape detector ─────────────────────────────────────────────────
+# "Truncated" alone misses the answer that is pure payload and never runs long
+# enough to hit SPOKEN_MAX — the task's own evidence: "ARC-L1 Wide Forest
+# Station", one sentence, never truncated, exactly the thing that needed to be
+# written down. This is the second trigger, content shape rather than length.
+_URL_RE = re.compile(r"https?://\S+")
+_LIST_LINE_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\S", re.M)
+# A hyphen/underscore token with a digit in it somewhere — "ARC-L1",
+# "task_42", "v0.4.3" style identifiers. \w excludes hyphens, so the digit
+# lookahead has to scan the whole allowed charset, not just \w*.
+_CODE_RE = re.compile(r"\b(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+\b")
+# Two or more consecutive Capitalized Words — catches a proper noun with no
+# digit in it at all, e.g. "Wide Forest Station", which _CODE_RE cannot see.
+_TITLE_RUN_RE = re.compile(r"\b(?:[A-Z][a-z]+\s+){1,}[A-Z][a-z]+\b")
+
+
+def _has_postable_shape(text: str) -> bool:
+    """Would this answer be worth reading back later, even if never truncated?
+
+    Deliberately a code-side detector, not a model judgement — see the task's
+    `# Design`: asking the model to decide is a decision already reversed
+    three times elsewhere in this file (routing, filler timing, length).
+    """
+    if _URL_RE.search(text) or _PATHISH.search(text) or _UUID.search(text):
+        return True
+    if _CODE_RE.search(text) or _TITLE_RUN_RE.search(text):
+        return True
+    return len(_LIST_LINE_RE.findall(text)) >= 2
+
+
+def post_chat_message(text: str) -> None:
+    """POST the full answer to the bot's chat-bridge route. Never raises.
+
+    No channel id in the payload — the bot owns routing to whichever voice
+    call is actually live (see `# Design`). Best-effort: a failure here must
+    never take down a voice turn that has already been spoken.
+    """
+    if not CHAT_BRIDGE_TOKEN:
+        print("  chat bridge: CHAT_BRIDGE_TOKEN not set — skipping post", flush=True)
+        return
+    body = json.dumps({"text": text}).encode()
+    req = urllib.request.Request(
+        CHAT_BRIDGE_URL, data=body, method="POST",
+        headers={"Content-Type": "application/json",
+                 "Authorization": f"Bearer {CHAT_BRIDGE_TOKEN}"})
+    try:
+        with urllib.request.urlopen(req, timeout=CHAT_BRIDGE_TIMEOUT) as resp:
+            resp.read()
+        print(f"  chat bridge: posted ({len(text)} chars)", flush=True)
+    except Exception as e:
+        print(f"  chat bridge: post failed ({e})", flush=True)
+
+
 # ── persistent claude processes ────────────────────────────────────────────
 # One long-lived `claude` per session key, fed over stdin as stream-json.
 #
@@ -955,7 +1024,8 @@ class ClaudeProcess:
                 self._buf = b""
                 return line
 
-    def ask(self, prompt: str, on_text=None, is_gone=None, already_held=False) -> str:
+    def ask(self, prompt: str, on_text=None, is_gone=None,
+            already_held=False) -> tuple[str, bool]:
         """Run one turn. `on_text` receives assistant text as it arrives.
 
         The `assistant` event carries the reply BEFORE `result` — measured 6.1s
@@ -964,6 +1034,10 @@ class ClaudeProcess:
         therefore throws away speech-ready text; emitting on `assistant` lets
         TTS start earlier and lets the model say "let me check" while it works,
         which is exactly what the voice prompt asks for and never got.
+
+        Returns `(text, truncated)` — `truncated` is whether the SPOKEN_MAX cap
+        actually cut something short (see `push()`), so a caller can tell "the
+        full text has more than what was spoken" apart from "this is all of it".
         """
         msg = {"type": "user",
                "message": {"role": "user", "content": [{"type": "text", "text": prompt}]}}
@@ -1217,7 +1291,7 @@ class ClaudeProcess:
                 final = str(event.get("result") or "").strip()
                 # `result` repeats the last assistant text; return what was
                 # already emitted so the caller does not say it twice.
-                return final if not seen else "\n".join(seen)
+                return (final if not seen else "\n".join(seen)), truncated
         stop_timer()
         raise TimeoutError(f"no result within {TIMEOUT}s")
 
@@ -1262,26 +1336,30 @@ def drop_process(key: str) -> None:
 
 
 def ask_claude(key: str, system: str, prompt: str, on_text=None, is_gone=None,
-               already_held=False) -> str:
-    """Ask over the persistent process, respawning once if it has died."""
+               already_held=False) -> tuple[str, bool]:
+    """Ask over the persistent process, respawning once if it has died.
+
+    Returns `(text, truncated)` — every path, including every error/timeout
+    fallback, supplies both; an error message is by definition not truncated.
+    """
     for attempt in (1, 2):
         proc = get_process(key, system)
         began = time.monotonic()
         try:
-            out = proc.ask(prompt, on_text=on_text, is_gone=is_gone,
-                           already_held=already_held)
+            out, truncated = proc.ask(prompt, on_text=on_text, is_gone=is_gone,
+                                       already_held=already_held)
             mark_started(key)
             print(f"  [{key}] {time.monotonic() - began:.1f}s, {len(out)} chars", flush=True)
-            return out
+            return out, truncated
         except (RuntimeError, BrokenPipeError, OSError) as e:
             print(f"  [{key}] process failed ({e}), attempt {attempt}", flush=True)
             drop_process(key)
             if attempt == 2:
-                return f"(claude unavailable: {e})"
+                return f"(claude unavailable: {e})", False
         except TimeoutError as e:
             print(f"  [{key}] {e}", flush=True)
-            return f"(timed out after {TIMEOUT}s)"
-    return "(claude unavailable)"
+            return f"(timed out after {TIMEOUT}s)", False
+    return "(claude unavailable)", False
 
 
 def _legacy_ask_claude(key: str, system: str, prompt: str) -> str:
@@ -1307,7 +1385,8 @@ def _legacy_ask_claude(key: str, system: str, prompt: str) -> str:
         if started and "session" in err.lower():
             reset_session(key)
             print(f"  [{key}] resume failed, starting fresh: {err[:120]}", flush=True)
-            return ask_claude(key, system, prompt)
+            text, _truncated = ask_claude(key, system, prompt)
+            return text
         print(f"  [{key}] claude failed rc={r.returncode}: {err}", flush=True)
         return f"(claude error: {err[:200]})"
 
@@ -1638,7 +1717,7 @@ class Handler(BaseHTTPRequestHandler):
                 if superseded(key, mine):
                     print(f"-> STALE [{key}] superseded, dropping: {prompt[:40]!r}", flush=True)
                     return self._stream("") if req.get("stream") else self._json(200, self._completion(""))
-                answer = ask_claude(
+                answer, truncated = ask_claude(
                     key, "\n\n".join(parts), prompt,
                     on_text=on_text if live else None,
                     is_gone=(lambda: peer_hung_up(self.connection)) if live else None,
@@ -1656,6 +1735,12 @@ class Handler(BaseHTTPRequestHandler):
                     writer.finish()
                 except (BrokenPipeError, ConnectionResetError):
                     self.close_connection = True
+            # The chat bridge: post the FULL answer, not what was spoken.
+            # Two triggers, either is enough — see `# Design`, "What still
+            # needs deciding during implementation": length alone misses a
+            # short pure-payload answer that never hit SPOKEN_MAX.
+            if answer and (truncated or _has_postable_shape(answer)):
+                post_chat_message(answer)
             return
 
         answer = strip_markdown(answer) if voice else strip_panels(answer)
