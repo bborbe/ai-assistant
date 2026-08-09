@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.8.1
 
 - fix: Route the voice surface to the shim instead of MiniMax. `v0.8.0` started
   `scripts/s2s-minimax` with no arguments, and that launcher hardcodes
