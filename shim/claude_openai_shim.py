@@ -103,7 +103,11 @@ def setting(env: str, path: str, default):
     if raw is None:
         return default
     if isinstance(default, bool):
-        return str(raw).strip().lower() not in ("0", "false", "no", "")
+        # Quotes stripped and "off" included so this agrees with the bot's
+        # `flag()` (src/config.js) on every spelling. It did not: `X=off` read
+        # as TRUE here and false there, and a Make-quoted `"0"` read as TRUE on
+        # both — a switch that looks set and isn't is worse than no switch.
+        return str(raw).strip().strip("\"'").lower() not in ("0", "false", "no", "off", "")
     if isinstance(default, int) and not isinstance(default, bool):
         return int(raw)
     if isinstance(default, float):
@@ -768,10 +772,108 @@ def is_filler(text: str) -> bool:
     return 0 < len(words) <= 3 and all(w in _FILLER_WORDS for w in words)
 
 
+# ── wake phrase ────────────────────────────────────────────────────────────
+# In a call the assistant hears every word an allowlisted speaker says — the
+# allowlist decides WHO can drive it, never WHETHER a given sentence was meant
+# for it. So in company it answered conversations addressed to other people.
+#
+# A LIST, not a phrase, and the reason is empirical: speech-to-text mangles
+# short utterances, and this project's own transcripts have it turning "Wide
+# Forest" into "White Forest". Each variant is a deliberate entry — no edit
+# distance, no phonetic matching, nothing that widens the surface silently,
+# because every variant added is a false-trigger risk accepted on purpose.
+#
+# Matched as a PREFIX. "so, hey bot, what's my task" deliberately does not
+# count: a phrase-anywhere match wakes on any sentence that merely mentions
+# the bot, which is exactly the failure this exists to prevent.
+#
+# Fail quiet: anything unmatched is treated as not addressed. A missed trigger
+# costs one repeat; a false trigger interrupts a conversation with other people
+# in the room. The two are not equally cheap.
+#
+# `.strip("\"'")`: the Makefile's `-include local.env` parses with MAKE
+# semantics, so `export SHIM_WAKE_PHRASES="a,b"` can arrive with the quote
+# characters still inside the value — making the first phrase `"hey bot`, which
+# matches nothing anyone says. Same family as the `$HOME` and secret-in-argv
+# traps this repo has already been bitten by twice.
+WAKE_PHRASES = setting("SHIM_WAKE_PHRASES", "voice.wake_phrases", "hey bot,hey bought,hey but").strip("\"'")
+# Anchored to the start of a SENTENCE, not just the start of the utterance.
+#
+# speech-to-speech accumulates a turn across progressive finals, so one
+# transcript grows into "Uh can you check my disk space? Hey bot, can you check
+# my disk space?" — the phrase is in there, but never at position zero, and a
+# whole-utterance prefix match rejected every retry. Observed live: three
+# consecutive properly-addressed attempts all went QUIET.
+#
+# Still anchored, which is the point: "I told him the bot was broken" does not
+# match, because the phrase has to OPEN a sentence rather than merely appear.
+# Leading disfluencies are skipped, because people do not start a sentence on
+# the wake phrase — they start on a hesitation. Three real failures in one call:
+# "Uh hey bot, can you check my free disk space?", "Uh hey hey bot, did you hear
+# me?", and a "so," lead-in. Requiring the phrase at the literal sentence start
+# made the feature unusable in ordinary speech while looking correct in tests
+# written from imagined utterances.
+#
+# The skippable set is `_FILLER_WORDS` — already defined above, and already the
+# project's answer to "noises that are not content" — plus "hey", so a doubled
+# "hey hey bot" lands. It does NOT widen what counts as a wake phrase: only
+# noise may precede it, never a real word.
+_WAKE_LEAD = r"(?:(?:" + "|".join(sorted(_FILLER_WORDS | {"hey"})) + r")[\s,.!?-]+){0,3}"
+_WAKE_RE = re.compile(
+    r"(?:\A|[.!?]\s+|\n)\W*"
+    + _WAKE_LEAD
+    + r"(?:"
+    + "|".join(re.escape(p.strip()) for p in WAKE_PHRASES.split(",") if p.strip())
+    + r")\b",
+    re.I,
+)
+
+
+def is_addressed(text: str) -> bool:
+    """Does a sentence in this utterance open with a wake phrase?
+
+    `search`, not `match`, because the turn may have accumulated — see the
+    regex above. Empty phrase list disables the gate.
+    """
+    if not WAKE_PHRASES.strip():
+        return True
+    return bool(_WAKE_RE.search(text))
+
+
+def strip_wake_phrase(text: str) -> str:
+    """Drop the address so the model receives the question, not the greeting.
+
+    "Hey bot, what's my most important task?" reaches Claude as "what's my most
+    important task?" — the phrase is how you got its attention, not part of what
+    you asked. Left in, a bare "Hey bot." is a greeting the model will answer as
+    one, and every real question carries a vocative it may echo back.
+
+    Falls back to the original text when stripping would leave nothing, so a
+    bare wake phrase still reaches the model as something rather than an empty
+    prompt the endpoint would reject.
+    """
+    if not WAKE_PHRASES.strip():
+        return text
+    # Everything BEFORE the wake phrase is dropped along with it: on an
+    # accumulated turn that leading text is whatever was said to the room
+    # before the assistant was addressed, and feeding it to the model asks the
+    # wrong question. Keep only from the phrase onward.
+    m = _WAKE_RE.search(text)
+    if not m:
+        return text
+    stripped = text[m.end() :].lstrip(" ,.:;-—")
+    return stripped if stripped.strip() else text
+
+
 _PANEL = re.compile(
     r"^\s*[\U0001F7E2\U0001F7E1\U0001F534\U0001F535\u26AA][^\n]*$"   # 🟢🟡🔴🔵⚪ …
     r"|^[^\w\n]{1,6}\s*(?:You|Next|Recommend)\s*:.*$"                    # 👤 You: / ⏰ Next:
-    r"|^[^\w\n]{0,6}\s*(?:\*\*)?(?:READY|DONE|ACTIVE|WAITING|BLOCKED)\b[^\n]*$",
+    r"|^[^\w\n]{0,6}\s*(?:\*\*)?(?:READY|DONE|ACTIVE|WAITING|BLOCKED)\b[^\n]*$"
+    # 📌 / 🎯 — the task and goal ANCHOR lines that sit above the panel. Missed
+    # until a real call put "📌 No task anchor — read-only lookup" in the
+    # channel: the icon set above covers the panel's own state line but not the
+    # two lines that introduce it, so half a panel was stripped and half posted.
+    r"|^\s*[\U0001F4CC\U0001F3AF][^\n]*$",                               # 📌 / 🎯
     re.M,
 )
 
@@ -1714,6 +1816,27 @@ class Handler(BaseHTTPRequestHandler):
                                       or "voice rules" in low)))
         print(f"-> {'VOICE' if voice else 'TEXT '} [{key}] {prompt[:70]!r}", flush=True)
 
+        # Wake phrase: in a call the assistant hears everything said by an
+        # allowlisted speaker, including whole conversations addressed to other
+        # people, and answered all of it. Same silence mechanism as the filler
+        # check above — empty content, so speech-to-speech synthesises nothing
+        # and no filler line is ever spoken.
+        #
+        # VOICE ONLY, and never a typed turn. A typed message already had to
+        # carry an @mention or arrive in a thread/DM to be answered at all, so
+        # it is addressed by construction; demanding a wake phrase on top of
+        # that would be asking the user to say it twice.
+        if voice and not typed_turn:
+            if not is_addressed(prompt):
+                print(f"-> QUIET [{key}] not addressed: {prompt[:60]!r}", flush=True)
+                if req.get("stream"):
+                    return self._stream("")
+                return self._json(200, self._completion(""))
+            # Addressed: hand on the question without the address. The full
+            # utterance, wake phrase and all, is already in the transcript —
+            # this only changes what the model is asked.
+            prompt = strip_wake_phrase(prompt)
+
         # The transcript directive is voice-only: it is the record of a call,
         # and a text surface already has its own history in the thread.
         parts = [p for p in (system, MEMORY_DIRECTIVE,
@@ -1884,7 +2007,13 @@ class Handler(BaseHTTPRequestHandler):
                        else "")
                 if why:
                     print(f"  chat bridge: posting — {why}", flush=True)
-                    post_chat_message(answer)
+                    # strip_panels, same as the text branch below. The bridge
+                    # posts into a Discord channel, which is a chat window and
+                    # not a terminal — its docstring says "applied to BOTH
+                    # surfaces", and this path was the one place that skipped
+                    # it, so "📌 No task anchor" and "⏰ Next:" lines were
+                    # landing in the channel verbatim.
+                    post_chat_message(strip_panels(answer))
                 else:
                     print("  chat bridge: not posting (short, plain, "
                           "and not requested)", flush=True)

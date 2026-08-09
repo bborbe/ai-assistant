@@ -199,13 +199,85 @@ test('a transcribed mic utterance raises the typing indicator', () => {
     fake,
     JSON.stringify({
       type: 'conversation.item.input_audio_transcription.completed',
-      transcript: 'how many vision pages do I have',
+      transcript: 'hey bot, how many vision pages do I have',
     }),
   );
 
   assert.equal(fake.answering, true);
   assert.equal(typingCalls, 1, 'shown immediately, not on the first 8s tick');
   clearInterval(fake.typingTimer);
+});
+
+test('an accumulated turn is still addressed when a later sentence opens with the phrase', () => {
+  // The exact live failure: speech-to-speech grows one turn across progressive
+  // finals, so the phrase never sits at position zero and a whole-utterance
+  // prefix match rejected three properly-addressed attempts in a row.
+  assert.equal(
+    config.isAddressed(
+      'Uh can you check about my free disk space? Hey bot, can you check about my free disk space?',
+    ),
+    true,
+  );
+  // Still anchored — the phrase has to OPEN a sentence, not merely appear.
+  assert.equal(config.isAddressed('I told him the bot was broken'), false);
+  assert.equal(config.isAddressed("So, hey bot, what's my task"), false);
+  assert.equal(config.isAddressed('hey Bob, did you see this'), false);
+});
+
+test('boolean settings accept the spellings people actually write', () => {
+  // INTERRUPT_RESPONSE=true silently did nothing when this only tested for '1'.
+  const saved = process.env.INTERRUPT_RESPONSE;
+  try {
+    for (const [raw, want] of [
+      ['1', true],
+      ['true', true],
+      ['ON', true],
+      ['yes', true],
+      ['0', false],
+      ['false', false],
+      ['off', false],
+      ['"1"', true], // Make's include leaves the quotes in the value
+    ]) {
+      process.env.INTERRUPT_RESPONSE = raw;
+      delete require.cache[require.resolve('../src/config')];
+      assert.equal(require('../src/config').interruptResponse, want, `for ${raw}`);
+    }
+  } finally {
+    if (saved === undefined) delete process.env.INTERRUPT_RESPONSE;
+    else process.env.INTERRUPT_RESPONSE = saved;
+    delete require.cache[require.resolve('../src/config')];
+    require('../src/config');
+  }
+});
+
+test('an unaddressed utterance raises no indicator and never sets answering', () => {
+  let typingCalls = 0;
+  const fake = fakeOnEventTarget({
+    channel: {
+      sendTyping: async () => {
+        typingCalls += 1;
+      },
+    },
+    typingTimer: null,
+    closed: false,
+    showTyping: Session.prototype.showTyping,
+  });
+
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({
+      type: 'conversation.item.input_audio_transcription.completed',
+      transcript: 'what do you think about the deploy',
+    }),
+  );
+
+  // Not cosmetic: the endpoint answers an unaddressed turn with silence, so
+  // nothing arrives to clear `answering`. Left set, it hangs the dots until the
+  // five-minute cap AND makes speak() refuse typed turns as busy for the same
+  // period — every sentence said to a colleague would wedge the typed path.
+  assert.equal(typingCalls, 0, 'no dots for speech that will never be answered');
+  assert.equal(fake.answering, false, 'and the busy gate must not arm');
+  assert.equal(fake.typingTimer, null);
 });
 
 test('the indicator stops when the response ends', () => {
@@ -220,7 +292,7 @@ test('the indicator stops when the response ends', () => {
     fake,
     JSON.stringify({
       type: 'conversation.item.input_audio_transcription.completed',
-      transcript: 'hi',
+      transcript: 'hey bot, hi',
     }),
   );
   assert.equal(fake.answering, true);
@@ -244,7 +316,7 @@ test('showTyping does not stack a second ticker on a repeated response.created',
 
   const utterance = JSON.stringify({
     type: 'conversation.item.input_audio_transcription.completed',
-    transcript: 'hi',
+    transcript: 'hey bot, hi',
   });
   Session.prototype.onEvent.call(fake, utterance);
   Session.prototype.onEvent.call(fake, utterance);
@@ -454,4 +526,49 @@ test('postToChannel chunks long text across multiple sends', async () => {
     'a 2500-char message must span more than one Discord message',
   );
   assert.equal(session._sent.join(''), long);
+});
+
+test('barge-in obeys the interrupt switch, not just the server side', () => {
+  // Two interrupt paths exist: the server cancels generation, the bot destroys
+  // playback. Gating only the server left an acknowledgement still cutting the
+  // assistant off mid-sentence, with the switch reading "off".
+  const stopped = [];
+  const fake = fakeOnEventTarget({
+    speaking: true,
+    stopAudio: () => stopped.push('stopped'),
+  });
+
+  const saved = config.interruptResponse;
+  try {
+    config.interruptResponse = false;
+    Session.prototype.onEvent.call(
+      fake,
+      JSON.stringify({ type: 'input_audio_buffer.speech_started' }),
+    );
+    assert.deepEqual(stopped, [], 'switch off: speaking over it must not kill playback');
+
+    config.interruptResponse = true;
+    Session.prototype.onEvent.call(
+      fake,
+      JSON.stringify({ type: 'input_audio_buffer.speech_started' }),
+    );
+    assert.deepEqual(stopped, ['stopped'], 'switch on: barge-in still works');
+  } finally {
+    config.interruptResponse = saved;
+  }
+});
+
+test('a wake phrase preceded by hesitation still counts', () => {
+  // Three real failures from one call. Requiring the phrase at the literal
+  // sentence start made the feature unusable in ordinary speech while passing
+  // every test written from imagined utterances.
+  assert.equal(
+    config.isAddressed('Hello. How are you? Uh hey bot, can you check my free disk space?'),
+    true,
+  );
+  assert.equal(config.isAddressed('Uh hey hey bot, did you hear me?'), true);
+  assert.equal(config.isAddressed("Okay, um, hey bot, what's my task?"), true);
+  // Only NOISE may precede it — a real word still does not count.
+  assert.equal(config.isAddressed("So, hey bot, what's my task"), false);
+  assert.equal(config.isAddressed('Oh hey.'), false);
 });

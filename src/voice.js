@@ -316,7 +316,29 @@ class Session {
 
     const ws = new WebSocket(config.s2sUrl, { maxPayload: 0 });
     this.ws = ws;
-    ws.on('open', () => log.info('  voice: s2s connected'));
+    ws.on('open', () => {
+      log.info('  voice: s2s connected');
+      // Deliberately a PARTIAL session.update: speech-to-speech deep-merges
+      // incoming fields (handlers/session.py:28), so sending only this one
+      // leaves the launcher's VAD tuning — thresholds, silence durations —
+      // exactly as it was. Sending a full `turn_detection` object would reset
+      // whatever it does not mention.
+      // Both `type` discriminators are REQUIRED, and omitting either gets the
+      // whole update rejected with "Unknown or invalid event: session.update"
+      // — a message that reads like the event is unsupported when it is really
+      // a validation failure. Verified against the openai SessionUpdateEvent
+      // model directly: without `session.type` it does not validate.
+      ws.send(
+        JSON.stringify({
+          type: 'session.update',
+          session: {
+            type: 'realtime',
+            turn_detection: { type: 'server_vad', interrupt_response: config.interruptResponse },
+          },
+        }),
+      );
+      log.info('  voice: interrupt-on-speech', { enabled: config.interruptResponse });
+    });
     // Object, not a bare string: the logger spreads its second argument, so a
     // string renders as {"0":"c","1":"o",…} and the message is unreadable.
     ws.on('error', (e) => log.error('  voice: s2s error', { error: e.message }));
@@ -524,7 +546,13 @@ class Session {
         this.showTyping();
         break;
       case 'input_audio_buffer.speech_started':
-        if (this.speaking) {
+        // TWO interrupt paths exist and both have to obey the same switch.
+        // The server cancels the generation (turn_detection.interrupt_response,
+        // set on connect); this one destroys the playback locally. Gating only
+        // the server left the answer produced and the audio thrown away — the
+        // same lost reply, a different cause, and a switch that looked set
+        // while an acknowledgement still cut the assistant off mid-sentence.
+        if (this.speaking && config.interruptResponse) {
           log.info('  voice: barge-in — stopping playback');
           // Must destroy the stream too: stopping the player alone leaves it
           // open, and the next chunk would resume the abandoned reply.
@@ -537,8 +565,19 @@ class Session {
         // an utterance and it has been transcribed. This is where the spoken
         // path raises the dots, because `response.created` never arrives for
         // it (see `answering` in the constructor).
-        this.answering = true;
-        this.showTyping();
+        //
+        // Only when the utterance was actually ADDRESSED to the bot. An
+        // unaddressed one is answered with silence by the endpoint, so nothing
+        // ever arrives to clear the flag: the dots hung until the five-minute
+        // cap, and — worse than cosmetic — `speak()` refuses typed turns as
+        // `busy` for exactly as long. Every sentence spoken to a colleague
+        // would have wedged the typed path.
+        if (config.isAddressed(e.transcript)) {
+          this.answering = true;
+          this.showTyping();
+        } else {
+          log.debug('  voice: not addressed, no typing indicator');
+        }
         break;
       // NOTE: response.output_audio.delta — NOT response.audio.delta, which is
       // what OpenAI's hosted Realtime uses and what most write-ups quote.

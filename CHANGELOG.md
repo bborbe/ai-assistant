@@ -1,5 +1,91 @@
 # Changelog
 
+## Unreleased
+
+- feat: Wait to be addressed. In a call the assistant hears every word an
+  allowlisted speaker says — the allowlist decides WHO may drive it, never
+  whether a given sentence was meant for it — so in company it answered
+  conversations addressed to other people. A voice turn now needs to open with
+  a wake phrase (`SHIM_WAKE_PHRASES` / `voice.wake_phrases`, default
+  `hey bot` plus two of its likely mishearings), and reaches the model with the
+  address stripped. Unaddressed speech takes the same silent path as filler:
+  empty content, so nothing is synthesised and no holding line is spoken.
+  Deliberately: prefix-matched not anywhere-matched, a fixed variant list not
+  fuzzy matching, always on rather than switching on head count, and no
+  follow-up window — every ambiguous case resolves to silence, because a missed
+  trigger costs one repeat while a false one interrupts a room. Typed turns are
+  never gated; an `@mention` already addressed the bot.
+- fix: Do not raise the typing indicator for an utterance that was not
+  addressed to the bot. Found in the first live test of the gate above: the
+  dots appeared and then nothing came, because the bot raises them on the
+  transcription event while the endpoint decides addressing seconds later.
+  Worse than cosmetic — the endpoint answers an unaddressed turn with silence,
+  so nothing ever arrived to clear `answering`, hanging the dots until the
+  five-minute cap and making `speak()` refuse typed turns as `busy` for the
+  same period. Every sentence spoken to a colleague would have wedged the typed
+  path. The bot now applies the same prefix rule to the transcript it already
+  receives; the endpoint remains the authority on what is answered.
+- fix: Strip closer panels from what the chat bridge posts. `strip_panels`
+  says it applies to both surfaces; the bridge was the one path that skipped
+  it, so "🔵 READY", "👤 You:" and "⏰ Next:" lines were landing in the Discord
+  channel verbatim. Present since the bridge shipped in v0.5.0.
+- fix: Strip the 📌 / 🎯 anchor lines too. The panel matcher covered the state
+  line but not the two lines that introduce it, so half a panel was removed and
+  half posted — visible on both surfaces, not only through the bridge.
+- fix: Skip leading disfluencies before the wake phrase. People do not start a
+  sentence on the phrase, they start on a hesitation — three consecutive live
+  failures were "Uh hey bot, can you check my free disk space?", "Uh hey hey
+  bot, did you hear me?" and a filler-led retry. Requiring the phrase at the
+  literal sentence start made the feature unusable in ordinary speech while
+  passing every test written from imagined utterances. Only NOISE may precede
+  it (the existing `_FILLER_WORDS`, plus "hey"), so "so, hey bot" still does
+  not count — the phrase must still be the first real word.
+- fix: Make `INTERRUPT_RESPONSE` govern BOTH interrupt paths. There are two:
+  the server cancels the generation (`turn_detection.interrupt_response`) and
+  the bot destroys the playback stream on `speech_started`. Only the first was
+  gated, so with the switch reading off an acknowledgement still cut the
+  assistant off mid-sentence — the same lost answer, a different cause, and a
+  switch that looked set while the behaviour it names carried on.
+- fix: Anchor the wake phrase to the start of a SENTENCE, not the start of the
+  utterance. speech-to-speech grows one turn across progressive finals, so a
+  transcript becomes "Uh can you check my disk space? Hey bot, can you check my
+  disk space?" — the phrase is present but never at position zero, and three
+  consecutive properly-addressed attempts were all rejected. Still anchored: "I
+  told him the bot was broken" and "so, hey bot, …" stay quiet, because the
+  phrase must OPEN a sentence rather than merely appear. Everything before the
+  phrase is now dropped along with it — on an accumulated turn that text is
+  what was said to the room, and feeding it to the model asks the wrong
+  question.
+- fix: Send `session.update` in a shape the server accepts. Both `type`
+  discriminators are required (`session.type: realtime`,
+  `turn_detection.type: server_vad`); without them the whole update is rejected
+  as `Unknown or invalid event: session.update` — a message that reads like the
+  event is unsupported when it is really a validation failure, so the
+  interrupt switch below silently did nothing on every connect.
+- feat: Make barge-in a switch, `INTERRUPT_RESPONSE`, and default it OFF.
+  Speaking while the assistant was answering cancelled that answer — observed
+  live, an "okay" nine seconds into a lookup threw the reply away silently and
+  it never arrived. Not filterable where it happens: the cancel fires on the
+  VAD's `speech_started`, pure acoustics, before any words exist, so "okay" and
+  "stop, wrong question" are the same event and speech-to-speech offers no
+  threshold or content filter — only the boolean. Off costs little because
+  spoken replies are capped at a couple of sentences; `INTERRUPT_RESPONSE=1`
+  restores the old behaviour. Sent as a PARTIAL `session.update` so the
+  launcher's VAD tuning is deep-merged rather than reset.
+- fix: Boolean settings now accept `1/true/yes/on` and `0/false/no/off`, on
+  both sides, case-insensitively and with surrounding quotes stripped.
+  `INTERRUPT_RESPONSE=true` previously did nothing at all — the bot tested for
+  the literal `"1"` — and the two processes disagreed on the rest: `off` read
+  as TRUE in the shim (its false-list lacked it) and false in the bot, while a
+  Make-quoted `"0"` read as TRUE in both. A switch that looks set and isn't is
+  worse than no switch, because it fails quietly in the safe-looking direction.
+  `TRANSCRIBE` and `ANNOUNCE_TRANSCRIPTION` go through the same parser now.
+- fix: Tolerate surrounding quotes on `SHIM_WAKE_PHRASES`. The Makefile's
+  `-include local.env` parses with Make semantics, so `export X="a,b"` reaches
+  the process with the quotes still in the value and the first phrase becomes
+  `"hey bot`, matching nothing. Third instance of this family after `$HOME` and
+  the secret-in-argv case.
+
 ## v0.6.0
 
 - feat: In a live call, an answer to a typed question is now BOTH spoken and
