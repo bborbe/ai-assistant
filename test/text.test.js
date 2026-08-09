@@ -106,6 +106,28 @@ test('a typed turn with no live call in that channel still answers in text', asy
   }
 });
 
+test('the typing indicator starts immediately and stops when the response ends', async () => {
+  let typingCalls = 0;
+  const target = {
+    sendTyping: async () => {
+      typingCalls += 1;
+    },
+  };
+  const session = { inResponse: true, closed: false };
+
+  const timer = text.showTypingWhileAnswering(target, session);
+  // The FIRST one is not on the interval — a typed turn answered in under
+  // eight seconds would otherwise show no indicator at all, which is exactly
+  // the gap this closes.
+  await new Promise((r) => setImmediate(r));
+  assert.equal(typingCalls, 1, 'shown before the first tick, not after it');
+
+  // The response finishing is what stops it; nothing else has to remember to.
+  session.inResponse = false;
+  clearInterval(timer);
+  assert.equal(typingCalls, 1);
+});
+
 test('a typed turn in a live call channel is routed to speak() and never answered in text', async () => {
   const client = fakeClient();
   text.register(client);

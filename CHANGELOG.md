@@ -11,6 +11,12 @@
   and that becomes a fourth chat-bridge trigger. Deliberately not symmetric:
   spoken turns keep the three inference-based triggers, so a spoken "hello"
   still does not litter the channel.
+- fix: Show the typing indicator while a typed turn is being answered aloud.
+  The text path has always shown Discord's "…is typing" dots; routing into
+  voice returned before reaching them, so the chat looked idle until the
+  written copy landed — indistinguishable from having been ignored. The
+  spoken filler is not a substitute for anyone watching the chat rather than
+  listening. Stops on the response ending, on the bridge post, or on a cap.
 
 - feat: Answer a typed message aloud when it lands in a live call's own text
   chat. Pushes the typed turn into the s2s socket the call already holds
