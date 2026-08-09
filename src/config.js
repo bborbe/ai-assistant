@@ -56,6 +56,11 @@ const config = {
   // Empty means the route refuses every request (fails closed).
   chatBridgeToken: (process.env.CHAT_BRIDGE_TOKEN || '').trim(),
 
+  // How long a speaker must stay silent before their utterance is considered
+  // finished. Discord's `speaking.end` fires on brief pauses inside a sentence,
+  // so without this a single sentence arrives as several utterances.
+  utteranceGapMs: parseInt(process.env.UTTERANCE_GAP_MS || '1500', 10),
+
   // Must stay below the pod's terminationGracePeriodSeconds.
   shutdownTimeoutMs: parseInt(process.env.SHUTDOWN_TIMEOUT_MS || '10000', 10),
 

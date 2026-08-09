@@ -23,9 +23,9 @@ const DISCORD_RATE = 48000,
   DISCORD_CH = 2;
 const S2S_RATE = 16000;
 const TICK_MS = 20;
-// How long a speaker must stay silent before their utterance is considered
-// finished. Discord's speaking.end fires on brief pauses within a sentence.
-const UTTERANCE_GAP_MS = parseInt(process.env.UTTERANCE_GAP_MS || '1500', 10);
+// Resolved in config.js with every other env read, so the service's real
+// configuration surface can be enumerated in one place.
+const UTTERANCE_GAP_MS = config.utteranceGapMs;
 const IN_BYTES = (DISCORD_RATE * DISCORD_CH * 2 * TICK_MS) / 1000; // 20ms @48k stereo
 const OUT_SAMPLES = (S2S_RATE * TICK_MS) / 1000; // 20ms @16k mono
 // One 20ms frame of what Discord plays back: 48k, stereo, 16-bit.
