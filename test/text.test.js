@@ -26,8 +26,9 @@ function fakeClient() {
   };
 }
 
-function fakeMsg({ content, liveGuildId = 'guild-1' } = {}) {
+function fakeMsg({ content, liveGuildId = 'guild-1', channelId = 'chan-1' } = {}) {
   const sent = [];
+  let typingCalls = 0;
   return {
     author: { bot: false, id: 'user-1', tag: 'user-1#0' },
     member: { displayName: 'User One' },
@@ -35,13 +36,19 @@ function fakeMsg({ content, liveGuildId = 'guild-1' } = {}) {
     content,
     mentions: { users: { has: (id) => id === 'bot-1' } },
     channel: {
-      id: 'chan-1',
+      id: channelId,
       // No `threads` property: conversationChannel() falls back to the
       // channel itself rather than opening a thread — keeps the fake
       // minimal for a channel that is a live call's own text chat.
       send: async (part) => sent.push(part),
+      // Only the text path calls this — reaching it IS the assertion that
+      // routing did not divert the message into a spoken reply.
+      sendTyping: async () => {
+        typingCalls += 1;
+      },
     },
     _sent: sent,
+    _typingCalls: () => typingCalls,
   };
 }
 
@@ -64,6 +71,39 @@ function fakeLiveSession({ speakResult }) {
 test.beforeEach(() => {
   voice.sessions.clear();
   config.allowedUserIds = ['user-1'];
+});
+
+// The regression guard for everything this PR did NOT mean to change.
+//
+// The routing branch sits inside the messageCreate handler that EVERY text
+// surface flows through — DMs, threads, ordinary guild channels. The two
+// tests below it only exercise the live-call path, so a liveSessionFor that
+// matched too broadly would turn ordinary text answering into silence and
+// nothing would fail. Reaching sendTyping is the observable proof the message
+// went down the text path instead.
+//
+// The endpoint is pointed at a closed port on purpose: this asserts the
+// ROUTING decision, and must not depend on (or accidentally talk to) a shim
+// that happens to be running on the developer's laptop.
+test('a typed turn with no live call in that channel still answers in text', async () => {
+  const client = fakeClient();
+  text.register(client);
+  // A live session exists — for a DIFFERENT channel. This is the case that
+  // would break if the guild lookup ignored channelId.
+  const live = fakeLiveSession({ speakResult: { ok: true } });
+  voice.sessions.set('guild-1', live);
+
+  const baseUrl = config.baseUrl;
+  config.baseUrl = 'http://127.0.0.1:1/v1';
+  try {
+    const msg = fakeMsg({ content: '<@bot-1> tell me a joke', channelId: 'other-chan' });
+    await client.fire(msg);
+
+    assert.deepEqual(live._spoken, [], 'a channel with no live call must never be spoken to');
+    assert.equal(msg._typingCalls(), 1, 'the text path must still run');
+  } finally {
+    config.baseUrl = baseUrl;
+  }
 });
 
 test('a typed turn in a live call channel is routed to speak() and never answered in text', async () => {
