@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.7.0
 
 - feat: Wait to be addressed. In a call the assistant hears every word an
   allowlisted speaker says — the allowlist decides WHO may drive it, never
