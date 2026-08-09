@@ -807,8 +807,22 @@ WAKE_PHRASES = setting("SHIM_WAKE_PHRASES", "voice.wake_phrases", "hey bot,hey b
 #
 # Still anchored, which is the point: "I told him the bot was broken" does not
 # match, because the phrase has to OPEN a sentence rather than merely appear.
+# Leading disfluencies are skipped, because people do not start a sentence on
+# the wake phrase — they start on a hesitation. Three real failures in one call:
+# "Uh hey bot, can you check my free disk space?", "Uh hey hey bot, did you hear
+# me?", and a "so," lead-in. Requiring the phrase at the literal sentence start
+# made the feature unusable in ordinary speech while looking correct in tests
+# written from imagined utterances.
+#
+# The skippable set is `_FILLER_WORDS` — already defined above, and already the
+# project's answer to "noises that are not content" — plus "hey", so a doubled
+# "hey hey bot" lands. It does NOT widen what counts as a wake phrase: only
+# noise may precede it, never a real word.
+_WAKE_LEAD = r"(?:(?:" + "|".join(sorted(_FILLER_WORDS | {"hey"})) + r")[\s,.!?-]+){0,3}"
 _WAKE_RE = re.compile(
-    r"(?:\A|[.!?]\s+|\n)\W*(?:"
+    r"(?:\A|[.!?]\s+|\n)\W*"
+    + _WAKE_LEAD
+    + r"(?:"
     + "|".join(re.escape(p.strip()) for p in WAKE_PHRASES.split(",") if p.strip())
     + r")\b",
     re.I,

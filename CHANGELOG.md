@@ -25,6 +25,14 @@
   same period. Every sentence spoken to a colleague would have wedged the typed
   path. The bot now applies the same prefix rule to the transcript it already
   receives; the endpoint remains the authority on what is answered.
+- fix: Skip leading disfluencies before the wake phrase. People do not start a
+  sentence on the phrase, they start on a hesitation — three consecutive live
+  failures were "Uh hey bot, can you check my free disk space?", "Uh hey hey
+  bot, did you hear me?" and a filler-led retry. Requiring the phrase at the
+  literal sentence start made the feature unusable in ordinary speech while
+  passing every test written from imagined utterances. Only NOISE may precede
+  it (the existing `_FILLER_WORDS`, plus "hey"), so "so, hey bot" still does
+  not count — the phrase must still be the first real word.
 - fix: Make `INTERRUPT_RESPONSE` govern BOTH interrupt paths. There are two:
   the server cancels the generation (`turn_detection.interrupt_response`) and
   the bot destroys the playback stream on `speech_started`. Only the first was

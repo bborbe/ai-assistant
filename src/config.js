@@ -23,6 +23,33 @@ function flag(raw, fallback) {
   return fallback;
 }
 
+// Noise that may sit between the start of a sentence and the wake phrase.
+// Mirrors the endpoint's `_FILLER_WORDS` (plus "hey", for a doubled "hey hey
+// bot"). Kept in sync by hand; a drift costs a missed trigger, never a false
+// one, because this list only ever lets NOISE precede the phrase.
+const WAKE_LEAD_WORDS = [
+  'ah',
+  'alright',
+  'eh',
+  'erm',
+  'hey',
+  'hm',
+  'hmm',
+  'mhm',
+  'mm',
+  'mmhmm',
+  'mmm',
+  'oh',
+  'ok',
+  'okay',
+  'right',
+  'uh',
+  'um',
+  'yeah',
+  'yep',
+  'yup',
+];
+
 function list(v) {
   return (v || '')
     .split(',')
@@ -146,9 +173,15 @@ config.isAddressed = (text) => {
   // turn across progressive finals, so the phrase routinely lands mid-string
   // ("…disk space? Hey bot, can you check…"). Still anchored — the phrase must
   // OPEN a sentence, so "I told him the bot was broken" stays quiet.
+  // Leading disfluencies are skipped: people open on a hesitation, not on the
+  // wake phrase ("Uh hey bot, …"). Mirrors the endpoint's list; only noise may
+  // precede the phrase, never a real word — "so, hey bot" still does not count.
   const t = String(text || '').toLowerCase();
   return config.wakePhrases.some((p) =>
-    new RegExp(`(?:^|[.!?]\\s+|\\n)\\W*${p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(t),
+    new RegExp(
+      `(?:^|[.!?]\\s+|\\n)\\W*(?:(?:${WAKE_LEAD_WORDS.join('|')})[\\s,.!?-]+){0,3}` +
+        `${p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`,
+    ).test(t),
   );
 };
 

@@ -557,3 +557,18 @@ test('barge-in obeys the interrupt switch, not just the server side', () => {
     config.interruptResponse = saved;
   }
 });
+
+test('a wake phrase preceded by hesitation still counts', () => {
+  // Three real failures from one call. Requiring the phrase at the literal
+  // sentence start made the feature unusable in ordinary speech while passing
+  // every test written from imagined utterances.
+  assert.equal(
+    config.isAddressed('Hello. How are you? Uh hey bot, can you check my free disk space?'),
+    true,
+  );
+  assert.equal(config.isAddressed('Uh hey hey bot, did you hear me?'), true);
+  assert.equal(config.isAddressed("Okay, um, hey bot, what's my task?"), true);
+  // Only NOISE may precede it — a real word still does not count.
+  assert.equal(config.isAddressed("So, hey bot, what's my task"), false);
+  assert.equal(config.isAddressed('Oh hey.'), false);
+});
