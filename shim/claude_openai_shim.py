@@ -763,7 +763,7 @@ TEXT_DIRECTIVE = (
 # are excluded for the same reason — they answer a question.
 _FILLER_WORDS = {
     "okay", "ok", "yeah", "yep", "yup", "mm", "mmm", "mhm", "mmhmm", "hmm", "hm",
-    "uh", "um", "ah", "oh", "erm", "eh", "alright", "right",
+    "uh", "um", "ah", "oh", "ooh", "erm", "eh", "alright", "right",
 }
 
 

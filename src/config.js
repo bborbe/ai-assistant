@@ -40,6 +40,7 @@ const WAKE_LEAD_WORDS = [
   'mmhmm',
   'mmm',
   'oh',
+  'ooh',
   'ok',
   'okay',
   'right',
