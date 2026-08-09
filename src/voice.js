@@ -546,7 +546,13 @@ class Session {
         this.showTyping();
         break;
       case 'input_audio_buffer.speech_started':
-        if (this.speaking) {
+        // TWO interrupt paths exist and both have to obey the same switch.
+        // The server cancels the generation (turn_detection.interrupt_response,
+        // set on connect); this one destroys the playback locally. Gating only
+        // the server left the answer produced and the audio thrown away — the
+        // same lost reply, a different cause, and a switch that looked set
+        // while an acknowledgement still cut the assistant off mid-sentence.
+        if (this.speaking && config.interruptResponse) {
           log.info('  voice: barge-in — stopping playback');
           // Must destroy the stream too: stopping the player alone leaves it
           // open, and the next chunk would resume the abandoned reply.

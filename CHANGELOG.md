@@ -25,6 +25,12 @@
   same period. Every sentence spoken to a colleague would have wedged the typed
   path. The bot now applies the same prefix rule to the transcript it already
   receives; the endpoint remains the authority on what is answered.
+- fix: Make `INTERRUPT_RESPONSE` govern BOTH interrupt paths. There are two:
+  the server cancels the generation (`turn_detection.interrupt_response`) and
+  the bot destroys the playback stream on `speech_started`. Only the first was
+  gated, so with the switch reading off an acknowledgement still cut the
+  assistant off mid-sentence — the same lost answer, a different cause, and a
+  switch that looked set while the behaviour it names carried on.
 - fix: Anchor the wake phrase to the start of a SENTENCE, not the start of the
   utterance. speech-to-speech grows one turn across progressive finals, so a
   transcript becomes "Uh can you check my disk space? Hey bot, can you check my

@@ -527,3 +527,33 @@ test('postToChannel chunks long text across multiple sends', async () => {
   );
   assert.equal(session._sent.join(''), long);
 });
+
+test('barge-in obeys the interrupt switch, not just the server side', () => {
+  // Two interrupt paths exist: the server cancels generation, the bot destroys
+  // playback. Gating only the server left an acknowledgement still cutting the
+  // assistant off mid-sentence, with the switch reading "off".
+  const stopped = [];
+  const fake = fakeOnEventTarget({
+    speaking: true,
+    stopAudio: () => stopped.push('stopped'),
+  });
+
+  const saved = config.interruptResponse;
+  try {
+    config.interruptResponse = false;
+    Session.prototype.onEvent.call(
+      fake,
+      JSON.stringify({ type: 'input_audio_buffer.speech_started' }),
+    );
+    assert.deepEqual(stopped, [], 'switch off: speaking over it must not kill playback');
+
+    config.interruptResponse = true;
+    Session.prototype.onEvent.call(
+      fake,
+      JSON.stringify({ type: 'input_audio_buffer.speech_started' }),
+    );
+    assert.deepEqual(stopped, ['stopped'], 'switch on: barge-in still works');
+  } finally {
+    config.interruptResponse = saved;
+  }
+});
