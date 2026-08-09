@@ -143,6 +143,16 @@ class Session {
     // Live "…is typing" ticker in the call's text chat, while any answer is
     // being produced — see showTyping().
     this.typingTimer = null;
+    // "An answer is on its way", for the typing indicator only.
+    //
+    // Deliberately NOT `inResponse`: that mirrors the server's client-visible
+    // response state, and the server only announces `response.created` for a
+    // response the CLIENT asked for (handlers/response.py:191). A mic turn
+    // never emits one — by the time audio begins, assistant text has already
+    // called `_ensure_response`, so `audio.py`'s `need_created` is false and
+    // the event is skipped. So a spoken turn needs its own signal, and the
+    // earliest honest one is the user's utterance being transcribed.
+    this.answering = false;
 
     // Transcript path — EVERY speaker, independent of the command allowlist.
     // Buffers here are flushed on each speaker's silence boundary.
@@ -442,10 +452,12 @@ class Session {
    * Keep Discord's "…is typing" dots alive in the call's text chat while the
    * assistant is answering — whichever surface asked.
    *
-   * Driven from `response.created` rather than from the typed-turn path,
-   * because the inconsistency is what people notice: a typed question showed
-   * dots, an identical spoken question did not, yet BOTH can end with text
-   * appearing in the channel. One trigger, one behaviour.
+   * Raised from TWO signals, because the two surfaces announce themselves
+   * differently and there is no single event covering both: `response.created`
+   * for a turn the client asked for (typed), and the user's utterance being
+   * transcribed for a mic turn — which never emits `response.created` at all.
+   * Assuming one event covered both is exactly how the first attempt at this
+   * shipped without working for speech.
    *
    * Accepted cost, stated because it is a real one: a spoken turn that never
    * produces a written copy (a greeting, a two-sentence answer with nothing
@@ -463,7 +475,7 @@ class Session {
     const tick = () => this.channel.sendTyping().catch(() => {});
     tick();
     this.typingTimer = setInterval(() => {
-      if (!this.inResponse || this.closed || Date.now() - startedAt > TYPING_MAX_MS) {
+      if (!this.answering || this.closed || Date.now() - startedAt > TYPING_MAX_MS) {
         clearInterval(this.typingTimer);
         this.typingTimer = null;
         return;
@@ -497,6 +509,7 @@ class Session {
       // speak() must refuse just as cleanly during someone else's live reply.
       case 'response.created':
         this.inResponse = true;
+        this.answering = true;
         this.showTyping();
         break;
       case 'input_audio_buffer.speech_started':
@@ -509,6 +522,12 @@ class Session {
         break;
       case 'conversation.item.input_audio_transcription.completed':
         if (e.transcript) log.info(`  voice YOU: ${e.transcript}`);
+        // The mic turn's "an answer is coming" signal — the user has finished
+        // an utterance and it has been transcribed. This is where the spoken
+        // path raises the dots, because `response.created` never arrives for
+        // it (see `answering` in the constructor).
+        this.answering = true;
+        this.showTyping();
         break;
       // NOTE: response.output_audio.delta — NOT response.audio.delta, which is
       // what OpenAI's hosted Realtime uses and what most write-ups quote.
@@ -557,6 +576,7 @@ class Session {
         // here would wedge every future speak() as permanently busy.
         this.typedReplyPending = false;
         this.inResponse = false;
+        this.answering = false;
         this.endAudio();
         break;
       case 'error':

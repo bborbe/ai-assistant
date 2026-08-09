@@ -15,9 +15,13 @@
   spoken or typed. The text path has always shown Discord's "…is typing"
   dots; the voice path never did, so text could arrive in the channel with no
   sign it was coming — indistinguishable from having been ignored. Raised
-  from `response.created`, so one trigger covers both surfaces rather than
-  the typed path growing its own. Accepted cost: a spoken turn that produces
-  no written copy now flashes the dots briefly and posts nothing.
+  from two signals, because no single event covers both surfaces:
+  `response.created` for a client-requested (typed) turn, and the user's
+  utterance being transcribed for a mic turn — which never emits
+  `response.created` at all, since assistant text calls `_ensure_response`
+  first and the audio path then skips the event. Accepted cost: a spoken turn
+  that produces no written copy now flashes the dots briefly and posts
+  nothing.
 
 - feat: Answer a typed message aloud when it lands in a live call's own text
   chat. Pushes the typed turn into the s2s socket the call already holds

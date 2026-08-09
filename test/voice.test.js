@@ -178,7 +178,7 @@ test('speak sends conversation.item.create then response.create, in order', asyn
   assert.deepEqual(await pending, { ok: true });
 });
 
-test('response.created raises the typing indicator for a MIC turn too', () => {
+test('a transcribed mic utterance raises the typing indicator', () => {
   let typingCalls = 0;
   const fake = fakeOnEventTarget({
     channel: {
@@ -191,12 +191,41 @@ test('response.created raises the typing indicator for a MIC turn too', () => {
     showTyping: Session.prototype.showTyping,
   });
 
-  // No speak() anywhere in this test: this is the spoken path, and it is the
-  // one that showed no dots while its answer was on its way to the channel.
-  Session.prototype.onEvent.call(fake, JSON.stringify({ type: 'response.created' }));
+  // The spoken path does NOT get response.created — the server only emits it
+  // for a client-requested response (handlers/response.py:191). Driving this
+  // test with response.created is what made the first attempt look correct
+  // while doing nothing on a real call.
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({
+      type: 'conversation.item.input_audio_transcription.completed',
+      transcript: 'how many vision pages do I have',
+    }),
+  );
 
-  assert.equal(fake.inResponse, true);
+  assert.equal(fake.answering, true);
   assert.equal(typingCalls, 1, 'shown immediately, not on the first 8s tick');
+  clearInterval(fake.typingTimer);
+});
+
+test('the indicator stops when the response ends', () => {
+  const fake = fakeOnEventTarget({
+    channel: { sendTyping: async () => {} },
+    typingTimer: null,
+    closed: false,
+    showTyping: Session.prototype.showTyping,
+  });
+
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({
+      type: 'conversation.item.input_audio_transcription.completed',
+      transcript: 'hi',
+    }),
+  );
+  assert.equal(fake.answering, true);
+  Session.prototype.onEvent.call(fake, JSON.stringify({ type: 'response.done' }));
+  assert.equal(fake.answering, false, 'the ticker stops itself on the next tick');
   clearInterval(fake.typingTimer);
 });
 
@@ -213,8 +242,12 @@ test('showTyping does not stack a second ticker on a repeated response.created',
     showTyping: Session.prototype.showTyping,
   });
 
-  Session.prototype.onEvent.call(fake, JSON.stringify({ type: 'response.created' }));
-  Session.prototype.onEvent.call(fake, JSON.stringify({ type: 'response.created' }));
+  const utterance = JSON.stringify({
+    type: 'conversation.item.input_audio_transcription.completed',
+    transcript: 'hi',
+  });
+  Session.prototype.onEvent.call(fake, utterance);
+  Session.prototype.onEvent.call(fake, utterance);
 
   assert.equal(typingCalls, 1, 'the second call must find a live ticker and leave it alone');
   clearInterval(fake.typingTimer);
@@ -354,6 +387,7 @@ function fakeOnEventTarget(overrides = {}) {
     // Stubbed by default so the event tests stay about event handling; the two
     // tests that are ABOUT the indicator pass the real prototype method in.
     showTyping: () => {},
+    answering: false,
     ...overrides,
   };
 }
