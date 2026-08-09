@@ -103,7 +103,11 @@ def setting(env: str, path: str, default):
     if raw is None:
         return default
     if isinstance(default, bool):
-        return str(raw).strip().lower() not in ("0", "false", "no", "")
+        # Quotes stripped and "off" included so this agrees with the bot's
+        # `flag()` (src/config.js) on every spelling. It did not: `X=off` read
+        # as TRUE here and false there, and a Make-quoted `"0"` read as TRUE on
+        # both — a switch that looks set and isn't is worse than no switch.
+        return str(raw).strip().strip("\"'").lower() not in ("0", "false", "no", "off", "")
     if isinstance(default, int) and not isinstance(default, bool):
         return int(raw)
     if isinstance(default, float):

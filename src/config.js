@@ -1,5 +1,28 @@
 'use strict';
 
+/**
+ * Read a boolean env var the way people actually write them.
+ *
+ * `X=true` silently doing nothing because the code only tested for `"1"` is a
+ * switch that looks set and isn't — worse than no switch, because it fails
+ * quietly and in the safe-looking direction. So all of 1/true/yes/on and
+ * 0/false/no/off are accepted, case-insensitively.
+ *
+ * Surrounding quotes are stripped for the same reason `wakePhrases` strips
+ * them: the Makefile's `-include local.env` parses with MAKE semantics, so
+ * `export X="1"` arrives as `"1"` with the quote characters still attached.
+ */
+function flag(raw, fallback) {
+  const v = String(raw ?? '')
+    .replace(/^["']|["']$/g, '')
+    .trim()
+    .toLowerCase();
+  if (!v) return fallback;
+  if (['1', 'true', 'yes', 'on'].includes(v)) return true;
+  if (['0', 'false', 'no', 'off'].includes(v)) return false;
+  return fallback;
+}
+
 function list(v) {
   return (v || '')
     .split(',')
@@ -34,7 +57,7 @@ const config = {
   // Deliberately separate from the command path: the allowlist controls who can
   // *drive* the bot, this controls who gets *written down*. Recording other
   // people is a consent matter wherever that is not obviously fine.
-  transcribe: process.env.TRANSCRIBE !== '0',
+  transcribe: flag(process.env.TRANSCRIBE, true),
   // Set TRANSCRIPT_DIR in local.env. It belongs somewhere the shim can READ —
   // Claude Code runs with cwd in the vault and no --add-dir, so a path outside
   // it cannot be read mid-call, and "what did we just discuss?" would fail.
@@ -44,7 +67,7 @@ const config = {
   // How the bot labels itself in transcripts.
   botName: process.env.BOT_NAME || 'Assistant',
   // Announce in-channel on join, so recording is never silent.
-  announceTranscription: process.env.ANNOUNCE_TRANSCRIPTION !== '0',
+  announceTranscription: flag(process.env.ANNOUNCE_TRANSCRIPTION, true),
 
   // Health/readiness endpoints, so this runs as a normal k8s workload.
   healthHost: process.env.HEALTH_HOST || '0.0.0.0',
@@ -72,8 +95,8 @@ const config = {
   //
   // Off costs little here because spoken replies are capped at SHIM_SPOKEN_MAX
   // sentences — there is rarely more than a few seconds of audio to interrupt.
-  // Set INTERRUPT_RESPONSE=1 for the talk-over-it behaviour.
-  interruptResponse: process.env.INTERRUPT_RESPONSE === '1',
+  // Set INTERRUPT_RESPONSE to 1/true/yes/on for the talk-over-it behaviour.
+  interruptResponse: flag(process.env.INTERRUPT_RESPONSE, false),
 
   // Wake phrases, comma-separated — a COPY of the endpoint's list, used only to
   // decide whether to raise the "…is typing" indicator and to arm the busy

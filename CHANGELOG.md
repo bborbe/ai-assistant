@@ -35,6 +35,14 @@
   spoken replies are capped at a couple of sentences; `INTERRUPT_RESPONSE=1`
   restores the old behaviour. Sent as a PARTIAL `session.update` so the
   launcher's VAD tuning is deep-merged rather than reset.
+- fix: Boolean settings now accept `1/true/yes/on` and `0/false/no/off`, on
+  both sides, case-insensitively and with surrounding quotes stripped.
+  `INTERRUPT_RESPONSE=true` previously did nothing at all — the bot tested for
+  the literal `"1"` — and the two processes disagreed on the rest: `off` read
+  as TRUE in the shim (its false-list lacked it) and false in the bot, while a
+  Make-quoted `"0"` read as TRUE in both. A switch that looks set and isn't is
+  worse than no switch, because it fails quietly in the safe-looking direction.
+  `TRANSCRIBE` and `ANNOUNCE_TRANSCRIPTION` go through the same parser now.
 - fix: Tolerate surrounding quotes on `SHIM_WAKE_PHRASES`. The Makefile's
   `-include local.env` parses with Make semantics, so `export X="a,b"` reaches
   the process with the quotes still in the value and the first phrase becomes
