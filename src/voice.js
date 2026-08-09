@@ -18,6 +18,9 @@ const config = require('./config');
 const log = require('./log');
 const { TranscriptSession } = require('./transcript');
 const { chunk } = require('./discord-chunk');
+// Imported as a namespace, not destructured: the typed-turn hint is stubbed in
+// tests, and a destructured binding would capture the original function.
+const llm = require('./llm');
 
 const DISCORD_RATE = 48000,
   DISCORD_CH = 2;
@@ -347,63 +350,83 @@ class Session {
    * this turn. The common busy case never reaches this window at all,
    * because the gate above refuses before sending anything.
    */
-  speak(text, { timeoutMs = config.speakAckTimeoutMs } = {}) {
-    return new Promise((resolve) => {
-      if (this.closed || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
-        resolve({ ok: false, reason: 'no-socket' });
-        return;
-      }
-      if (this.awaitingSpeakAck || this.inResponse) {
-        resolve({ ok: false, reason: 'busy' });
-        return;
-      }
-      this.awaitingSpeakAck = true;
-      const ws = this.ws;
-      let settled = false;
-      const finish = (result) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        ws.removeListener('message', onAck);
-        this.awaitingSpeakAck = false;
-        this.pendingSpeakFinish = null;
-        resolve(result);
-      };
-      this.pendingSpeakFinish = finish;
-      const timer = setTimeout(() => finish({ ok: false, reason: 'timeout' }), timeoutMs);
-      const onAck = (raw) => {
-        let e;
-        try {
-          e = JSON.parse(raw);
-        } catch {
-          return;
-        }
-        if (e.type === 'response.created') {
-          this.typedReplyPending = true;
-          finish({ ok: true });
-        } else if (e.type === 'error') {
-          // Any refusal ends the wait immediately — not just the one reason
-          // this path anticipates — so a caller sees the real reason instead
-          // of a misleading `timeout` several seconds later. The server's own
-          // "one response at a time" refusal keeps its documented `busy`
-          // label (response.py:150); every other error type is passed
-          // through as-is rather than flattened to a generic string.
-          const type = e.error?.type;
-          finish({
-            ok: false,
-            reason: type === 'conversation_already_has_active_response' ? 'busy' : type || 'error',
-          });
-        }
-      };
-      ws.on('message', onAck);
-      ws.send(
-        JSON.stringify({
-          type: 'conversation.item.create',
-          item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] },
-        }),
-      );
-      ws.send(JSON.stringify({ type: 'response.create' }));
-    });
+  async speak(text, { timeoutMs = config.speakAckTimeoutMs } = {}) {
+    // Both refusals are decided BEFORE the typed-turn hint is set, so the
+    // common "someone is already talking" case never leaves a hint behind for
+    // a turn that will not happen.
+    if (this.closed || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return { ok: false, reason: 'no-socket' };
+    }
+    if (this.awaitingSpeakAck || this.inResponse) {
+      return { ok: false, reason: 'busy' };
+    }
+
+    // Before the turn, not after: the endpoint consumes the hint at the top of
+    // the turn it belongs to, and s2s only calls the endpoint once generation
+    // starts — strictly after the `response.created` awaited below. Awaited so
+    // it cannot lose the race against a fast turn. Voice always lands on the
+    // default session key, which is the key the endpoint will read.
+    await llm.markTypedTurn(llm.DEFAULT_SESSION_KEY);
+    // Deliberately a local closure rather than a second method: `speak` is
+    // driven in tests as `Session.prototype.speak.call(fakeSession, …)`, and
+    // anything reached through `this` would have to be re-attached to every
+    // fake — a helper whose only effect is to make the code harder to test.
+    const awaitAck = () =>
+      new Promise((resolve) => {
+        this.awaitingSpeakAck = true;
+        const ws = this.ws;
+        let settled = false;
+        const finish = (result) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          ws.removeListener('message', onAck);
+          this.awaitingSpeakAck = false;
+          this.pendingSpeakFinish = null;
+          resolve(result);
+        };
+        this.pendingSpeakFinish = finish;
+        const timer = setTimeout(() => finish({ ok: false, reason: 'timeout' }), timeoutMs);
+        const onAck = (raw) => {
+          let e;
+          try {
+            e = JSON.parse(raw);
+          } catch {
+            return;
+          }
+          if (e.type === 'response.created') {
+            this.typedReplyPending = true;
+            finish({ ok: true });
+          } else if (e.type === 'error') {
+            // Any refusal ends the wait immediately — not just the one reason
+            // this path anticipates — so a caller sees the real reason instead
+            // of a misleading `timeout` several seconds later. The server's own
+            // "one response at a time" refusal keeps its documented `busy`
+            // label (response.py:150); every other error type is passed
+            // through as-is rather than flattened to a generic string.
+            const type = e.error?.type;
+            finish({
+              ok: false,
+              reason:
+                type === 'conversation_already_has_active_response' ? 'busy' : type || 'error',
+            });
+          }
+        };
+        ws.on('message', onAck);
+        ws.send(
+          JSON.stringify({
+            type: 'conversation.item.create',
+            item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] },
+          }),
+        );
+        ws.send(JSON.stringify({ type: 'response.create' }));
+      });
+
+    const result = await awaitAck();
+    // A hint left behind by a turn that died after the send would mark the
+    // next unrelated SPOKEN reply as typed-originated. Cheap to undo.
+    if (!result.ok) await llm.markTypedTurn(llm.DEFAULT_SESSION_KEY, false);
+    return result;
   }
 
   onEvent(raw) {

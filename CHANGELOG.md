@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- feat: In a live call, an answer to a typed question is now BOTH spoken and
+  written to the channel. Speaking already got you a short spoken answer plus
+  the full text (v0.5.0); typing got speech and nothing written — so the typed
+  question, the precise one, was the only kind whose answer evaporated. The
+  bot now tells the endpoint out of band that a turn came from the keyboard
+  (`POST /v1/turns/typed`, one-shot per key, consumed at the top of the turn),
+  and that becomes a fourth chat-bridge trigger. Deliberately not symmetric:
+  spoken turns keep the three inference-based triggers, so a spoken "hello"
+  still does not litter the channel.
+
 - feat: Answer a typed message aloud when it lands in a live call's own text
   chat. Pushes the typed turn into the s2s socket the call already holds
   (`conversation.item.create` + `response.create`) and lets the existing

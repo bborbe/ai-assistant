@@ -224,6 +224,47 @@ CHAT_BRIDGE_DIRECTIVE = (
     "the chat') and let the written copy carry the detail."
 )
 
+# ── typed-turn hint ────────────────────────────────────────────────────────
+# A turn the user TYPED during a live call reaches us through speech-to-speech
+# looking exactly like a spoken one — no session key, no output mode, nothing
+# in the text that distinguishes it. That indistinguishability is by design
+# (it is what lets the same pipeline answer both), and it is also why the
+# chat-bridge triggers cannot see the difference on their own.
+#
+# So the bot says so out of band: it POSTs here immediately before pushing the
+# typed turn into its s2s socket, and the next turn on that key consumes the
+# flag. One-shot, and it fails in the safe direction — a stale hint costs one
+# unnecessary post, never a missing one.
+#
+# Why the hint matters: the spoken reply is capped at SPOKEN_MAX sentences, so
+# without it a typed question is the ONLY kind whose full answer reaches
+# nobody — you typed it because it was precise, and the precise answer is the
+# one that evaporates. In a call you should always hear it AND be able to read
+# it.
+_TYPED_TURN_HINTS: set[str] = set()
+_TYPED_TURN_LOCK = Lock()
+
+
+def mark_typed_turn(key: str) -> None:
+    with _TYPED_TURN_LOCK:
+        _TYPED_TURN_HINTS.add(key)
+
+
+def clear_typed_turn(key: str) -> None:
+    """Drop a hint set for a turn that never happened (speak() refused/failed)."""
+    with _TYPED_TURN_LOCK:
+        _TYPED_TURN_HINTS.discard(key)
+
+
+def take_typed_turn(key: str) -> bool:
+    """Consume the flag — reading it clears it, so it applies to ONE turn."""
+    with _TYPED_TURN_LOCK:
+        if key in _TYPED_TURN_HINTS:
+            _TYPED_TURN_HINTS.discard(key)
+            return True
+        return False
+
+
 ASK_CLAUDE_TOOL = {
     "type": "function",
     "function": {
@@ -1590,6 +1631,19 @@ class Handler(BaseHTTPRequestHandler):
             print(f"-> BIND [{key}] {sid} (was {res['previous'] or 'none'})", flush=True)
             return self._json(200, res)
 
+        # The bot calls this immediately before pushing a typed turn into its
+        # s2s socket — see `_TYPED_TURN_HINTS`. Deliberately takes no body: the
+        # text arrives the normal way, this only says which SURFACE asked.
+        if self.path.rstrip("/").endswith("/turns/typed"):
+            key = self._key()
+            if self.headers.get("X-Turn-Typed", "").lower() == "false":
+                clear_typed_turn(key)
+                print(f"-> TYPED [{key}] hint cleared", flush=True)
+                return self._json(200, {"typed": False, "key": key})
+            mark_typed_turn(key)
+            print(f"-> TYPED [{key}] next turn came from the keyboard", flush=True)
+            return self._json(200, {"typed": True, "key": key})
+
         if self.path.rstrip("/").endswith("/sessions/reset"):
             key = self._key()
             drop_process(key)          # kill the live process, not just the mapping
@@ -1609,6 +1663,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"error": {"message": "no user message"}})
 
         key = self._key()
+        # Consumed here, once, at the top of the turn it belongs to — so an
+        # abandoned or superseded turn cannot leave the flag behind for an
+        # unrelated later one.
+        typed_turn = take_typed_turn(key)
 
         # Answer filler without waking Claude Code. Empty content means
         # speech-to-speech synthesises nothing, so the bot simply stays quiet —
@@ -1802,7 +1860,14 @@ class Handler(BaseHTTPRequestHandler):
                 reason = "no answer" if not answer else "failed turn"
                 print(f"  chat bridge: not posting ({reason})", flush=True)
             else:
-                why = ("asked for it in writing" if _wants_chat_post(prompt)
+                # `typed_turn` first, and unconditional: asking from the
+                # keyboard is the strongest possible signal that the answer is
+                # wanted in a form you can keep. The other three are
+                # inferences about the answer; this one is a fact about the
+                # question. Spoken turns keep the inferences, so a spoken
+                # "hello" still does not litter the channel.
+                why = ("the question was typed" if typed_turn
+                       else "asked for it in writing" if _wants_chat_post(prompt)
                        else "spoken reply was truncated" if truncated
                        else "answer has postable shape" if _has_postable_shape(answer)
                        else "")

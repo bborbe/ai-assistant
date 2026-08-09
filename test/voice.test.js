@@ -28,9 +28,34 @@ function fakeSession({ channelId = 'chan-1', closed = false, sendImpl } = {}) {
   };
 }
 
+// speak() tells the endpoint out of band that the turn came from the keyboard
+// (llm.markTypedTurn). Stubbed here so the suite never reaches a real endpoint
+// — an unstubbed call would POST to whatever is listening on the developer's
+// machine and set a hint on a LIVE shim, which is a test quietly mutating
+// production-ish state, not a passing test. Recorded so the calls themselves
+// can be asserted.
+const llm = require('../src/llm');
+const realMarkTypedTurn = llm.markTypedTurn;
+let typedTurnCalls = [];
+
 test.beforeEach(() => {
   voice.sessions.clear();
+  typedTurnCalls = [];
+  llm.markTypedTurn = async (key, typed = true) => {
+    typedTurnCalls.push({ key, typed });
+    return true;
+  };
 });
+
+test.after(() => {
+  llm.markTypedTurn = realMarkTypedTurn;
+});
+
+// speak() awaits the typed-turn hint BEFORE touching the socket, so the two
+// sends no longer happen in the same tick as the call — they land one
+// microtask later. Tests that assert on the sends, or that emit the ack the
+// sends are waiting for, have to let that turn first.
+const flush = () => new Promise((r) => setImmediate(r));
 
 test('postToChannel drops with no-live-session when sessions is empty', async () => {
   const result = await voice.postToChannel('ARC-L1 Wide Forest Station');
@@ -140,8 +165,7 @@ test('speak sends conversation.item.create then response.create, in order', asyn
   const ws = fakeWs();
   const fake = { closed: false, ws, typedReplyPending: false };
   const pending = Session.prototype.speak.call(fake, 'tell me a joke via voice');
-  // The Promise executor runs synchronously, so both sends have already
-  // happened by the time speak() returns — no need to await a tick first.
+  await flush();
   assert.equal(ws.sent.length, 2);
   assert.equal(ws.sent[0].type, 'conversation.item.create');
   assert.deepEqual(ws.sent[0].item, {
@@ -154,10 +178,48 @@ test('speak sends conversation.item.create then response.create, in order', asyn
   assert.deepEqual(await pending, { ok: true });
 });
 
+test('speak tells the endpoint the turn was typed, before sending anything', async () => {
+  const ws = fakeWs();
+  const fake = { closed: false, ws, typedReplyPending: false };
+  const pending = Session.prototype.speak.call(fake, 'what is my most important task');
+  // Ordering is the whole point: the endpoint consumes the hint at the top of
+  // the turn, so a hint that lands after the send is a hint that arrives too
+  // late for the turn it describes.
+  assert.deepEqual(typedTurnCalls, [{ key: 'default', typed: true }]);
+  assert.equal(ws.sent.length, 0, 'nothing sent until the hint is in');
+  await flush();
+  assert.equal(ws.sent.length, 2);
+  ws.emit('message', JSON.stringify({ type: 'response.created' }));
+  await pending;
+  assert.deepEqual(typedTurnCalls, [{ key: 'default', typed: true }], 'not retracted on success');
+});
+
+test('speak retracts the typed hint when the turn never happens', async () => {
+  const ws = fakeWs();
+  const fake = { closed: false, ws, typedReplyPending: false };
+  const pending = Session.prototype.speak.call(fake, 'hi', { timeoutMs: 20 });
+  await flush();
+  assert.deepEqual(await pending, { ok: false, reason: 'timeout' });
+  // Otherwise the next unrelated SPOKEN reply inherits the flag and gets
+  // posted to the channel as though someone had typed the question.
+  assert.deepEqual(typedTurnCalls, [
+    { key: 'default', typed: true },
+    { key: 'default', typed: false },
+  ]);
+});
+
+test('a proactively-refused speak never sets a hint at all', async () => {
+  const ws = fakeWs();
+  const fake = { closed: false, ws, typedReplyPending: false, inResponse: true };
+  await Session.prototype.speak.call(fake, 'hi');
+  assert.deepEqual(typedTurnCalls, [], 'the common busy case must not touch the endpoint');
+});
+
 test('speak sets typedReplyPending on a successful ack', async () => {
   const ws = fakeWs();
   const fake = { closed: false, ws, typedReplyPending: false };
   const pending = Session.prototype.speak.call(fake, 'hi');
+  await flush();
   ws.emit('message', JSON.stringify({ type: 'response.created' }));
   await pending;
   assert.equal(fake.typedReplyPending, true);
@@ -167,6 +229,7 @@ test('speak resolves busy on conversation_already_has_active_response', async ()
   const ws = fakeWs();
   const fake = { closed: false, ws, typedReplyPending: false };
   const pending = Session.prototype.speak.call(fake, 'hi');
+  await flush();
   ws.emit(
     'message',
     JSON.stringify({ type: 'error', error: { type: 'conversation_already_has_active_response' } }),
@@ -179,6 +242,7 @@ test('speak ignores unrelated events and resolves timeout if nothing acks', asyn
   const ws = fakeWs();
   const fake = { closed: false, ws, typedReplyPending: false };
   const pending = Session.prototype.speak.call(fake, 'hi', { timeoutMs: 20 });
+  await flush();
   ws.emit('message', JSON.stringify({ type: 'response.output_audio.delta', delta: 'AAAA' }));
   assert.deepEqual(await pending, { ok: false, reason: 'timeout' });
 });
@@ -187,6 +251,7 @@ test('speak resolves on any error type, not just conversation_already_has_active
   const ws = fakeWs();
   const fake = { closed: false, ws, typedReplyPending: false };
   const pending = Session.prototype.speak.call(fake, 'hi');
+  await flush();
   ws.emit('message', JSON.stringify({ type: 'error', error: { type: 'invalid_request' } }));
   assert.deepEqual(await pending, { ok: false, reason: 'invalid_request' });
 });
@@ -211,7 +276,8 @@ test('speak sets and clears awaitingSpeakAck around a successful round trip', as
   const ws = fakeWs();
   const fake = { closed: false, ws, typedReplyPending: false };
   const pending = Session.prototype.speak.call(fake, 'hi');
-  assert.equal(fake.awaitingSpeakAck, true, 'set synchronously before the ack arrives');
+  await flush();
+  assert.equal(fake.awaitingSpeakAck, true, 'set before the ack arrives');
   ws.emit('message', JSON.stringify({ type: 'response.created' }));
   await pending;
   assert.equal(fake.awaitingSpeakAck, false, 'cleared once the ack settles the promise');
@@ -222,7 +288,7 @@ test('speak resolves no-socket immediately when connectS2S tears down the socket
   const ws = fakeWs();
   const fake = { closed: false, ws, typedReplyPending: false };
   const pending = Session.prototype.speak.call(fake, 'hi', { timeoutMs: 5000 });
-  await Promise.resolve();
+  await flush();
   // Simulate connectS2S()'s fail-fast hook without a real reconnect.
   fake.pendingSpeakFinish({ ok: false, reason: 'no-socket' });
   assert.deepEqual(await pending, { ok: false, reason: 'no-socket' });
