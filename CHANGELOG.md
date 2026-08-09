@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.6.0
 
 - feat: In a live call, an answer to a typed question is now BOTH spoken and
   written to the channel. Speaking already got you a short spoken answer plus
