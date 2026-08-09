@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.7.2
 
 - fix: Treat `ooh` as a hesitation before the wake phrase. `oh` was already on
   the list and `ooh` was not, so a one-letter difference in what speech-to-text
