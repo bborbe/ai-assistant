@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.8.0
 
 - feat: Run the local stack under launchd. `scripts/launchd-run.sh` starts one
   component and resolves its secret at launch, so nothing lands in a plist;
