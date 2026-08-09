@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template for all four discord-assistant LaunchAgents. `make launchd-install`
+  substitutes __COMPONENT__, __REPO__, __HOME__ and __PATH__ and writes one
+  plist per component into ~/Library/LaunchAgents/.
+
+  LaunchAgent, never a LaunchDaemon: a root daemon has no Keychain (teamvault-cli
+  and the claude CLI both need it) and TCC blocks it from reading anything under
+  ~/Documents, where this repo lives. See docs/deploy-local.md.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.github.bborbe.discord-assistant-__COMPONENT__</string>
+
+    <!-- The launcher is referenced at its INSTALLED path, outside the repo.
+         launchd cannot execute anything under ~/Documents — TCC denies it and
+         the job dies with exit 126 before running a line. Pointing this at
+         __REPO__/scripts/launchd-run.sh does not work, however tempting.
+         `make launchd-install` puts the copy in ~/.local/bin. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__LAUNCHER__</string>
+        <string>__COMPONENT__</string>
+    </array>
+
+    <!-- No WorkingDirectory on purpose: it would make launchd chdir into the
+         protected folder before the process exists. The launcher cds itself,
+         using DISCORD_ASSISTANT_REPO below. -->
+
+    <!-- A plist inherits no PATH. Without this, teamvault-cli, node, uv,
+         python3 and claude are all simply not found, and the job fails in a
+         way whose log says only "command not found". -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__PATH__</string>
+        <key>DISCORD_ASSISTANT_REPO</key>
+        <string>__REPO__</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Dict form, NOT <true/>. Restart only on a non-zero exit, so the
+         launcher can exit 0 on an unrecoverable config error and have the job
+         stay stopped instead of retrying a dead credential forever. This
+         deviates from every other LaunchAgent on this machine on purpose —
+         it is the feature, not an oversight. Do not "simplify" it. -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- NumberOfFiles only. NumberOfProcesses is RLIMIT_NPROC, which counts
+         every process owned by this UID rather than this job's children, and
+         setting it makes every spawn fail EAGAIN. ResidentSetSize is not
+         enforced by the macOS kernel at all. -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>4096</integer>
+    </dict>
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>8192</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/discord-assistant/__COMPONENT__.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/discord-assistant/__COMPONENT__.log</string>
+</dict>
+</plist>

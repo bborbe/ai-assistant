@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+- feat: Run the local stack under launchd. `scripts/launchd-run.sh` starts one
+  component and resolves its secret at launch, so nothing lands in a plist;
+  `deploy/launchd/discord-assistant.plist.template` plus `make launchd-install`
+  / `launchd-uninstall` / `launchd-status` generate and manage the four agents.
+  The plists use `KeepAlive`/`SuccessfulExit` rather than `KeepAlive: true` and
+  the launcher exits **0** on an unrecoverable config error, so a revoked token
+  stops the job instead of retrying forever — the behaviour `supervise.sh`
+  approximated with its exit-2 rule. Secrets are isolated per component: the
+  bot never holds the shim's key, and neither reaches s2s or the transcriber.
+- fix: Distinguish an unreachable TeamVault from a bad key. A request that timed
+  out during verification was classified as an unrecoverable config error, so
+  the bot stopped and stayed stopped — recreating the silent outage this whole
+  change exists to prevent. Only `401`/`403`/`404` and an empty value now stop
+  the job; timeouts, `5xx`, `429` and anything unrecognised retry. Unknown
+  errors retry on purpose: a job retrying too often is visible in the log, a job
+  that stopped when it should not have is invisible.
+- fix: Wait for a label to actually leave `launchctl list` between `bootout` and
+  `bootstrap` in `launchd-install`. `bootout` returns before the job is gone, so
+  the pair raced itself, failed with a bootstrap I/O error, and aborted the loop
+  with half the agents still on the previous launcher.
+- docs: Add `docs/` with a deployment page per target. `deploy-local.md` covers
+  the macOS/launchd setup — why LaunchAgents rather than LaunchDaemons (Keychain,
+  TCC on `~/Documents`, no GUI session), one job per process, credentials resolved
+  at launch instead of stored in a plist, and the `KeepAlive`/`SuccessfulExit`
+  form that stops a job on bad config instead of retrying a dead credential
+  forever. `deploy-kubernetes.md` is a placeholder that records the real state:
+  image and manifests exist, have never been applied, and are blocked on three
+  named unknowns rather than on effort.
+- docs: Correct the process table in `README.md` — the local stack is four
+  processes, not three. The transcriber has no port, so its absence is silent.
+
 ## v0.7.2
 
 - fix: Treat `ooh` as a hesitation before the wake phrase. `oh` was already on
