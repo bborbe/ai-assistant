@@ -208,22 +208,46 @@ test('a transcribed mic utterance raises the typing indicator', () => {
   clearInterval(fake.typingTimer);
 });
 
-test('the session.update sent on connect is partial, and carries only interrupt_response', () => {
-  const ws = fakeWs();
-  // Partial on purpose: speech-to-speech deep-merges session updates, so a full
-  // turn_detection object would reset the launcher's VAD tuning to defaults.
-  // This asserts the shape, which is the part that would silently break VAD.
-  const payload = {
-    type: 'session.update',
-    session: { turn_detection: { interrupt_response: config.interruptResponse } },
-  };
-  ws.send(JSON.stringify(payload));
+test('an accumulated turn is still addressed when a later sentence opens with the phrase', () => {
+  // The exact live failure: speech-to-speech grows one turn across progressive
+  // finals, so the phrase never sits at position zero and a whole-utterance
+  // prefix match rejected three properly-addressed attempts in a row.
+  assert.equal(
+    config.isAddressed(
+      'Uh can you check about my free disk space? Hey bot, can you check about my free disk space?',
+    ),
+    true,
+  );
+  // Still anchored — the phrase has to OPEN a sentence, not merely appear.
+  assert.equal(config.isAddressed('I told him the bot was broken'), false);
+  assert.equal(config.isAddressed("So, hey bot, what's my task"), false);
+  assert.equal(config.isAddressed('hey Bob, did you see this'), false);
+});
 
-  assert.equal(ws.sent.length, 1);
-  assert.equal(ws.sent[0].type, 'session.update');
-  assert.deepEqual(Object.keys(ws.sent[0].session), ['turn_detection']);
-  assert.deepEqual(Object.keys(ws.sent[0].session.turn_detection), ['interrupt_response']);
-  assert.equal(typeof ws.sent[0].session.turn_detection.interrupt_response, 'boolean');
+test('boolean settings accept the spellings people actually write', () => {
+  // INTERRUPT_RESPONSE=true silently did nothing when this only tested for '1'.
+  const saved = process.env.INTERRUPT_RESPONSE;
+  try {
+    for (const [raw, want] of [
+      ['1', true],
+      ['true', true],
+      ['ON', true],
+      ['yes', true],
+      ['0', false],
+      ['false', false],
+      ['off', false],
+      ['"1"', true], // Make's include leaves the quotes in the value
+    ]) {
+      process.env.INTERRUPT_RESPONSE = raw;
+      delete require.cache[require.resolve('../src/config')];
+      assert.equal(require('../src/config').interruptResponse, want, `for ${raw}`);
+    }
+  } finally {
+    if (saved === undefined) delete process.env.INTERRUPT_RESPONSE;
+    else process.env.INTERRUPT_RESPONSE = saved;
+    delete require.cache[require.resolve('../src/config')];
+    require('../src/config');
+  }
 });
 
 test('an unaddressed utterance raises no indicator and never sets answering', () => {

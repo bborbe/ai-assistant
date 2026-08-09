@@ -25,6 +25,22 @@
   same period. Every sentence spoken to a colleague would have wedged the typed
   path. The bot now applies the same prefix rule to the transcript it already
   receives; the endpoint remains the authority on what is answered.
+- fix: Anchor the wake phrase to the start of a SENTENCE, not the start of the
+  utterance. speech-to-speech grows one turn across progressive finals, so a
+  transcript becomes "Uh can you check my disk space? Hey bot, can you check my
+  disk space?" — the phrase is present but never at position zero, and three
+  consecutive properly-addressed attempts were all rejected. Still anchored: "I
+  told him the bot was broken" and "so, hey bot, …" stay quiet, because the
+  phrase must OPEN a sentence rather than merely appear. Everything before the
+  phrase is now dropped along with it — on an accumulated turn that text is
+  what was said to the room, and feeding it to the model asks the wrong
+  question.
+- fix: Send `session.update` in a shape the server accepts. Both `type`
+  discriminators are required (`session.type: realtime`,
+  `turn_detection.type: server_vad`); without them the whole update is rejected
+  as `Unknown or invalid event: session.update` — a message that reads like the
+  event is unsupported when it is really a validation failure, so the
+  interrupt switch below silently did nothing on every connect.
 - feat: Make barge-in a switch, `INTERRUPT_RESPONSE`, and default it OFF.
   Speaking while the assistant was answering cancelled that answer — observed
   live, an "okay" nine seconds into a lookup threw the reply away silently and

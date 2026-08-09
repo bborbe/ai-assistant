@@ -142,10 +142,14 @@ config.isAllowed = (userId) => config.allowedUserIds.includes(userId);
  */
 config.isAddressed = (text) => {
   if (!config.wakePhrases.length) return true;
-  const t = String(text || '')
-    .replace(/^\W+/, '')
-    .toLowerCase();
-  return config.wakePhrases.some((p) => t.startsWith(p));
+  // Sentence-anchored, not utterance-anchored: speech-to-speech accumulates a
+  // turn across progressive finals, so the phrase routinely lands mid-string
+  // ("…disk space? Hey bot, can you check…"). Still anchored — the phrase must
+  // OPEN a sentence, so "I told him the bot was broken" stays quiet.
+  const t = String(text || '').toLowerCase();
+  return config.wakePhrases.some((p) =>
+    new RegExp(`(?:^|[.!?]\\s+|\\n)\\W*${p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(t),
+  );
 };
 
 config.check = () => {

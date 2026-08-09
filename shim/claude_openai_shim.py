@@ -797,17 +797,33 @@ def is_filler(text: str) -> bool:
 # matches nothing anyone says. Same family as the `$HOME` and secret-in-argv
 # traps this repo has already been bitten by twice.
 WAKE_PHRASES = setting("SHIM_WAKE_PHRASES", "voice.wake_phrases", "hey bot,hey bought,hey but").strip("\"'")
+# Anchored to the start of a SENTENCE, not just the start of the utterance.
+#
+# speech-to-speech accumulates a turn across progressive finals, so one
+# transcript grows into "Uh can you check my disk space? Hey bot, can you check
+# my disk space?" — the phrase is in there, but never at position zero, and a
+# whole-utterance prefix match rejected every retry. Observed live: three
+# consecutive properly-addressed attempts all went QUIET.
+#
+# Still anchored, which is the point: "I told him the bot was broken" does not
+# match, because the phrase has to OPEN a sentence rather than merely appear.
 _WAKE_RE = re.compile(
-    r"^\W*(?:" + "|".join(re.escape(p.strip()) for p in WAKE_PHRASES.split(",") if p.strip()) + r")\b",
+    r"(?:\A|[.!?]\s+|\n)\W*(?:"
+    + "|".join(re.escape(p.strip()) for p in WAKE_PHRASES.split(",") if p.strip())
+    + r")\b",
     re.I,
 )
 
 
 def is_addressed(text: str) -> bool:
-    """Did this utterance open with a wake phrase? Empty list disables the gate."""
+    """Does a sentence in this utterance open with a wake phrase?
+
+    `search`, not `match`, because the turn may have accumulated — see the
+    regex above. Empty phrase list disables the gate.
+    """
     if not WAKE_PHRASES.strip():
         return True
-    return bool(_WAKE_RE.match(text))
+    return bool(_WAKE_RE.search(text))
 
 
 def strip_wake_phrase(text: str) -> str:
@@ -824,7 +840,14 @@ def strip_wake_phrase(text: str) -> str:
     """
     if not WAKE_PHRASES.strip():
         return text
-    stripped = _WAKE_RE.sub("", text, count=1).lstrip(" ,.:;-—")
+    # Everything BEFORE the wake phrase is dropped along with it: on an
+    # accumulated turn that leading text is whatever was said to the room
+    # before the assistant was addressed, and feeding it to the model asks the
+    # wrong question. Keep only from the phrase onward.
+    m = _WAKE_RE.search(text)
+    if not m:
+        return text
+    stripped = text[m.end() :].lstrip(" ,.:;-—")
     return stripped if stripped.strip() else text
 
 

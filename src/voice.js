@@ -323,10 +323,18 @@ class Session {
       // leaves the launcher's VAD tuning — thresholds, silence durations —
       // exactly as it was. Sending a full `turn_detection` object would reset
       // whatever it does not mention.
+      // Both `type` discriminators are REQUIRED, and omitting either gets the
+      // whole update rejected with "Unknown or invalid event: session.update"
+      // — a message that reads like the event is unsupported when it is really
+      // a validation failure. Verified against the openai SessionUpdateEvent
+      // model directly: without `session.type` it does not validate.
       ws.send(
         JSON.stringify({
           type: 'session.update',
-          session: { turn_detection: { interrupt_response: config.interruptResponse } },
+          session: {
+            type: 'realtime',
+            turn_detection: { type: 'server_vad', interrupt_response: config.interruptResponse },
+          },
         }),
       );
       log.info('  voice: interrupt-on-speech', { enabled: config.interruptResponse });
