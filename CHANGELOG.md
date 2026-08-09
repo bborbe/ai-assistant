@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.5.0
 
 - feat: Bridge spoken answers into the channel as text. The shim already computes
   the full answer and discards everything past `SHIM_SPOKEN_MAX` — it now
