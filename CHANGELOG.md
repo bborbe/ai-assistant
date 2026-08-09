@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- feat: Add `tools/llm-bench`, a hand-run chat-shaped LLM benchmark for choosing the
+  shim's front-tier model. Existing benchmarks — public boards and `coding/bench`
+  alike — score agentic tool loops, where turn count dominates wall time; a chat
+  surface is short-turn, where time to first _visible_ token dominates. The rankings
+  do not transfer: MiniMax-M2.7 beats M3 on a code-review fixture and loses to it
+  here. Four scripts (broad screen, full fixture + fabrication test, per-family
+  matrix, surface × thinking matrix) plus a README recording the traps — GLM returns
+  zero visible text under a token cap unless thinking is explicitly disabled,
+  `MiniMax-M3-highspeed` does not exist and silently resolves to `MiniMax-M3`, and
+  the fastest model measured fabricated 17 of 24 live-data prompts. Diagnostics only:
+  nothing here is imported by the bot, and tokens are read at runtime from the
+  claude-code-router config, never stored. Parked here as a stopgap; the intended
+  home is `coding/bench` as a second fixture.
+
 ## v0.8.1
 
 - fix: Route the voice surface to the shim instead of MiniMax. `v0.8.0` started
