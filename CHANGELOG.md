@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- fix: Treat `ooh` as a hesitation before the wake phrase. `oh` was already on
+  the list and `ooh` was not, so a one-letter difference in what speech-to-text
+  produced left a real question unanswered — found on the ninth attempt of a
+  reliability run. Third variant added this way after `hey bought` and
+  `hi bot`: every miss this feature has had is a transcription spelling, never
+  the matching logic.
+
 ## v0.7.1
 
 - fix: Do not leave the typing indicator stuck when a turn produces nothing.

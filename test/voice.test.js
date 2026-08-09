@@ -611,3 +611,13 @@ test('hi bot is accepted — the mishearing that blocked a real question', () =>
   // Still not a free-for-all: a different word after "hi" is not a wake phrase.
   assert.equal(config.isAddressed('hi Bob, did you see this'), false);
 });
+
+test('ooh is a hesitation too — the ninth attempt in the reliability run', () => {
+  // 'oh' was on the list, 'ooh' was not: one letter, and the gate declined a
+  // real question. Third variant found the same way (hey bought, hi bot, ooh)
+  // — every miss this feature has had is a transcription spelling, never logic.
+  assert.equal(config.isAddressed('Ooh, hey bot, how many tasks do I have in progress?'), true);
+  assert.equal(config.isAddressed('Oh hey bot, how many tasks do we have in progress?'), true);
+  // Unchanged: only noise may precede the phrase.
+  assert.equal(config.isAddressed("So, hey bot, what's my task"), false);
+});
