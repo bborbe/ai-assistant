@@ -376,7 +376,13 @@ class Session {
     if (this.closed || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return { ok: false, reason: 'no-socket' };
     }
-    if (this.awaitingSpeakAck || this.inResponse) {
+    // `answering` as well as `inResponse`, and it is the one that matters for
+    // a MIC turn: the server announces `response.created` only for a response
+    // the client asked for, so `inResponse` stays false through an entire
+    // spoken answer. Gating on it alone meant typing while the assistant was
+    // already talking sailed past this check and was refused by the server
+    // instead — correct, but a round trip later and with a worse reason.
+    if (this.awaitingSpeakAck || this.inResponse || this.answering) {
       return { ok: false, reason: 'busy' };
     }
 
@@ -478,6 +484,11 @@ class Session {
       if (!this.answering || this.closed || Date.now() - startedAt > TYPING_MAX_MS) {
         clearInterval(this.typingTimer);
         this.typingTimer = null;
+        // The cap is now a stuck-state guard, not just a cosmetic stop: since
+        // speak() refuses while `answering` is true, a response that never
+        // reports finishing would otherwise wedge typed turns as permanently
+        // busy. Releasing it here bounds that to TYPING_MAX_MS.
+        this.answering = false;
         return;
       }
       tick();

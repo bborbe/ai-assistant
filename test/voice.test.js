@@ -339,6 +339,18 @@ test('speak refuses busy without sending anything when a response is already in 
   assert.equal(ws.sent.length, 0, 'a proactively-refused speak() must not send anything');
 });
 
+test('speak refuses busy while a MIC turn is being answered', async () => {
+  const ws = fakeWs();
+  // `inResponse` deliberately false: a mic turn never gets response.created,
+  // so this is the state a real spoken answer is actually in. Gating only on
+  // inResponse let this case through to be refused by the server instead.
+  const fake = { closed: false, ws, typedReplyPending: false, answering: true };
+  const result = await Session.prototype.speak.call(fake, 'hi');
+  assert.deepEqual(result, { ok: false, reason: 'busy' });
+  assert.equal(ws.sent.length, 0);
+  assert.deepEqual(typedTurnCalls, [], 'and no typed hint is left behind');
+});
+
 test('speak refuses busy when another speak() is already awaiting its ack', async () => {
   const ws = fakeWs();
   const fake = { closed: false, ws, typedReplyPending: false, awaitingSpeakAck: true };
