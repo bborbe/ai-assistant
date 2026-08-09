@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.7.1
 
 - fix: Do not leave the typing indicator stuck when a turn produces nothing.
   `answering` was raised for an addressed utterance and lowered on
