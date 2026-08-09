@@ -15,6 +15,21 @@
   follow-up window — every ambiguous case resolves to silence, because a missed
   trigger costs one repeat while a false one interrupts a room. Typed turns are
   never gated; an `@mention` already addressed the bot.
+- fix: Do not raise the typing indicator for an utterance that was not
+  addressed to the bot. Found in the first live test of the gate above: the
+  dots appeared and then nothing came, because the bot raises them on the
+  transcription event while the endpoint decides addressing seconds later.
+  Worse than cosmetic — the endpoint answers an unaddressed turn with silence,
+  so nothing ever arrived to clear `answering`, hanging the dots until the
+  five-minute cap and making `speak()` refuse typed turns as `busy` for the
+  same period. Every sentence spoken to a colleague would have wedged the typed
+  path. The bot now applies the same prefix rule to the transcript it already
+  receives; the endpoint remains the authority on what is answered.
+- fix: Tolerate surrounding quotes on `SHIM_WAKE_PHRASES`. The Makefile's
+  `-include local.env` parses with Make semantics, so `export X="a,b"` reaches
+  the process with the quotes still in the value and the first phrase becomes
+  `"hey bot`, matching nothing. Third instance of this family after `$HOME` and
+  the secret-in-argv case.
 
 ## v0.6.0
 

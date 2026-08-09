@@ -786,7 +786,13 @@ def is_filler(text: str) -> bool:
 # Fail quiet: anything unmatched is treated as not addressed. A missed trigger
 # costs one repeat; a false trigger interrupts a conversation with other people
 # in the room. The two are not equally cheap.
-WAKE_PHRASES = setting("SHIM_WAKE_PHRASES", "voice.wake_phrases", "hey bot,hey bought,hey but")
+#
+# `.strip("\"'")`: the Makefile's `-include local.env` parses with MAKE
+# semantics, so `export SHIM_WAKE_PHRASES="a,b"` can arrive with the quote
+# characters still inside the value — making the first phrase `"hey bot`, which
+# matches nothing anyone says. Same family as the `$HOME` and secret-in-argv
+# traps this repo has already been bitten by twice.
+WAKE_PHRASES = setting("SHIM_WAKE_PHRASES", "voice.wake_phrases", "hey bot,hey bought,hey but").strip("\"'")
 _WAKE_RE = re.compile(
     r"^\W*(?:" + "|".join(re.escape(p.strip()) for p in WAKE_PHRASES.split(",") if p.strip()) + r")\b",
     re.I,

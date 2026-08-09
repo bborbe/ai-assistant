@@ -61,6 +61,26 @@ const config = {
   // so without this a single sentence arrives as several utterances.
   utteranceGapMs: parseInt(process.env.UTTERANCE_GAP_MS || '1500', 10),
 
+  // Wake phrases, comma-separated — a COPY of the endpoint's list, used only to
+  // decide whether to raise the "…is typing" indicator and to arm the busy
+  // gate. The endpoint remains the authority on whether a turn is answered;
+  // this side has to know too because it reacts to the utterance seconds before
+  // the endpoint has ruled on it, and showing dots for speech that will never
+  // be answered is exactly the bug this fixes.
+  //
+  // If the two lists drift the cost is cosmetic — dots without an answer, or an
+  // answer that arrived without dots — never a wrong answer.
+  // The surrounding-quote strip is not cosmetic: `-include local.env` in the
+  // Makefile parses with MAKE semantics, so `export X="a,b"` arrives with the
+  // quote characters still in the value and the first phrase becomes `"hey bot`
+  // — which matches nothing anyone says. Same family as the `$HOME` and
+  // secret-in-argv traps this repo has already been bitten by twice.
+  wakePhrases: (process.env.SHIM_WAKE_PHRASES ?? 'hey bot,hey bought,hey but')
+    .replace(/^["']|["']$/g, '')
+    .split(',')
+    .map((p) => p.trim().toLowerCase())
+    .filter(Boolean),
+
   // Must stay below the pod's terminationGracePeriodSeconds.
   shutdownTimeoutMs: parseInt(process.env.SHUTDOWN_TIMEOUT_MS || '10000', 10),
 
@@ -77,6 +97,19 @@ const config = {
 };
 
 config.isAllowed = (userId) => config.allowedUserIds.includes(userId);
+
+/**
+ * Does this utterance open with a wake phrase? Mirrors the endpoint's rule —
+ * prefix match, case-insensitive, leading punctuation ignored. An empty list
+ * means the gate is off, so everything counts as addressed.
+ */
+config.isAddressed = (text) => {
+  if (!config.wakePhrases.length) return true;
+  const t = String(text || '')
+    .replace(/^\W+/, '')
+    .toLowerCase();
+  return config.wakePhrases.some((p) => t.startsWith(p));
+};
 
 config.check = () => {
   const problems = [];

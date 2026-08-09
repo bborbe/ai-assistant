@@ -537,8 +537,19 @@ class Session {
         // an utterance and it has been transcribed. This is where the spoken
         // path raises the dots, because `response.created` never arrives for
         // it (see `answering` in the constructor).
-        this.answering = true;
-        this.showTyping();
+        //
+        // Only when the utterance was actually ADDRESSED to the bot. An
+        // unaddressed one is answered with silence by the endpoint, so nothing
+        // ever arrives to clear the flag: the dots hung until the five-minute
+        // cap, and — worse than cosmetic — `speak()` refuses typed turns as
+        // `busy` for exactly as long. Every sentence spoken to a colleague
+        // would have wedged the typed path.
+        if (config.isAddressed(e.transcript)) {
+          this.answering = true;
+          this.showTyping();
+        } else {
+          log.debug('  voice: not addressed, no typing indicator');
+        }
         break;
       // NOTE: response.output_audio.delta — NOT response.audio.delta, which is
       // what OpenAI's hosted Realtime uses and what most write-ups quote.

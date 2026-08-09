@@ -199,13 +199,43 @@ test('a transcribed mic utterance raises the typing indicator', () => {
     fake,
     JSON.stringify({
       type: 'conversation.item.input_audio_transcription.completed',
-      transcript: 'how many vision pages do I have',
+      transcript: 'hey bot, how many vision pages do I have',
     }),
   );
 
   assert.equal(fake.answering, true);
   assert.equal(typingCalls, 1, 'shown immediately, not on the first 8s tick');
   clearInterval(fake.typingTimer);
+});
+
+test('an unaddressed utterance raises no indicator and never sets answering', () => {
+  let typingCalls = 0;
+  const fake = fakeOnEventTarget({
+    channel: {
+      sendTyping: async () => {
+        typingCalls += 1;
+      },
+    },
+    typingTimer: null,
+    closed: false,
+    showTyping: Session.prototype.showTyping,
+  });
+
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({
+      type: 'conversation.item.input_audio_transcription.completed',
+      transcript: 'what do you think about the deploy',
+    }),
+  );
+
+  // Not cosmetic: the endpoint answers an unaddressed turn with silence, so
+  // nothing arrives to clear `answering`. Left set, it hangs the dots until the
+  // five-minute cap AND makes speak() refuse typed turns as busy for the same
+  // period — every sentence said to a colleague would wedge the typed path.
+  assert.equal(typingCalls, 0, 'no dots for speech that will never be answered');
+  assert.equal(fake.answering, false, 'and the busy gate must not arm');
+  assert.equal(fake.typingTimer, null);
 });
 
 test('the indicator stops when the response ends', () => {
@@ -220,7 +250,7 @@ test('the indicator stops when the response ends', () => {
     fake,
     JSON.stringify({
       type: 'conversation.item.input_audio_transcription.completed',
-      transcript: 'hi',
+      transcript: 'hey bot, hi',
     }),
   );
   assert.equal(fake.answering, true);
@@ -244,7 +274,7 @@ test('showTyping does not stack a second ticker on a repeated response.created',
 
   const utterance = JSON.stringify({
     type: 'conversation.item.input_audio_transcription.completed',
-    transcript: 'hi',
+    transcript: 'hey bot, hi',
   });
   Session.prototype.onEvent.call(fake, utterance);
   Session.prototype.onEvent.call(fake, utterance);
