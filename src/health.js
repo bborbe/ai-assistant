@@ -41,10 +41,12 @@ async function handleChatPost(req, send) {
   if (!config.chatBridgeToken) {
     return send(503, { error: 'chat bridge not configured' });
   }
-  // Constant-time: `!==` short-circuits at the first mismatched byte, which
-  // is a timing side-channel on the token — and healthHost defaults to
-  // 0.0.0.0 (see config.js), so this route is reachable from anything on the
-  // pod network, not just localhost.
+  // Constant-time via crypto.timingSafeEqual: plain `!==`/Buffer.compare
+  // short-circuit at the first mismatched byte, which is a timing
+  // side-channel on the token — and healthHost defaults to 0.0.0.0 (see
+  // config.js), so this route is reachable from anything on the pod network,
+  // not just localhost. The length check above must stay outside the
+  // constant-time compare: timingSafeEqual throws on mismatched lengths.
   const auth = Buffer.from(req.headers['authorization'] || '');
   const expected = Buffer.from(`Bearer ${config.chatBridgeToken}`);
   const authorized = auth.length === expected.length && crypto.timingSafeEqual(auth, expected);

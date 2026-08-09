@@ -1,5 +1,60 @@
 # Changelog
 
+## Unreleased
+
+- feat: In a live call, an answer to a typed question is now BOTH spoken and
+  written to the channel. Speaking already got you a short spoken answer plus
+  the full text (v0.5.0); typing got speech and nothing written — so the typed
+  question, the precise one, was the only kind whose answer evaporated. The
+  bot now tells the endpoint out of band that a turn came from the keyboard
+  (`POST /v1/turns/typed`, one-shot per key, consumed at the top of the turn),
+  and that becomes a fourth chat-bridge trigger. Deliberately not symmetric:
+  spoken turns keep the three inference-based triggers, so a spoken "hello"
+  still does not litter the channel.
+- feat: Ask for a complete, front-loaded answer instead of a short one. The
+  machinery for "short spoken, detailed written" already existed — speech is
+  capped at `SHIM_SPOKEN_MAX` sentences and the full text is what the chat
+  bridge posts — but the voice directive also told the model to stop at two
+  sentences, so there was rarely anything extra to post, and the written copy
+  was the same brief answer untruncated. Length is enforced in code, so the
+  directive now shapes ORDER instead: answer first (that part is heard),
+  detail after (that part is read). Identifiers, paths and markdown flip the
+  same way — forbidden in the spoken opening, wanted in the written half.
+  Also resolves a contradiction introduced with the chat bridge, which told
+  the model to answer in full while the length rule told it to stop at two
+  sentences.
+- fix: The truncation line now says "the details are in the chat" rather than
+  offering more — the rest has already been posted by the time it is heard,
+  so "if you want it" invited the listener to ask for what they already had.
+- fix: Show the typing indicator for EVERY answer produced during a call,
+  spoken or typed. The text path has always shown Discord's "…is typing"
+  dots; the voice path never did, so text could arrive in the channel with no
+  sign it was coming — indistinguishable from having been ignored. Raised
+  from two signals, because no single event covers both surfaces:
+  `response.created` for a client-requested (typed) turn, and the user's
+  utterance being transcribed for a mic turn — which never emits
+  `response.created` at all, since assistant text calls `_ensure_response`
+  first and the audio path then skips the event. Accepted cost: a spoken turn
+  that produces no written copy now flashes the dots briefly and posts
+  nothing.
+
+- feat: Answer a typed message aloud when it lands in a live call's own text
+  chat. Pushes the typed turn into the s2s socket the call already holds
+  (`conversation.item.create` + `response.create`) and lets the existing
+  playback path speak the reply — no second TTS path. The rule is
+  content-blind: any typed turn that would be answered at all, in the text
+  chat of a channel with a live voice session, is spoken; everywhere else
+  keeps answering in text via `X-Output-Mode: text`, unchanged. A server-side
+  refusal (`conversation_already_has_active_response`, one response at a
+  time) is reported to the channel and recorded in the transcript rather than
+  silently dropped or answered a second way. The transcript marks a
+  typed-then-spoken reply distinctly (`(typed→spoken) `) from an ordinary
+  spoken reply, matching the existing `(typed) ` marker on the question.
+- fix: Correct a comment in the chat-bridge auth check that described a
+  `!==` short-circuit while the code actually used
+  `crypto.timingSafeEqual` — the implementation was already
+  constant-time, only the comment was wrong.
+
 ## v0.5.0
 
 - feat: Bridge spoken answers into the channel as text. The shim already computes

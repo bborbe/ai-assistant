@@ -215,14 +215,56 @@ CHAT_BRIDGE_TIMEOUT = setting("SHIM_CHAT_BRIDGE_TIMEOUT", "chat_bridge.timeout",
 # reaching the channel is exactly the point of the cap.
 CHAT_BRIDGE_DIRECTIVE = (
     "WRITTEN COPY. Everything you write this turn is ALSO posted into the voice "
-    "channel's text chat, in full, automatically — the spoken version is capped at "
-    "two sentences, the written one is not.\n"
+    "channel's text chat, in full and automatically. Only the opening is spoken; the "
+    "whole thing is readable. This is why the SHAPE rule above says answer first, "
+    "detail after — the two halves go to different senses, not to different people.\n"
     "So NEVER say you can only speak, that you cannot type, or that you have no way "
     "to put something in the chat. That was true once and is not true now.\n"
-    "When asked to write something down — a name, a list, a link, a price — just "
-    "answer with it in full. Say one short sentence aloud pointing at it ('it's in "
-    "the chat') and let the written copy carry the detail."
+    "When asked to write something down — a name, a list, a link, a price — do not "
+    "announce that you have put it somewhere. Just answer, in full: the writing IS "
+    "the answer, and it arrives without you saying so."
 )
+
+# ── typed-turn hint ────────────────────────────────────────────────────────
+# A turn the user TYPED during a live call reaches us through speech-to-speech
+# looking exactly like a spoken one — no session key, no output mode, nothing
+# in the text that distinguishes it. That indistinguishability is by design
+# (it is what lets the same pipeline answer both), and it is also why the
+# chat-bridge triggers cannot see the difference on their own.
+#
+# So the bot says so out of band: it POSTs here immediately before pushing the
+# typed turn into its s2s socket, and the next turn on that key consumes the
+# flag. One-shot, and it fails in the safe direction — a stale hint costs one
+# unnecessary post, never a missing one.
+#
+# Why the hint matters: the spoken reply is capped at SPOKEN_MAX sentences, so
+# without it a typed question is the ONLY kind whose full answer reaches
+# nobody — you typed it because it was precise, and the precise answer is the
+# one that evaporates. In a call you should always hear it AND be able to read
+# it.
+_TYPED_TURN_HINTS: set[str] = set()
+_TYPED_TURN_LOCK = Lock()
+
+
+def mark_typed_turn(key: str) -> None:
+    with _TYPED_TURN_LOCK:
+        _TYPED_TURN_HINTS.add(key)
+
+
+def clear_typed_turn(key: str) -> None:
+    """Drop a hint set for a turn that never happened (speak() refused/failed)."""
+    with _TYPED_TURN_LOCK:
+        _TYPED_TURN_HINTS.discard(key)
+
+
+def take_typed_turn(key: str) -> bool:
+    """Consume the flag — reading it clears it, so it applies to ONE turn."""
+    with _TYPED_TURN_LOCK:
+        if key in _TYPED_TURN_HINTS:
+            _TYPED_TURN_HINTS.discard(key)
+            return True
+        return False
+
 
 ASK_CLAUDE_TOOL = {
     "type": "function",
@@ -650,16 +692,18 @@ TRANSCRIPT_DIRECTIVE = (
 
 VOICE_DIRECTIVE = (
     "SPOKEN OUTPUT MODE. Your reply is read aloud, not displayed. Speak the way a person "
-    "speaks: full, flowing sentences, one or two of them, in a natural conversational "
-    "register. Never a clipped fragment or a list read out loud.\n"
+    "speaks: full, flowing sentences in a natural conversational register. The OPENING "
+    "is spoken, so it is never a clipped fragment or a list read out loud.\n"
     "This overrides any output-format rules in CLAUDE.md or memory: no status panels, no "
     "lines beginning with READY/DONE/ACTIVE/WAITING/BLOCKED, no 'You:' or 'Next:' lines, "
-    "no markdown, bullets, headings, code, backticks or emoji.\n"
-    "NEVER say aloud: identifiers, hashes, session ids, byte counts, file paths, "
-    "wikilinks, URLs, line numbers, timestamps or version strings. They are noise when "
-    "heard rather than read. Say 'the transcript file' not its path, 'the same session as "
-    "before' not its id, 'about thirty turns' not an exact count. If a detail only makes "
-    "sense written down, say you have put it in the vault instead of reciting it.\n"
+    "and no emoji anywhere. Markdown, bullets and code formatting are FORBIDDEN in the "
+    "first two sentences (they are spoken) and FINE after them (they are read).\n"
+    "NEVER put in the FIRST TWO SENTENCES: identifiers, hashes, session ids, byte counts, "
+    "file paths, wikilinks, URLs, line numbers, timestamps or version strings. Those two "
+    "sentences are the ones spoken aloud, and such things are noise when heard rather than "
+    "read — say 'the transcript file' not its path, 'about thirty turns' not an exact "
+    "count. AFTER them, write them out properly: that part is read, not heard, and a path "
+    "or an id is exactly what the reader needs to copy.\n"
     "If you are about to look something up, SAY ONE SHORT SENTENCE FIRST — 'let me "
     "check that' — then do the lookup and answer. Speaking before the tool runs is what "
     "keeps the silence from feeling broken; your first sentence is spoken while the work "
@@ -668,12 +712,17 @@ VOICE_DIRECTIVE = (
     "explaining where you are about to look or what you just realised. The user "
     "hears a filler while you work and does not need a second one from you — say "
     "the answer and nothing else.\n"
-    "LENGTH IS A HARD LIMIT, and it is the rule most often broken: TWO SENTENCES. "
-    "Not three. This holds however much you found and however interesting it is — a "
-    "spoken answer cannot be skimmed, re-read, or interrupted politely, so a third "
-    "sentence is not extra value, it is talking over someone. If more matters, give "
-    "the single most important fact in one sentence and offer the rest in a short "
-    "second one: 'there is more if you want it'. Then stop and wait."
+    "SHAPE, NOT LENGTH. Only your FIRST TWO SENTENCES are spoken aloud; everything "
+    "after them is read in the channel and never heard. So do not ration the answer — "
+    "write it completely — but put the ANSWER FIRST. Those two sentences have to stand "
+    "on their own as a spoken reply: the actual answer, no preamble, no 'let me "
+    "explain', nothing that only makes sense once the rest has been read. A spoken "
+    "answer cannot be skimmed or re-read, which is why the point goes at the front — "
+    "not why the detail gets dropped.\n"
+    "Then continue: the specifics, the list, the exact names, the caveat. That half is "
+    "read at the reader's own pace, so it can carry what speech cannot. Structure it "
+    "for reading — short paragraphs or a list — and never with an opening line that "
+    "merely announces what follows."
 )
 
 # Sessions here are disposable by design, so anything that matters must leave
@@ -782,7 +831,10 @@ PROGRESS_EVERY = setting("SHIM_PROGRESS_EVERY", "voice.progress_every", 12.0)
 # and every long answer makes the next one likelier. A directive cannot win that
 # argument, so it is enforced here instead. 0 disables.
 SPOKEN_MAX = setting("SHIM_SPOKEN_MAX", "voice.spoken_max", 2)
-_MORE_LINE = "There's more if you want it."
+# Points at the written copy rather than offering to continue: the rest is
+# already in the channel by the time this is heard, so "if you want it" invited
+# the listener to ask for something they had already been given.
+_MORE_LINE = "The details are in the chat."
 # Two sentences each, for the same reason as _CHECK_LINES: speech-to-speech
 # releases a sentence only once the next has started, so a lone line would wait
 # for the answer and arrive just before it — useless.
@@ -1590,6 +1642,19 @@ class Handler(BaseHTTPRequestHandler):
             print(f"-> BIND [{key}] {sid} (was {res['previous'] or 'none'})", flush=True)
             return self._json(200, res)
 
+        # The bot calls this immediately before pushing a typed turn into its
+        # s2s socket — see `_TYPED_TURN_HINTS`. Deliberately takes no body: the
+        # text arrives the normal way, this only says which SURFACE asked.
+        if self.path.rstrip("/").endswith("/turns/typed"):
+            key = self._key()
+            if self.headers.get("X-Turn-Typed", "").lower() == "false":
+                clear_typed_turn(key)
+                print(f"-> TYPED [{key}] hint cleared", flush=True)
+                return self._json(200, {"typed": False, "key": key})
+            mark_typed_turn(key)
+            print(f"-> TYPED [{key}] next turn came from the keyboard", flush=True)
+            return self._json(200, {"typed": True, "key": key})
+
         if self.path.rstrip("/").endswith("/sessions/reset"):
             key = self._key()
             drop_process(key)          # kill the live process, not just the mapping
@@ -1609,6 +1674,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"error": {"message": "no user message"}})
 
         key = self._key()
+        # Consumed here, once, at the top of the turn it belongs to — so an
+        # abandoned or superseded turn cannot leave the flag behind for an
+        # unrelated later one.
+        typed_turn = take_typed_turn(key)
 
         # Answer filler without waking Claude Code. Empty content means
         # speech-to-speech synthesises nothing, so the bot simply stays quiet —
@@ -1802,7 +1871,14 @@ class Handler(BaseHTTPRequestHandler):
                 reason = "no answer" if not answer else "failed turn"
                 print(f"  chat bridge: not posting ({reason})", flush=True)
             else:
-                why = ("asked for it in writing" if _wants_chat_post(prompt)
+                # `typed_turn` first, and unconditional: asking from the
+                # keyboard is the strongest possible signal that the answer is
+                # wanted in a form you can keep. The other three are
+                # inferences about the answer; this one is a fact about the
+                # question. Spoken turns keep the inferences, so a spoken
+                # "hello" still does not litter the channel.
+                why = ("the question was typed" if typed_turn
+                       else "asked for it in writing" if _wants_chat_post(prompt)
                        else "spoken reply was truncated" if truncated
                        else "answer has postable shape" if _has_postable_shape(answer)
                        else "")

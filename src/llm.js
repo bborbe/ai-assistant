@@ -42,6 +42,35 @@ async function chat(messages, { sessionKey, signal } = {}) {
   return text.trim();
 }
 
+/**
+ * Tell the endpoint that the next turn on this key came from the KEYBOARD.
+ *
+ * A typed turn reaches the endpoint through speech-to-speech looking exactly
+ * like a spoken one — that indistinguishability is what lets one pipeline
+ * answer both, and it is also why the endpoint cannot work out on its own that
+ * the answer should also be written down. Hence out of band, immediately
+ * before the turn.
+ *
+ * Best-effort by design: a backend without the route, or an endpoint that is
+ * momentarily unreachable, must never stop the user being answered aloud. The
+ * cost of failure is one missing written copy, not a missing reply.
+ */
+async function markTypedTurn(sessionKey, typed = true) {
+  try {
+    const res = await fetch(`${config.baseUrl}/turns/typed`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        ...(sessionKey ? { 'X-Session-Key': sessionKey } : {}),
+        'X-Turn-Typed': typed ? 'true' : 'false',
+      },
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 /** Ask the backend to forget a conversation. Backends without the route say so. */
 async function resetSession(sessionKey) {
   const res = await fetch(`${config.baseUrl}/sessions/reset`, {
@@ -127,6 +156,7 @@ function sessionKeyFor(channel, userId) {
 
 module.exports = {
   chat,
+  markTypedTurn,
   resetSession,
   listSessions,
   bindSession,

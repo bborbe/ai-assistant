@@ -185,6 +185,42 @@ function register(client) {
     let target = msg.channel;
     try {
       target = await conversationChannel(msg, client.user.id);
+
+      // A typed turn landing in the text chat of a channel with a LIVE call
+      // is answered ALOUD, not in text: push it into the s2s socket the call
+      // already holds and let the existing playback path speak the reply.
+      // The rule is deliberately simple and content-blind — "this channel is
+      // a live call right now" — so the medium never depends on how the
+      // question was phrased (see the "predictable" success criterion on
+      // [[Typed messages cannot be answered aloud]]). Everywhere else (DM,
+      // thread, guild channel with no live call) keeps answering in text,
+      // exactly as before.
+      const liveCall = voice.liveSessionFor(msg.guild?.id, target.id);
+      if (liveCall) {
+        const result = await liveCall.speak(content);
+        if (result.ok) {
+          log.info('text: typed turn routed into live call for a spoken reply', {
+            channel: target.id,
+          });
+          // No typing indicator started here on purpose: the session raises it
+          // on `response.created` for EVERY answer it produces, spoken or
+          // typed (see Session.showTyping). Starting a second one here would
+          // be a duplicate that only covers one of the two surfaces.
+          return;
+        }
+        log.warn('text: could not speak typed turn, answering nothing', {
+          channel: target.id,
+          reason: result.reason,
+        });
+        // Recorded so a reader of the transcript sees why a typed line has no
+        // answer following it, rather than assuming it was ignored.
+        liveCall.transcript?.writeText(config.botName, `(voice reply failed: ${result.reason})`);
+        await target
+          .send(`Could not speak that right now (${result.reason}). Try again in a moment.`)
+          .catch(() => {});
+        return;
+      }
+
       await target.sendTyping();
       const typing = setInterval(() => target.sendTyping().catch(() => {}), 8000);
 

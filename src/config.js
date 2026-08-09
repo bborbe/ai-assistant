@@ -64,6 +64,11 @@ const config = {
   // Must stay below the pod's terminationGracePeriodSeconds.
   shutdownTimeoutMs: parseInt(process.env.SHUTDOWN_TIMEOUT_MS || '10000', 10),
 
+  // How long Session.speak() waits for the s2s server to ack (or refuse) a
+  // typed turn pushed in as conversation.item.create + response.create
+  // before giving up and reporting 'timeout'.
+  speakAckTimeoutMs: parseInt(process.env.SPEAK_ACK_TIMEOUT_MS || '5000', 10),
+
   build: {
     version: process.env.BUILD_GIT_VERSION || 'dev',
     commit: process.env.BUILD_GIT_COMMIT || 'none',
