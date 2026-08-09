@@ -67,3 +67,66 @@ shim:
 # Clean build artifacts (local)
 clean-local:
 	rm -rf node_modules coverage out
+
+# --- launchd (macOS local deployment) — see docs/deploy-local.md -------------
+
+LAUNCHD_COMPONENTS = shim s2s transcriber bot
+LAUNCHD_DIR        = $(HOME)/Library/LaunchAgents
+LAUNCHD_LABEL      = com.github.bborbe.discord-assistant
+# A plist inherits no PATH. Explicit, absolute, and covering every binary the
+# launcher reaches: uv + claude (~/.local/bin), teamvault-cli + node (homebrew),
+# python3 (pyenv shims).
+LAUNCHD_PATH       = $(HOME)/.local/bin:/opt/homebrew/bin:$(HOME)/.pyenv/shims:/usr/local/bin:/usr/bin:/bin
+# The launcher must live OUTSIDE ~/Documents: launchd cannot execute anything
+# under a TCC-protected folder and the job dies with exit 126 before running a
+# line. ~/.local/bin is unprotected and already hosts uv and
+# semantic-search-http for the same reason. The repo copy stays the source of
+# truth; this is a deploy artifact and launchd-install always re-copies it, so
+# it cannot drift.
+LAUNCHD_LAUNCHER   = $(HOME)/.local/bin/discord-assistant-launchd
+
+.PHONY: launchd-install
+# Deploy the launcher outside the repo, generate the four plists, load them
+launchd-install: require-config
+	@mkdir -p $(LAUNCHD_DIR) $(HOME)/Library/Logs/discord-assistant $(dir $(LAUNCHD_LAUNCHER))
+	@cp scripts/launchd-run.sh $(LAUNCHD_LAUNCHER)
+	@chmod +x $(LAUNCHD_LAUNCHER)
+	@echo "  launcher -> $(LAUNCHD_LAUNCHER)"
+	@for c in $(LAUNCHD_COMPONENTS); do \
+	  sed -e 's|__COMPONENT__|'"$$c"'|g' \
+	      -e 's|__LAUNCHER__|$(LAUNCHD_LAUNCHER)|g' \
+	      -e 's|__REPO__|$(CURDIR)|g' \
+	      -e 's|__HOME__|$(HOME)|g' \
+	      -e 's|__PATH__|$(LAUNCHD_PATH)|g' \
+	      deploy/launchd/discord-assistant.plist.template \
+	      > $(LAUNCHD_DIR)/$(LAUNCHD_LABEL)-$$c.plist; \
+	  launchctl bootout gui/$$(id -u)/$(LAUNCHD_LABEL)-$$c 2>/dev/null || true; \
+	  n=0; \
+	  while launchctl list | awk -v l="$(LAUNCHD_LABEL)-$$c" '$$3==l{f=1} END{exit !f}' && [ $$n -lt 50 ]; do \
+	    sleep 0.2; n=$$((n+1)); \
+	  done; \
+	  launchctl bootstrap gui/$$(id -u) $(LAUNCHD_DIR)/$(LAUNCHD_LABEL)-$$c.plist \
+	    || { echo "  FAILED to load $(LAUNCHD_LABEL)-$$c" >&2; exit 1; }; \
+	  echo "  loaded $(LAUNCHD_LABEL)-$$c"; \
+	done
+	@echo "run 'make launchd-status' to check, and see docs/deploy-local.md"
+
+.PHONY: launchd-uninstall
+# Unload the four agents and remove their plists
+launchd-uninstall:
+	@for c in $(LAUNCHD_COMPONENTS); do \
+	  launchctl bootout gui/$$(id -u)/$(LAUNCHD_LABEL)-$$c 2>/dev/null || true; \
+	  rm -f $(LAUNCHD_DIR)/$(LAUNCHD_LABEL)-$$c.plist; \
+	  echo "  removed $(LAUNCHD_LABEL)-$$c"; \
+	done
+	@rm -f $(LAUNCHD_LAUNCHER)
+	@echo "  removed $(LAUNCHD_LAUNCHER)"
+
+.PHONY: launchd-status
+# PID and last exit code per agent. No PID + exit 0 means the launcher hit a
+# config error and deliberately stopped — that is the KeepAlive rule working.
+launchd-status:
+	@printf '%-8s %-8s %s\n' PID EXIT LABEL; \
+	for c in $(LAUNCHD_COMPONENTS); do \
+	  launchctl list | awk -v l="$(LAUNCHD_LABEL)-$$c" '$$3==l {printf "%-8s %-8s %s\n", $$1, $$2, $$3; f=1} END {if(!f) printf "%-8s %-8s %s\n", "-", "-", l" (not loaded)"}'; \
+	done

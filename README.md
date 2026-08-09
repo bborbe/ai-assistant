@@ -183,7 +183,10 @@ Naive `pcm[::3]` is wrong twice over: it walks alternating channels on an interl
 
 ## Deployment
 
-`make buca` → build, upload, clean, apply. **Never scale beyond one replica** — a Discord bot identity permits exactly one gateway connection, which is why `k8s/` pins `replicas: 1` with `strategy: Recreate`.
+- **[docs/deploy-local.md](docs/deploy-local.md)** — macOS, launchd. Unattended: starts at login, survives sleep/wake, no terminal.
+- **[docs/deploy-kubernetes.md](docs/deploy-kubernetes.md)** — coming soon. The image and manifests exist and have never been applied; that page records what is actually built and what still blocks it.
+
+**Never scale beyond one replica** — a Discord bot identity permits exactly one gateway connection, which is why `k8s/` pins `replicas: 1` with `strategy: Recreate`. The same constraint means a cluster instance and a laptop instance cannot run at once on one identity.
 
 ## Running it
 
@@ -199,7 +202,10 @@ SKIP_TRANSCRIBER=1 make dev  # no voice transcription
 | ---------------- | ---- | --------------------------------- |
 | shim             | 8080 | both surfaces                     |
 | speech-to-speech | 8765 | voice only (~60 s to load models) |
+| transcriber      | —    | per-speaker transcripts           |
 | bot              | 8081 | both                              |
+
+The transcriber has no port, so nothing fails loudly when it is missing — the transcript file just stops growing.
 
 ## patches/
 
