@@ -25,6 +25,13 @@
   same period. Every sentence spoken to a colleague would have wedged the typed
   path. The bot now applies the same prefix rule to the transcript it already
   receives; the endpoint remains the authority on what is answered.
+- fix: Strip closer panels from what the chat bridge posts. `strip_panels`
+  says it applies to both surfaces; the bridge was the one path that skipped
+  it, so "🔵 READY", "👤 You:" and "⏰ Next:" lines were landing in the Discord
+  channel verbatim. Present since the bridge shipped in v0.5.0.
+- fix: Strip the 📌 / 🎯 anchor lines too. The panel matcher covered the state
+  line but not the two lines that introduce it, so half a panel was removed and
+  half posted — visible on both surfaces, not only through the bridge.
 - fix: Skip leading disfluencies before the wake phrase. People do not start a
   sentence on the phrase, they start on a hesitation — three consecutive live
   failures were "Uh hey bot, can you check my free disk space?", "Uh hey hey

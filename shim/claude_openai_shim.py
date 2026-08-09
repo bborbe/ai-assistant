@@ -868,7 +868,12 @@ def strip_wake_phrase(text: str) -> str:
 _PANEL = re.compile(
     r"^\s*[\U0001F7E2\U0001F7E1\U0001F534\U0001F535\u26AA][^\n]*$"   # 🟢🟡🔴🔵⚪ …
     r"|^[^\w\n]{1,6}\s*(?:You|Next|Recommend)\s*:.*$"                    # 👤 You: / ⏰ Next:
-    r"|^[^\w\n]{0,6}\s*(?:\*\*)?(?:READY|DONE|ACTIVE|WAITING|BLOCKED)\b[^\n]*$",
+    r"|^[^\w\n]{0,6}\s*(?:\*\*)?(?:READY|DONE|ACTIVE|WAITING|BLOCKED)\b[^\n]*$"
+    # 📌 / 🎯 — the task and goal ANCHOR lines that sit above the panel. Missed
+    # until a real call put "📌 No task anchor — read-only lookup" in the
+    # channel: the icon set above covers the panel's own state line but not the
+    # two lines that introduce it, so half a panel was stripped and half posted.
+    r"|^\s*[\U0001F4CC\U0001F3AF][^\n]*$",                               # 📌 / 🎯
     re.M,
 )
 
@@ -2002,7 +2007,13 @@ class Handler(BaseHTTPRequestHandler):
                        else "")
                 if why:
                     print(f"  chat bridge: posting — {why}", flush=True)
-                    post_chat_message(answer)
+                    # strip_panels, same as the text branch below. The bridge
+                    # posts into a Discord channel, which is a chat window and
+                    # not a terminal — its docstring says "applied to BOTH
+                    # surfaces", and this path was the one place that skipped
+                    # it, so "📌 No task anchor" and "⏰ Next:" lines were
+                    # landing in the channel verbatim.
+                    post_chat_message(strip_panels(answer))
                 else:
                     print("  chat bridge: not posting (short, plain, "
                           "and not requested)", flush=True)
