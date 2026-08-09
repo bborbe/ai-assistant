@@ -7,6 +7,13 @@
 #
 # Deliberately dumb. It does not know what it runs and holds no state beyond the
 # backoff.
+#
+# SUPERSEDED FOR UNATTENDED USE by the launchd deployment — see
+# docs/deploy-local.md. launchd starts the stack at login, survives a closed
+# terminal and a sleep/wake cycle, and distinguishes a crash (restart) from a
+# bad credential (stop), none of which this script can do. It is kept only
+# because `make run` still uses it to babysit a foreground bot while
+# developing; do not reach for it to keep the assistant up.
 set -uo pipefail
 
 DELAY_MIN="${SUPERVISE_DELAY_MIN:-2}"
