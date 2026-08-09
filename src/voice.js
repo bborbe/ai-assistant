@@ -316,7 +316,21 @@ class Session {
 
     const ws = new WebSocket(config.s2sUrl, { maxPayload: 0 });
     this.ws = ws;
-    ws.on('open', () => log.info('  voice: s2s connected'));
+    ws.on('open', () => {
+      log.info('  voice: s2s connected');
+      // Deliberately a PARTIAL session.update: speech-to-speech deep-merges
+      // incoming fields (handlers/session.py:28), so sending only this one
+      // leaves the launcher's VAD tuning — thresholds, silence durations —
+      // exactly as it was. Sending a full `turn_detection` object would reset
+      // whatever it does not mention.
+      ws.send(
+        JSON.stringify({
+          type: 'session.update',
+          session: { turn_detection: { interrupt_response: config.interruptResponse } },
+        }),
+      );
+      log.info('  voice: interrupt-on-speech', { enabled: config.interruptResponse });
+    });
     // Object, not a bare string: the logger spreads its second argument, so a
     // string renders as {"0":"c","1":"o",…} and the message is unreadable.
     ws.on('error', (e) => log.error('  voice: s2s error', { error: e.message }));

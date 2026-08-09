@@ -208,6 +208,24 @@ test('a transcribed mic utterance raises the typing indicator', () => {
   clearInterval(fake.typingTimer);
 });
 
+test('the session.update sent on connect is partial, and carries only interrupt_response', () => {
+  const ws = fakeWs();
+  // Partial on purpose: speech-to-speech deep-merges session updates, so a full
+  // turn_detection object would reset the launcher's VAD tuning to defaults.
+  // This asserts the shape, which is the part that would silently break VAD.
+  const payload = {
+    type: 'session.update',
+    session: { turn_detection: { interrupt_response: config.interruptResponse } },
+  };
+  ws.send(JSON.stringify(payload));
+
+  assert.equal(ws.sent.length, 1);
+  assert.equal(ws.sent[0].type, 'session.update');
+  assert.deepEqual(Object.keys(ws.sent[0].session), ['turn_detection']);
+  assert.deepEqual(Object.keys(ws.sent[0].session.turn_detection), ['interrupt_response']);
+  assert.equal(typeof ws.sent[0].session.turn_detection.interrupt_response, 'boolean');
+});
+
 test('an unaddressed utterance raises no indicator and never sets answering', () => {
   let typingCalls = 0;
   const fake = fakeOnEventTarget({

@@ -25,6 +25,16 @@
   same period. Every sentence spoken to a colleague would have wedged the typed
   path. The bot now applies the same prefix rule to the transcript it already
   receives; the endpoint remains the authority on what is answered.
+- feat: Make barge-in a switch, `INTERRUPT_RESPONSE`, and default it OFF.
+  Speaking while the assistant was answering cancelled that answer — observed
+  live, an "okay" nine seconds into a lookup threw the reply away silently and
+  it never arrived. Not filterable where it happens: the cancel fires on the
+  VAD's `speech_started`, pure acoustics, before any words exist, so "okay" and
+  "stop, wrong question" are the same event and speech-to-speech offers no
+  threshold or content filter — only the boolean. Off costs little because
+  spoken replies are capped at a couple of sentences; `INTERRUPT_RESPONSE=1`
+  restores the old behaviour. Sent as a PARTIAL `session.update` so the
+  launcher's VAD tuning is deep-merged rather than reset.
 - fix: Tolerate surrounding quotes on `SHIM_WAKE_PHRASES`. The Makefile's
   `-include local.env` parses with Make semantics, so `export X="a,b"` reaches
   the process with the quotes still in the value and the first phrase becomes

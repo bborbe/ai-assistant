@@ -61,6 +61,20 @@ const config = {
   // so without this a single sentence arrives as several utterances.
   utteranceGapMs: parseInt(process.env.UTTERANCE_GAP_MS || '1500', 10),
 
+  // Should speaking while the assistant is answering CANCEL that answer?
+  //
+  // Off by default, which reverses speech-to-speech's own default. The cancel
+  // fires on the VAD's `speech_started` — pure acoustics, before any words
+  // exist — so "okay" and "stop, wrong question" are indistinguishable at the
+  // moment the decision is made, and there is no threshold or content filter to
+  // tune. Observed live: an acknowledgement nine seconds into a lookup threw the
+  // answer away silently.
+  //
+  // Off costs little here because spoken replies are capped at SHIM_SPOKEN_MAX
+  // sentences — there is rarely more than a few seconds of audio to interrupt.
+  // Set INTERRUPT_RESPONSE=1 for the talk-over-it behaviour.
+  interruptResponse: process.env.INTERRUPT_RESPONSE === '1',
+
   // Wake phrases, comma-separated — a COPY of the endpoint's list, used only to
   // decide whether to raise the "…is typing" indicator and to arm the busy
   // gate. The endpoint remains the authority on whether a turn is answered;
