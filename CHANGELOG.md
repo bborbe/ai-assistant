@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.9.0
 
 - feat: Add `tools/llm-bench`, a hand-run chat-shaped LLM benchmark for choosing the
   shim's front-tier model. Existing benchmarks — public boards and `coding/bench`
