@@ -11,6 +11,21 @@
   and that becomes a fourth chat-bridge trigger. Deliberately not symmetric:
   spoken turns keep the three inference-based triggers, so a spoken "hello"
   still does not litter the channel.
+- feat: Ask for a complete, front-loaded answer instead of a short one. The
+  machinery for "short spoken, detailed written" already existed — speech is
+  capped at `SHIM_SPOKEN_MAX` sentences and the full text is what the chat
+  bridge posts — but the voice directive also told the model to stop at two
+  sentences, so there was rarely anything extra to post, and the written copy
+  was the same brief answer untruncated. Length is enforced in code, so the
+  directive now shapes ORDER instead: answer first (that part is heard),
+  detail after (that part is read). Identifiers, paths and markdown flip the
+  same way — forbidden in the spoken opening, wanted in the written half.
+  Also resolves a contradiction introduced with the chat bridge, which told
+  the model to answer in full while the length rule told it to stop at two
+  sentences.
+- fix: The truncation line now says "the details are in the chat" rather than
+  offering more — the rest has already been posted by the time it is heard,
+  so "if you want it" invited the listener to ask for what they already had.
 - fix: Show the typing indicator for EVERY answer produced during a call,
   spoken or typed. The text path has always shown Discord's "…is typing"
   dots; the voice path never did, so text could arrive in the channel with no
