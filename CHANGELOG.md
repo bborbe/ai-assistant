@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- feat: Wait to be addressed. In a call the assistant hears every word an
+  allowlisted speaker says — the allowlist decides WHO may drive it, never
+  whether a given sentence was meant for it — so in company it answered
+  conversations addressed to other people. A voice turn now needs to open with
+  a wake phrase (`SHIM_WAKE_PHRASES` / `voice.wake_phrases`, default
+  `hey bot` plus two of its likely mishearings), and reaches the model with the
+  address stripped. Unaddressed speech takes the same silent path as filler:
+  empty content, so nothing is synthesised and no holding line is spoken.
+  Deliberately: prefix-matched not anywhere-matched, a fixed variant list not
+  fuzzy matching, always on rather than switching on head count, and no
+  follow-up window — every ambiguous case resolves to silence, because a missed
+  trigger costs one repeat while a false one interrupts a room. Typed turns are
+  never gated; an `@mention` already addressed the bot.
+
 ## v0.6.0
 
 - feat: In a live call, an answer to a typed question is now BOTH spoken and

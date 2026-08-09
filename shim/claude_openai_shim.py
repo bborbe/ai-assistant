@@ -768,6 +768,56 @@ def is_filler(text: str) -> bool:
     return 0 < len(words) <= 3 and all(w in _FILLER_WORDS for w in words)
 
 
+# ── wake phrase ────────────────────────────────────────────────────────────
+# In a call the assistant hears every word an allowlisted speaker says — the
+# allowlist decides WHO can drive it, never WHETHER a given sentence was meant
+# for it. So in company it answered conversations addressed to other people.
+#
+# A LIST, not a phrase, and the reason is empirical: speech-to-text mangles
+# short utterances, and this project's own transcripts have it turning "Wide
+# Forest" into "White Forest". Each variant is a deliberate entry — no edit
+# distance, no phonetic matching, nothing that widens the surface silently,
+# because every variant added is a false-trigger risk accepted on purpose.
+#
+# Matched as a PREFIX. "so, hey bot, what's my task" deliberately does not
+# count: a phrase-anywhere match wakes on any sentence that merely mentions
+# the bot, which is exactly the failure this exists to prevent.
+#
+# Fail quiet: anything unmatched is treated as not addressed. A missed trigger
+# costs one repeat; a false trigger interrupts a conversation with other people
+# in the room. The two are not equally cheap.
+WAKE_PHRASES = setting("SHIM_WAKE_PHRASES", "voice.wake_phrases", "hey bot,hey bought,hey but")
+_WAKE_RE = re.compile(
+    r"^\W*(?:" + "|".join(re.escape(p.strip()) for p in WAKE_PHRASES.split(",") if p.strip()) + r")\b",
+    re.I,
+)
+
+
+def is_addressed(text: str) -> bool:
+    """Did this utterance open with a wake phrase? Empty list disables the gate."""
+    if not WAKE_PHRASES.strip():
+        return True
+    return bool(_WAKE_RE.match(text))
+
+
+def strip_wake_phrase(text: str) -> str:
+    """Drop the address so the model receives the question, not the greeting.
+
+    "Hey bot, what's my most important task?" reaches Claude as "what's my most
+    important task?" — the phrase is how you got its attention, not part of what
+    you asked. Left in, a bare "Hey bot." is a greeting the model will answer as
+    one, and every real question carries a vocative it may echo back.
+
+    Falls back to the original text when stripping would leave nothing, so a
+    bare wake phrase still reaches the model as something rather than an empty
+    prompt the endpoint would reject.
+    """
+    if not WAKE_PHRASES.strip():
+        return text
+    stripped = _WAKE_RE.sub("", text, count=1).lstrip(" ,.:;-—")
+    return stripped if stripped.strip() else text
+
+
 _PANEL = re.compile(
     r"^\s*[\U0001F7E2\U0001F7E1\U0001F534\U0001F535\u26AA][^\n]*$"   # 🟢🟡🔴🔵⚪ …
     r"|^[^\w\n]{1,6}\s*(?:You|Next|Recommend)\s*:.*$"                    # 👤 You: / ⏰ Next:
@@ -1713,6 +1763,27 @@ class Handler(BaseHTTPRequestHandler):
                                       or "spoken conversation" in low
                                       or "voice rules" in low)))
         print(f"-> {'VOICE' if voice else 'TEXT '} [{key}] {prompt[:70]!r}", flush=True)
+
+        # Wake phrase: in a call the assistant hears everything said by an
+        # allowlisted speaker, including whole conversations addressed to other
+        # people, and answered all of it. Same silence mechanism as the filler
+        # check above — empty content, so speech-to-speech synthesises nothing
+        # and no filler line is ever spoken.
+        #
+        # VOICE ONLY, and never a typed turn. A typed message already had to
+        # carry an @mention or arrive in a thread/DM to be answered at all, so
+        # it is addressed by construction; demanding a wake phrase on top of
+        # that would be asking the user to say it twice.
+        if voice and not typed_turn:
+            if not is_addressed(prompt):
+                print(f"-> QUIET [{key}] not addressed: {prompt[:60]!r}", flush=True)
+                if req.get("stream"):
+                    return self._stream("")
+                return self._json(200, self._completion(""))
+            # Addressed: hand on the question without the address. The full
+            # utterance, wake phrase and all, is already in the transcript —
+            # this only changes what the model is asked.
+            prompt = strip_wake_phrase(prompt)
 
         # The transcript directive is voice-only: it is the record of a call,
         # and a text surface already has its own history in the thread.
