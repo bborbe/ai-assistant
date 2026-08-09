@@ -107,6 +107,30 @@ class Session {
     this.closed = false;
     this.ws = null;
     this.retry = null; // at most one outstanding reconnect
+    // Set while a response triggered by speak() (a typed turn, not a mic
+    // turn) is in flight, so the transcript line it produces can be marked
+    // distinctly from an ordinary spoken reply. Cleared once that reply's
+    // transcript is written, or defensively on response.done.
+    this.typedReplyPending = false;
+    // Mirrors the server's own `st.in_response` (response.py) — set on
+    // EVERY `response.created`, mic-triggered or not, cleared defensively on
+    // BOTH `response.output_audio.done` and `response.done` (same two events
+    // that reset typedReplyPending, for the same reason: a response that
+    // ends abnormally must not wedge the next speak() as permanently busy).
+    // speak() reads this before sending anything, because the server allows
+    // only one response at a time regardless of who triggered it, and a
+    // mic-driven reply to someone else on the call can otherwise be
+    // mistaken, event-type-only, for the ack of our own request — see
+    // speak()'s doc comment.
+    this.inResponse = false;
+    // True only while THIS session's own speak() call is waiting on its ack,
+    // so a second typed turn arriving before the first is acked is refused
+    // client-side rather than racing the same listener.
+    this.awaitingSpeakAck = false;
+    // Set by speak() while it is waiting; connectS2S() calls this to fail a
+    // pending speak() fast (rather than making its caller wait out the full
+    // ack timeout) when the socket it was waiting on is torn down.
+    this.pendingSpeakFinish = null;
 
     // Transcript path — EVERY speaker, independent of the command allowlist.
     // Buffers here are flushed on each speaker's silence boundary.
@@ -263,6 +287,10 @@ class Session {
       } catch {}
       this.ws = null;
     }
+    // A pending speak() was waiting on the socket that just got torn down —
+    // fail it now rather than making the caller wait out the full ack
+    // timeout for a reply that can never arrive.
+    if (this.pendingSpeakFinish) this.pendingSpeakFinish({ ok: false, reason: 'no-socket' });
 
     const ws = new WebSocket(config.s2sUrl, { maxPayload: 0 });
     this.ws = ws;
@@ -283,6 +311,101 @@ class Session {
     });
   }
 
+  /**
+   * Push a typed turn into this session's own s2s socket so it is answered
+   * aloud through the playback path already wired for spoken turns — see the
+   * design note in [[Typed messages cannot be answered aloud]]. No second TTS
+   * path: the reply returns through the existing `response.output_audio.delta`
+   * -> `pushAudio` route once the server accepts the request below.
+   *
+   * Two events per the realtime protocol: `conversation.item.create` adds the
+   * text to the LLM context without triggering generation, `response.create`
+   * triggers it. The server acks with `response.created`, or refuses cleanly
+   * with `conversation_already_has_active_response` if a response is already
+   * in flight (response.py:150).
+   *
+   * **Why this gates on `inResponse`/`awaitingSpeakAck` before sending
+   * anything**, rather than just racing the next `response.created` off the
+   * shared socket: the server auto-generates a response for a MIC turn via
+   * VAD with no client `response.create` at all, so a bare event-type match
+   * cannot tell "the ack for MY request" from "someone else on the call just
+   * finished a sentence". Gating first — refusing as `busy` client-side when
+   * a response is already known to be in flight, and refusing a second
+   * concurrent `speak()` the same way — closes that window down to the
+   * network round-trip between the check and the send, which is the same
+   * residual race the server itself accepts (its own gate is a plain
+   * boolean, not a queue). Still not a client-side response STATE MACHINE:
+   * `inResponse` only mirrors what the server already reports on every
+   * `response.created`/`response.done`, it decides nothing on its own.
+   *
+   * Accepted tradeoff: once `conversation.item.create` is actually sent, a
+   * `timeout` or a lost-race `no-socket` (via `connectS2S()`'s reconnect
+   * hook) is reported to the caller, but the item itself is never retracted
+   * — the server has no "cancel this item" message, and the deferred-item
+   * flush in conversation.py means it may still surface in the transcript
+   * later, attributed correctly to the user, just without a spoken reply
+   * this turn. The common busy case never reaches this window at all,
+   * because the gate above refuses before sending anything.
+   */
+  speak(text, { timeoutMs = config.speakAckTimeoutMs } = {}) {
+    return new Promise((resolve) => {
+      if (this.closed || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        resolve({ ok: false, reason: 'no-socket' });
+        return;
+      }
+      if (this.awaitingSpeakAck || this.inResponse) {
+        resolve({ ok: false, reason: 'busy' });
+        return;
+      }
+      this.awaitingSpeakAck = true;
+      const ws = this.ws;
+      let settled = false;
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        ws.removeListener('message', onAck);
+        this.awaitingSpeakAck = false;
+        this.pendingSpeakFinish = null;
+        resolve(result);
+      };
+      this.pendingSpeakFinish = finish;
+      const timer = setTimeout(() => finish({ ok: false, reason: 'timeout' }), timeoutMs);
+      const onAck = (raw) => {
+        let e;
+        try {
+          e = JSON.parse(raw);
+        } catch {
+          return;
+        }
+        if (e.type === 'response.created') {
+          this.typedReplyPending = true;
+          finish({ ok: true });
+        } else if (e.type === 'error') {
+          // Any refusal ends the wait immediately — not just the one reason
+          // this path anticipates — so a caller sees the real reason instead
+          // of a misleading `timeout` several seconds later. The server's own
+          // "one response at a time" refusal keeps its documented `busy`
+          // label (response.py:150); every other error type is passed
+          // through as-is rather than flattened to a generic string.
+          const type = e.error?.type;
+          finish({
+            ok: false,
+            reason: type === 'conversation_already_has_active_response' ? 'busy' : type || 'error',
+          });
+        }
+      };
+      ws.on('message', onAck);
+      ws.send(
+        JSON.stringify({
+          type: 'conversation.item.create',
+          item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] },
+        }),
+      );
+      ws.send(JSON.stringify({ type: 'response.create' }));
+    });
+  }
+
   onEvent(raw) {
     let e;
     try {
@@ -300,6 +423,13 @@ class Session {
       playing: Boolean(this.audio),
     });
     switch (e.type) {
+      // Mirrors the server's own st.in_response gate (response.py) — set on
+      // EVERY response.created, not just ones speak() triggered, because a
+      // mic-driven VAD turn puts the connection in the same busy state and
+      // speak() must refuse just as cleanly during someone else's live reply.
+      case 'response.created':
+        this.inResponse = true;
+        break;
       case 'input_audio_buffer.speech_started':
         if (this.speaking) {
           log.info('  voice: barge-in — stopping playback');
@@ -338,12 +468,26 @@ class Session {
           }
           log.info(`  voice BOT: ${e.transcript}`);
           // The bot's own speech never returns through Discord, so without this
-          // the transcript is one-sided: questions with no answers.
-          this.transcript?.writeText(config.botName, e.transcript);
+          // the transcript is one-sided: questions with no answers. A reply
+          // triggered by speak() (a typed turn) is marked distinctly from an
+          // ordinary spoken reply — same write path, but the record still has
+          // to show WHICH surface asked, matching the "(typed) " marker
+          // already put on the user's turn.
+          this.transcript?.writeText(
+            config.botName,
+            this.typedReplyPending ? `(typed→spoken) ${e.transcript}` : e.transcript,
+          );
+          this.typedReplyPending = false;
         }
         break;
       case 'response.output_audio.done':
       case 'response.done':
+        // Defensive: a response that ends with no transcript (empty/failed
+        // synthesis) must not leave a stale flag marking the NEXT unrelated
+        // reply as typed-originated. Same for inResponse — a stuck `true`
+        // here would wedge every future speak() as permanently busy.
+        this.typedReplyPending = false;
+        this.inResponse = false;
         this.endAudio();
         break;
       case 'error':
@@ -457,6 +601,10 @@ class Session {
     }
     for (const userId of [...this.utterance.keys()]) this.flush(userId);
     this.closed = true;
+    // Same fail-fast as connectS2S()'s reconnect hook: a pending speak() has
+    // no socket to hear an ack on once the session is torn down, so it must
+    // not sit out the full ack timeout for a reply that can never arrive.
+    if (this.pendingSpeakFinish) this.pendingSpeakFinish({ ok: false, reason: 'no-socket' });
     clearInterval(this.pump);
     this.stopAudio(); // also destroys an open playback stream, not just the player
     try {
@@ -584,6 +732,21 @@ function transcriptFor(guildId, channelId) {
 }
 
 /**
+ * The live `Session` whose call this channel IS, if any.
+ *
+ * A voice channel's integrated text chat shares the voice channel's id (see
+ * `transcriptFor` above), so this is the same match used to route a typed
+ * message that arrived DURING that call into it — see `Session.speak` and
+ * [[Typed messages cannot be answered aloud]]. `null` for every other
+ * channel (DM, thread, guild channel with no live call), which is what keeps
+ * ordinary text answering unaffected.
+ */
+function liveSessionFor(guildId, channelId) {
+  const s = guildId ? sessions.get(guildId) : null;
+  return s && !s.closed && s.channelId === channelId ? s : null;
+}
+
+/**
  * Post the shim's full answer into the live voice call's channel.
  *
  * The payload that reaches here carries no channel id on purpose (see the
@@ -624,6 +787,10 @@ module.exports = {
   evictGhost,
   sessions,
   transcriptFor,
+  liveSessionFor,
   noteVoiceState,
   postToChannel,
+  // Exported for unit tests to exercise Session.prototype.speak against a
+  // fake ws (no real audio pipeline needed) — see test/voice.test.js.
+  Session,
 };

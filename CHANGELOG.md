@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- feat: Answer a typed message aloud when it lands in a live call's own text
+  chat. Pushes the typed turn into the s2s socket the call already holds
+  (`conversation.item.create` + `response.create`) and lets the existing
+  playback path speak the reply — no second TTS path. The rule is
+  content-blind: any typed turn that would be answered at all, in the text
+  chat of a channel with a live voice session, is spoken; everywhere else
+  keeps answering in text via `X-Output-Mode: text`, unchanged. A server-side
+  refusal (`conversation_already_has_active_response`, one response at a
+  time) is reported to the channel and recorded in the transcript rather than
+  silently dropped or answered a second way. The transcript marks a
+  typed-then-spoken reply distinctly (`(typed→spoken) `) from an ordinary
+  spoken reply, matching the existing `(typed) ` marker on the question.
+- fix: Correct a comment in the chat-bridge auth check that described a
+  `!==` short-circuit while the code actually used
+  `crypto.timingSafeEqual` — the implementation was already
+  constant-time, only the comment was wrong.
+
 ## v0.5.0
 
 - feat: Bridge spoken answers into the channel as text. The shim already computes
