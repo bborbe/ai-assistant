@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+- feat: Bridge spoken answers into the channel as text. The shim already computes
+  the full answer and discards everything past `SHIM_SPOKEN_MAX` — it now
+  POSTs that full text to a new authenticated `POST /chat` route on the bot's
+  health server (no channel id in the payload; the bot routes to whichever
+  voice session is actually live). Triggers on either truncation or a
+  content-shape heuristic (URL, path, identifier, multi-item list, or a
+  capitalized-word run), so a short answer that is pure payload — e.g. a
+  station name — is posted even when never truncated. Also: a reply to a
+  message typed during a live call is now written into the session
+  transcript, matching the question side that was already captured.
+- fix: Honour an explicit request to write something down. Found on a live call:
+  "write it to the chat" produced a two-sentence plain-prose answer, so
+  neither the truncation nor the content-shape trigger fired and nothing was
+  posted — correct by the letter of both, and exactly wrong. Intent lives in
+  the user's turn, where no inspection of the answer can see it, so it is now
+  a third trigger read off the prompt. Still code-side: an unmatched phrasing
+  falls back to the other two rather than asking the model to decide.
+- fix: Stop the assistant claiming it cannot type. With no tool and no knowledge of
+  the bridge it truthfully reported the old limitation — "I can only speak,
+  not type into the channel" — while the bridge was armed. A voice-only
+  directive now states that the full written answer reaches the channel. It
+  corrects a belief; it does not ask the model to decide anything.
+- feat: Log every chat-bridge decision with its reason, including the decision not
+  to post. Without it a declined trigger and a broken bridge are
+  indistinguishable from outside — the blindness that made the 2026-08-04
+  Discord outage take four restarts to diagnose.
+
 ## v0.4.3
 
 - docs: Add `CLAUDE.md` — coding-guideline pointers, non-obvious invariants (fail-closed allowlist, transcription/consent separation, health transport), the non-code surfaces (patches, Python shim, tools), the real-voice-session verification requirement, and the two known deviations from the Node service guide

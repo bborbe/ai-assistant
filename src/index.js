@@ -81,6 +81,7 @@ client.once('clientReady', async () => {
     s2s: config.s2sUrl,
     allowed: config.allowedUserIds.length,
     version: config.build.version,
+    chatBridge: Boolean(config.chatBridgeToken),
   });
 
   // A previous process may have died while in a voice channel, leaving the bot

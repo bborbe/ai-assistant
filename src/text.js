@@ -4,23 +4,7 @@ const config = require('./config');
 const log = require('./log');
 const { chat, sessionKeyFor } = require('./llm');
 const voice = require('./voice');
-
-const DISCORD_LIMIT = 2000;
-
-function chunk(text) {
-  const out = [];
-  let rest = text;
-  while (rest.length > DISCORD_LIMIT) {
-    // Prefer a line break, then a space, before hard-cutting.
-    let cut = rest.lastIndexOf('\n', DISCORD_LIMIT);
-    if (cut < DISCORD_LIMIT / 2) cut = rest.lastIndexOf(' ', DISCORD_LIMIT);
-    if (cut < DISCORD_LIMIT / 2) cut = DISCORD_LIMIT;
-    out.push(rest.slice(0, cut));
-    rest = rest.slice(cut).trimStart();
-  }
-  if (rest) out.push(rest);
-  return out;
-}
+const { chunk, DISCORD_LIMIT } = require('./discord-chunk');
 
 /** Rebuild conversation history from the channel itself — no local state to lose. */
 async function history(channel, botId) {
@@ -223,6 +207,15 @@ function register(client) {
 
       log.info('text out', { chars: answer.length, preview: answer.slice(0, 80) });
       for (const part of chunk(answer)) await target.send(part);
+
+      // A message typed during a live call is answered in the channel, but
+      // that reply was never recorded — only the QUESTION side is captured
+      // above, so the transcript of a call read one-sided. `target` is the
+      // voice channel itself when this is voice's text chat (it has no
+      // threads, see conversationChannel), so its id matches the live
+      // session's channelId.
+      const replyTranscript = voice.transcriptFor(msg.guild?.id, target.id);
+      if (replyTranscript) replyTranscript.writeText(config.botName, answer);
     } catch (e) {
       log.error('text error', { error: e.message });
       await target
