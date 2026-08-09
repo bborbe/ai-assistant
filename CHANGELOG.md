@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- fix: Route the voice surface to the shim instead of MiniMax. `v0.8.0` started
+  `scripts/s2s-minimax` with no arguments, and that launcher hardcodes
+  `--responses_api_base_url https://api.minimax.io/v1`, reaching Claude Code
+  only when trailing `"$@"` args override it. So voice silently answered from a
+  hosted model with no vault access, leaking MiniMax's own `<tool_call>` markup
+  into replies and claiming it "can't access external documents" — while every
+  process reported healthy and every check stayed green. The launcher now
+  passes `OPENAI_BASE_URL` / `OPENAI_MODEL` from `local.env`, so voice and text
+  cannot drift onto different endpoints, and refuses to start if either is
+  unset rather than falling back silently.
+
 ## v0.8.0
 
 - feat: Run the local stack under launchd. `scripts/launchd-run.sh` starts one

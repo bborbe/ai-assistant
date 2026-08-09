@@ -132,7 +132,24 @@ s2s)
   launcher="${S2S_LAUNCHER:-$PWD/scripts/s2s-minimax}"
   [ -x "$launcher" ] || die_config "s2s launcher not executable: $launcher"
   export S2S_MODE=realtime
-  exec "$launcher"
+  # The launcher is named for its DEFAULT backend and hardcodes
+  # `--responses_api_base_url https://api.minimax.io/v1`. It only reaches Claude
+  # Code because trailing "$@" args override those flags — so launching it bare
+  # silently routes voice to MiniMax. Nothing errors: the bot answers, in a
+  # different voice, with no vault access, leaking MiniMax's own tool-call
+  # markup into replies. Shipped exactly that way in v0.8.0 and caught by using
+  # it, not by any check.
+  #
+  # Overrides come from local.env, so voice and text cannot drift onto
+  # different endpoints. `not-needed` is a literal, not a secret, so passing it
+  # in argv leaks nothing — unlike the MiniMax key, which s2s-minimax
+  # deliberately exports rather than passes as a flag.
+  [ -n "${OPENAI_BASE_URL:-}" ] || die_config "OPENAI_BASE_URL unset in local.env — voice would silently fall back to MiniMax"
+  [ -n "${OPENAI_MODEL:-}" ] || die_config "OPENAI_MODEL unset in local.env — voice would silently fall back to MiniMax"
+  exec "$launcher" \
+    --responses_api_base_url "$OPENAI_BASE_URL" \
+    --responses_api_api_key "${OPENAI_API_KEY:-not-needed}" \
+    --model_name "$OPENAI_MODEL"
   ;;
 
 transcriber)
