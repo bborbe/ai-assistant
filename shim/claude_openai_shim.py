@@ -796,7 +796,7 @@ def is_filler(text: str) -> bool:
 # characters still inside the value — making the first phrase `"hey bot`, which
 # matches nothing anyone says. Same family as the `$HOME` and secret-in-argv
 # traps this repo has already been bitten by twice.
-WAKE_PHRASES = setting("SHIM_WAKE_PHRASES", "voice.wake_phrases", "hey bot,hey bought,hey but").strip("\"'")
+WAKE_PHRASES = setting("SHIM_WAKE_PHRASES", "voice.wake_phrases", "hey bot,hey bought,hey but,hi bot").strip("\"'")
 # Anchored to the start of a SENTENCE, not just the start of the utterance.
 #
 # speech-to-speech accumulates a turn across progressive finals, so one

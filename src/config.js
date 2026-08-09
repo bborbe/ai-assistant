@@ -139,7 +139,7 @@ const config = {
   // quote characters still in the value and the first phrase becomes `"hey bot`
   // — which matches nothing anyone says. Same family as the `$HOME` and
   // secret-in-argv traps this repo has already been bitten by twice.
-  wakePhrases: (process.env.SHIM_WAKE_PHRASES ?? 'hey bot,hey bought,hey but')
+  wakePhrases: (process.env.SHIM_WAKE_PHRASES ?? 'hey bot,hey bought,hey but,hi bot')
     .replace(/^["']|["']$/g, '')
     .split(',')
     .map((p) => p.trim().toLowerCase())

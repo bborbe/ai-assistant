@@ -53,7 +53,11 @@ const SILENCE = Buffer.alloc(OUT_FRAME);
 // an answer is still being produced. The cap bounds a response that never
 // reports finishing — dots that never stop are worse than none.
 const TYPING_TICK_MS = 8000;
-const TYPING_MAX_MS = 5 * 60 * 1000;
+// Two minutes, not five. This is the LAST resort — the ordinary ends are
+// `response.done` and the next utterance re-evaluating `answering`. Five
+// minutes of dots after a turn died is long enough to read as "the bot is
+// broken", which is the thing the indicator exists to prevent.
+const TYPING_MAX_MS = 2 * 60 * 1000;
 
 // 48k stereo -> 16k mono. Mix channels first, then average groups of 3 (box
 // low-pass). NOT naive striding, which walks alternating channels on an
@@ -572,12 +576,19 @@ class Session {
         // cap, and — worse than cosmetic — `speak()` refuses typed turns as
         // `busy` for exactly as long. Every sentence spoken to a colleague
         // would have wedged the typed path.
-        if (config.isAddressed(e.transcript)) {
-          this.answering = true;
-          this.showTyping();
-        } else {
-          log.debug('  voice: not addressed, no typing indicator');
-        }
+        // ASSIGNED, never only set. A turn that produces nothing — the endpoint
+        // declining, or speech-to-speech hanging up mid-answer ("listener
+        // gone") — sends no `response.done`, so the flag that was raised for it
+        // is never lowered: the dots run to the cap and `speak()` refuses typed
+        // turns as busy for the same period. Observed live at 12:39.
+        //
+        // A new utterance is the natural end of the previous turn, so
+        // re-evaluating here bounds any stuck state to "until you speak again"
+        // instead of "until the cap". The `response.done` reset still exists;
+        // this is the backstop for turns that never reach it.
+        this.answering = config.isAddressed(e.transcript);
+        if (this.answering) this.showTyping();
+        else log.debug('  voice: not addressed, no typing indicator');
         break;
       // NOTE: response.output_audio.delta — NOT response.audio.delta, which is
       // what OpenAI's hosted Realtime uses and what most write-ups quote.
