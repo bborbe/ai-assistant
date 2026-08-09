@@ -49,6 +49,12 @@ const OUT_FRAME = (DISCORD_RATE * DISCORD_CH * 2 * TICK_MS) / 1000;
 const RUN_ON = /[.!?][A-Z]/;
 const SILENCE = Buffer.alloc(OUT_FRAME);
 
+// Discord's typing indicator lapses after ~10s, so it has to be re-sent while
+// an answer is still being produced. The cap bounds a response that never
+// reports finishing — dots that never stop are worse than none.
+const TYPING_TICK_MS = 8000;
+const TYPING_MAX_MS = 5 * 60 * 1000;
+
 // 48k stereo -> 16k mono. Mix channels first, then average groups of 3 (box
 // low-pass). NOT naive striding, which walks alternating channels on an
 // interleaved stream and aliases everything above 8 kHz back into the band.
@@ -134,6 +140,9 @@ class Session {
     // pending speak() fast (rather than making its caller wait out the full
     // ack timeout) when the socket it was waiting on is torn down.
     this.pendingSpeakFinish = null;
+    // Live "…is typing" ticker in the call's text chat, while any answer is
+    // being produced — see showTyping().
+    this.typingTimer = null;
 
     // Transcript path — EVERY speaker, independent of the command allowlist.
     // Buffers here are flushed on each speaker's silence boundary.
@@ -429,6 +438,42 @@ class Session {
     return result;
   }
 
+  /**
+   * Keep Discord's "…is typing" dots alive in the call's text chat while the
+   * assistant is answering — whichever surface asked.
+   *
+   * Driven from `response.created` rather than from the typed-turn path,
+   * because the inconsistency is what people notice: a typed question showed
+   * dots, an identical spoken question did not, yet BOTH can end with text
+   * appearing in the channel. One trigger, one behaviour.
+   *
+   * Accepted cost, stated because it is a real one: a spoken turn that never
+   * produces a written copy (a greeting, a two-sentence answer with nothing
+   * postable) now flashes the dots for a moment and posts nothing. That reads
+   * as "it is working", which is true, and is the lesser evil against text
+   * arriving with no warning it was coming.
+   *
+   * Self-terminating three ways, because an indicator nobody clears is worse
+   * than none: the response ending, the session closing, and a hard cap.
+   * Discord also clears it by itself the moment a message is sent.
+   */
+  showTyping() {
+    if (!this.channel?.sendTyping || this.typingTimer) return;
+    const startedAt = Date.now();
+    const tick = () => this.channel.sendTyping().catch(() => {});
+    tick();
+    this.typingTimer = setInterval(() => {
+      if (!this.inResponse || this.closed || Date.now() - startedAt > TYPING_MAX_MS) {
+        clearInterval(this.typingTimer);
+        this.typingTimer = null;
+        return;
+      }
+      tick();
+    }, TYPING_TICK_MS);
+    // Never hold the process open for a cosmetic indicator.
+    this.typingTimer.unref?.();
+  }
+
   onEvent(raw) {
     let e;
     try {
@@ -452,6 +497,7 @@ class Session {
       // speak() must refuse just as cleanly during someone else's live reply.
       case 'response.created':
         this.inResponse = true;
+        this.showTyping();
         break;
       case 'input_audio_buffer.speech_started':
         if (this.speaking) {

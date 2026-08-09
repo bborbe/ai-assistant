@@ -178,6 +178,48 @@ test('speak sends conversation.item.create then response.create, in order', asyn
   assert.deepEqual(await pending, { ok: true });
 });
 
+test('response.created raises the typing indicator for a MIC turn too', () => {
+  let typingCalls = 0;
+  const fake = fakeOnEventTarget({
+    channel: {
+      sendTyping: async () => {
+        typingCalls += 1;
+      },
+    },
+    typingTimer: null,
+    closed: false,
+    showTyping: Session.prototype.showTyping,
+  });
+
+  // No speak() anywhere in this test: this is the spoken path, and it is the
+  // one that showed no dots while its answer was on its way to the channel.
+  Session.prototype.onEvent.call(fake, JSON.stringify({ type: 'response.created' }));
+
+  assert.equal(fake.inResponse, true);
+  assert.equal(typingCalls, 1, 'shown immediately, not on the first 8s tick');
+  clearInterval(fake.typingTimer);
+});
+
+test('showTyping does not stack a second ticker on a repeated response.created', () => {
+  let typingCalls = 0;
+  const fake = fakeOnEventTarget({
+    channel: {
+      sendTyping: async () => {
+        typingCalls += 1;
+      },
+    },
+    typingTimer: null,
+    closed: false,
+    showTyping: Session.prototype.showTyping,
+  });
+
+  Session.prototype.onEvent.call(fake, JSON.stringify({ type: 'response.created' }));
+  Session.prototype.onEvent.call(fake, JSON.stringify({ type: 'response.created' }));
+
+  assert.equal(typingCalls, 1, 'the second call must find a live ticker and leave it alone');
+  clearInterval(fake.typingTimer);
+});
+
 test('speak tells the endpoint the turn was typed, before sending anything', async () => {
   const ws = fakeWs();
   const fake = { closed: false, ws, typedReplyPending: false };
@@ -309,6 +351,9 @@ function fakeOnEventTarget(overrides = {}) {
     transcript: { writeText: (speaker, text) => transcriptWrites.push({ speaker, text }) },
     _transcriptWrites: transcriptWrites,
     endAudio: () => {},
+    // Stubbed by default so the event tests stay about event handling; the two
+    // tests that are ABOUT the indicator pass the real prototype method in.
+    showTyping: () => {},
     ...overrides,
   };
 }

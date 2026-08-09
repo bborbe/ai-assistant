@@ -95,41 +95,6 @@ async function conversationChannel(msg, botId) {
   }
 }
 
-/**
- * Keep Discord's "…is typing" dots alive in the channel while a typed turn is
- * being answered aloud.
- *
- * The spoken path gives its own progress signal — a filler within a second,
- * and the bot's speaking ring — but someone WATCHING THE CHAT sees nothing at
- * all until the written copy lands, which reads as "my message was ignored".
- * The text path has always shown the dots; routing into voice silently dropped
- * them, and the inconsistency is the complaint, not the wait.
- *
- * Self-terminating three ways, because an indicator nobody clears is worse
- * than none: the call's own `inResponse` going false (the normal end), the
- * chat-bridge post arriving (Discord clears the dots when a message is sent),
- * and a hard cap for a response that never reports finishing. Fire-and-forget
- * — the caller must not await this, or a typed turn would block until the
- * answer completes.
- */
-const TYPING_TICK_MS = 8000; // Discord's indicator lapses after ~10s
-const TYPING_MAX_MS = 5 * 60 * 1000;
-
-function showTypingWhileAnswering(target, session) {
-  target.sendTyping().catch(() => {});
-  const startedAt = Date.now();
-  const timer = setInterval(() => {
-    if (!session.inResponse || session.closed || Date.now() - startedAt > TYPING_MAX_MS) {
-      clearInterval(timer);
-      return;
-    }
-    target.sendTyping().catch(() => {});
-  }, TYPING_TICK_MS);
-  // Never hold the process open for a cosmetic indicator.
-  timer.unref?.();
-  return timer;
-}
-
 function register(client) {
   client.on('messageCreate', async (msg) => {
     // Logged before any filtering, as a liveness probe for the gateway itself:
@@ -237,7 +202,10 @@ function register(client) {
           log.info('text: typed turn routed into live call for a spoken reply', {
             channel: target.id,
           });
-          showTypingWhileAnswering(target, liveCall);
+          // No typing indicator started here on purpose: the session raises it
+          // on `response.created` for EVERY answer it produces, spoken or
+          // typed (see Session.showTyping). Starting a second one here would
+          // be a duplicate that only covers one of the two surfaces.
           return;
         }
         log.warn('text: could not speak typed turn, answering nothing', {
@@ -293,7 +261,4 @@ function register(client) {
   });
 }
 
-// showTypingWhileAnswering is exported for its unit test: it is a timer over a
-// session flag, with no Discord or audio dependency, so a fake channel and a
-// fake session exercise it fully.
-module.exports = { register, chunk, showTypingWhileAnswering };
+module.exports = { register, chunk };
