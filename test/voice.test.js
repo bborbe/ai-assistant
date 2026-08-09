@@ -572,3 +572,42 @@ test('a wake phrase preceded by hesitation still counts', () => {
   assert.equal(config.isAddressed("So, hey bot, what's my task"), false);
   assert.equal(config.isAddressed('Oh hey.'), false);
 });
+
+test('a turn that produces nothing does not leave the indicator stuck', () => {
+  // Observed live at 12:39: an addressed turn died with "listener gone", so no
+  // response.done arrived and `answering` stayed true — dots to the cap, and
+  // speak() refusing typed turns as busy for the same period.
+  const fake = fakeOnEventTarget({
+    channel: { sendTyping: async () => {} },
+    typingTimer: null,
+    closed: false,
+    showTyping: Session.prototype.showTyping,
+  });
+  const utter = (t) =>
+    Session.prototype.onEvent.call(
+      fake,
+      JSON.stringify({
+        type: 'conversation.item.input_audio_transcription.completed',
+        transcript: t,
+      }),
+    );
+
+  utter('hey bot, check my tasks');
+  assert.equal(fake.answering, true);
+
+  // The turn dies silently — no response.done. The NEXT utterance is what ends
+  // the stuck state, so the bound is "until you speak again", not the cap.
+  utter('so anyway, as I was saying to you');
+  assert.equal(fake.answering, false, 'a later utterance must clear a stranded flag');
+
+  clearInterval(fake.typingTimer);
+});
+
+test('hi bot is accepted — the mishearing that blocked a real question', () => {
+  assert.equal(
+    config.isAddressed('…Ghost MK2 spaceship. Ah hi bot. Can you check for a task?'),
+    true,
+  );
+  // Still not a free-for-all: a different word after "hi" is not a wake phrase.
+  assert.equal(config.isAddressed('hi Bob, did you see this'), false);
+});

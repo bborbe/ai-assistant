@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- fix: Do not leave the typing indicator stuck when a turn produces nothing.
+  `answering` was raised for an addressed utterance and lowered on
+  `response.done`; a turn that died first — the endpoint declining, or
+  speech-to-speech hanging up mid-answer ("listener gone") — never sent one, so
+  the dots ran to the cap and `speak()` refused typed turns as `busy` for the
+  same period. The flag is now re-evaluated on every transcription, so any new
+  utterance ends a stranded state, and the last-resort cap drops from five
+  minutes to two.
+- fix: Accept `hi bot` as a wake phrase. Speech-to-text rendered a real
+  question as "Ah hi bot. Can you check for a task?" and the gate correctly
+  declined it — which is exactly the mishearing the variant list exists to
+  absorb. Added because it was OBSERVED, not guessed: variants are deliberate
+  entries, and every one is a false-trigger risk taken on purpose.
+
 ## v0.7.0
 
 - feat: Wait to be addressed. In a call the assistant hears every word an

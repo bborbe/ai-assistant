@@ -62,7 +62,7 @@ voice:
   # including ones addressed to other people in the room. The extra entries are
   # speech-to-text mishearings of the first — add what your transcripts show.
   # Empty string disables the gate. Typed turns are never gated.
-  wake_phrases: hey bot,hey bought,hey but
+  wake_phrases: hey bot,hey bought,hey but,hi bot
   spoken_max: 2 # sentences spoken before "there's more if you want it"; 0 = uncapped
   hold_after: 0.5 # silence before a holding line
   hold_max: 8.0
