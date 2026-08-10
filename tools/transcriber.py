@@ -51,12 +51,37 @@ KEEP_AUDIO = os.environ.get("TRANSCRIBER_KEEP_AUDIO") == "1"
 #
 # `phys_footprint` is the only metric that shows this: `ps` RSS reads ~20x low
 # because it does not count MPS/MLX unified-memory allocations.
-CACHE_LIMIT_MB = int(os.environ.get("TRANSCRIBER_CACHE_LIMIT_MB", "512"))
+def _int_env(name: str, default: int) -> int:
+    """Never let a mistyped env var kill the process at import.
+
+    A bare `int(os.environ[...])` raises before `main()` runs, so the launcher
+    sees an immediate exit with nothing useful in the log — the same silent
+    outage this file's cache handling exists to prevent, arriving via config.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"!! {name}={raw!r} is not an integer — using {default}", flush=True)
+        return default
+
+
+CACHE_LIMIT_MB = _int_env("TRANSCRIBER_CACHE_LIMIT_MB", 512)
 
 
 def _mx_fn(name: str):
-    """MLX moved these from `mx.metal.*` to top level; support both."""
-    return getattr(mx, name, None) or getattr(getattr(mx, "metal", None), name, None)
+    """MLX moved these from `mx.metal.*` to top level; support both.
+
+    Returns None when neither exists. Callers treat that as a no-op, so it is
+    logged: an MLX build without these entry points would otherwise disable the
+    cache handling completely and look identical to it working.
+    """
+    fn = getattr(mx, name, None) or getattr(getattr(mx, "metal", None), name, None)
+    if fn is None:
+        print(f"!! mlx has no {name}() — cache handling disabled", flush=True)
+    return fn
 
 
 def _clear_mlx_cache() -> None:
