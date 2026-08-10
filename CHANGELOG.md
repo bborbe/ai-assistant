@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.12.0
 
 - feat: Derive the log directory and launcher path from `LAUNCHD_LABEL`, so a second
   identity installs beside the first instead of on top of it:
