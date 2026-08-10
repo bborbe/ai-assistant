@@ -92,9 +92,19 @@ async function bindVoiceKey(sessionKey) {
         'X-Session-Key': sessionKey,
       },
     });
-    return res.ok;
-  } catch {
-    return false;
+    if (res.ok) return { ok: true };
+    // 404 means the backend has no such route — a stateless endpoint like
+    // MiniMax, which keys nothing and cannot mis-route. Not a failure to warn
+    // about, and telling it apart matters: the bot may not depend on which
+    // backend sits behind OPENAI_BASE_URL, so an unsupported route must degrade
+    // to the old single-conversation behaviour rather than break voice.
+    if (res.status === 404) return { ok: false, unsupported: true };
+    return { ok: false, error: `endpoint ${res.status}` };
+  } catch (e) {
+    // Transient and retryable — the endpoint is unreachable right now. Returned
+    // rather than swallowed: silence here means spoken turns land in whatever
+    // conversation was bound last, which may be another server's.
+    return { ok: false, error: e.message, retryable: true };
   }
 }
 

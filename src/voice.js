@@ -788,8 +788,19 @@ async function join(channel) {
   // just ended also fails in the safe direction — a straggling turn lands in the
   // conversation it was actually spoken into.
   const voiceKey = llm.voiceKeyFor(channel.guild.id);
-  if (!(await llm.bindVoiceKey(voiceKey))) {
-    log.warn('voice: could not bind session key — spoken turns may land in another conversation', {
+  let bind = await llm.bindVoiceKey(voiceKey);
+  // One retry, because the failure that matters here is a momentarily
+  // unreachable endpoint between join and the first utterance — and the cost of
+  // losing that race is spoken turns landing in another server's conversation.
+  if (bind.retryable) bind = await llm.bindVoiceKey(voiceKey);
+
+  if (bind.error) {
+    log.warn('voice: session key not bound — spoken turns may reach another conversation', {
+      key: voiceKey,
+      error: bind.error,
+    });
+  } else if (bind.unsupported) {
+    log.info('voice: endpoint has no /voice/bind — one shared conversation for all voice', {
       key: voiceKey,
     });
   }
@@ -802,6 +813,12 @@ async function join(channel) {
     channel.id,
     channel,
   );
+  // Carried on the session so `status` can report it: a call whose key never
+  // bound still works, it just answers into the wrong conversation, and that is
+  // invisible from inside Discord.
+  session.voiceKey = voiceKey;
+  session.voiceKeyBound = !bind.error;
+
   // Resolve display names once so the transcript reads with names, not ids.
   for (const [id, member] of channel.members) {
     session.names.set(id, member.displayName ?? member.user.username);

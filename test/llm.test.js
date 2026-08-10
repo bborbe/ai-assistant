@@ -90,3 +90,33 @@ test('two transcript lines written in the same millisecond both survive', () => 
   // The transcriber only picks up names matching this shape.
   for (const f of files) assert.match(f, /^\d+-.+-\d+\.txt$/);
 });
+
+test('bindVoiceKey distinguishes unsupported from broken', async () => {
+  // The bot may not depend on which backend sits behind OPENAI_BASE_URL, so a
+  // stateless endpoint with no /voice/bind must degrade to one shared voice
+  // conversation — NOT warn, and never block the join. A real error has to stay
+  // distinguishable from that, because it means spoken turns are reaching a
+  // conversation the speaker did not choose.
+  const { bindVoiceKey } = require('../src/llm');
+  const realFetch = global.fetch;
+
+  try {
+    global.fetch = async () => ({ ok: false, status: 404 });
+    assert.deepEqual(await bindVoiceKey('voice:G1'), { ok: false, unsupported: true });
+
+    global.fetch = async () => ({ ok: false, status: 500 });
+    assert.deepEqual(await bindVoiceKey('voice:G1'), { ok: false, error: 'endpoint 500' });
+
+    global.fetch = async () => {
+      throw new Error('connect ECONNREFUSED');
+    };
+    const down = await bindVoiceKey('voice:G1');
+    assert.equal(down.retryable, true, 'an unreachable endpoint must be retried, not accepted');
+    assert.match(down.error, /ECONNREFUSED/, 'and the cause must not be swallowed');
+
+    global.fetch = async () => ({ ok: true });
+    assert.deepEqual(await bindVoiceKey('voice:G1'), { ok: true });
+  } finally {
+    global.fetch = realFetch;
+  }
+});

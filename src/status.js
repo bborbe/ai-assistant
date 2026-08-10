@@ -129,7 +129,10 @@ async function report(client, hereKey) {
   // process would not appear here, which is itself worth knowing.
   const sessions = [...voice.sessions.entries()].map(([guildId, s]) => {
     const g = client.guilds.cache.get(guildId);
-    return `${g?.name ?? guildId}${s.transcript ? ' (transcribing)' : ''}`;
+    // An unbound key is the one failure a live call cannot show you: it answers
+    // normally, into another server's conversation.
+    const unbound = s.voiceKeyBound === false ? ' ⚠️ session key NOT bound' : '';
+    return `${g?.name ?? guildId}${s.transcript ? ' (transcribing)' : ''}${unbound}`;
   });
 
   let transcriptOk = false;
