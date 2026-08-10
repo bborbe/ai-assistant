@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.13.1
 
 - fix: the LaunchAgent `Label` now derives from `LAUNCHD_LABEL` instead of being hardcoded
   to `com.github.bborbe.discord-assistant-<component>`. `v0.12.0` moved the log directory
