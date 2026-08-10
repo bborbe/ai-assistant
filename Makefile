@@ -72,7 +72,22 @@ clean-local:
 
 LAUNCHD_COMPONENTS = shim s2s transcriber bot
 LAUNCHD_DIR        = $(HOME)/Library/LaunchAgents
+# Everything instance-specific derives from LAUNCHD_LABEL, so a second identity
+# installs BESIDE the first rather than on top of it:
+#
+#   make launchd-install LAUNCHD_LABEL=com.github.bborbe.team-assistant
+#
+# The label was already overridable; the log directory and the launcher path were
+# not. The launcher is the dangerous one — it is re-copied on every install, so a
+# second checkout silently replaced the binary the first instance was running.
+# Harmless while both sit on the same commit, a silent downgrade of a live
+# service the moment they do not, and nothing logs it.
+#
+# LAUNCHD_INSTANCE is the label's last dotted segment, so every default below is
+# byte-identical to what a single-instance install produced before.
 LAUNCHD_LABEL      = com.github.bborbe.discord-assistant
+LAUNCHD_INSTANCE   = $(lastword $(subst ., ,$(LAUNCHD_LABEL)))
+LAUNCHD_LOGDIR     = $(HOME)/Library/Logs/$(LAUNCHD_INSTANCE)
 # A plist inherits no PATH. Explicit, absolute, and covering every binary the
 # launcher reaches: uv + claude (~/.local/bin), teamvault-cli + node (homebrew),
 # python3 (pyenv shims).
@@ -83,12 +98,12 @@ LAUNCHD_PATH       = $(HOME)/.local/bin:/opt/homebrew/bin:$(HOME)/.pyenv/shims:/
 # semantic-search-http for the same reason. The repo copy stays the source of
 # truth; this is a deploy artifact and launchd-install always re-copies it, so
 # it cannot drift.
-LAUNCHD_LAUNCHER   = $(HOME)/.local/bin/discord-assistant-launchd
+LAUNCHD_LAUNCHER   = $(HOME)/.local/bin/$(LAUNCHD_INSTANCE)-launchd
 
 .PHONY: launchd-install
 # Deploy the launcher outside the repo, generate the four plists, load them
 launchd-install: require-config
-	@mkdir -p $(LAUNCHD_DIR) $(HOME)/Library/Logs/discord-assistant $(dir $(LAUNCHD_LAUNCHER))
+	@mkdir -p $(LAUNCHD_DIR) $(LAUNCHD_LOGDIR) $(dir $(LAUNCHD_LAUNCHER))
 	@cp scripts/launchd-run.sh $(LAUNCHD_LAUNCHER)
 	@chmod +x $(LAUNCHD_LAUNCHER)
 	@echo "  launcher -> $(LAUNCHD_LAUNCHER)"
@@ -97,6 +112,7 @@ launchd-install: require-config
 	      -e 's|__LAUNCHER__|$(LAUNCHD_LAUNCHER)|g' \
 	      -e 's|__REPO__|$(CURDIR)|g' \
 	      -e 's|__HOME__|$(HOME)|g' \
+	      -e 's|__LOGDIR__|$(LAUNCHD_LOGDIR)|g' \
 	      -e 's|__PATH__|$(LAUNCHD_PATH)|g' \
 	      deploy/launchd/discord-assistant.plist.template \
 	      > $(LAUNCHD_DIR)/$(LAUNCHD_LABEL)-$$c.plist; \
