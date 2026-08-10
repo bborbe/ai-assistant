@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- fix: Release MLX's buffer cache per segment in `tools/transcriber.py`, and cap it
+  (`TRANSCRIBER_CACHE_LIMIT_MB`, default 512). MLX keeps freed Metal buffers in a
+  reusable pool rather than returning them to the OS, and reclamation otherwise happens
+  only when the process goes idle. That is harmless at conversational pace and dangerous
+  under sustained load: on 2026-08-10 the laptop reached 65.8 GB of 66.5 GB swap with a
+  load average of 28. Root cause was **not** a leak — measured across two bursts, the
+  footprint returns to within 23 MB of its cold baseline — but the `v0.9.x` wake-phrase
+  regression pushed every utterance from five speakers through the full pipeline for two
+  and a half hours, so it never went idle and ~2.4 GB of per-turn transient allocation
+  stacked instead of being reclaimed. Clearing per turn bounds the peak to one turn
+  rather than to sustained load. Upstream already does exactly this after every local-LLM
+  generation; the STT path never does and TTS only does at shutdown.
+- feat: Log MLX active/cache memory per processed batch in the transcriber. Nothing in
+  the stack reported its own footprint, which is why unbounded growth surfaced as the
+  machine falling over rather than as a log line.
+
 ## v0.10.0
 
 - feat: Key voice conversations per guild instead of globally. `speech-to-speech` owns

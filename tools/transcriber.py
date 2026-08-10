@@ -41,6 +41,68 @@ POLL_SECONDS = float(os.environ.get("TRANSCRIBER_POLL", "2"))
 STT_RATE = 16000
 KEEP_AUDIO = os.environ.get("TRANSCRIBER_KEEP_AUDIO") == "1"
 
+# MLX keeps freed Metal buffers in a cache instead of returning them to the OS.
+# Every utterance is a different length, so each allocation is a new size class
+# the cache cannot reuse — it accrues one bucket per distinct shape and grows
+# without bound. Measured 2026-08-10: this process sat at 9.3 GB while IDLE for a
+# model that is ~1.2 GB, the rest being cache retained from a meeting transcribed
+# hours earlier. The live pipeline, running both STT and TTS per turn, grew about
+# 18 GB/hour and took the laptop into 66 GB of swap.
+#
+# `phys_footprint` is the only metric that shows this: `ps` RSS reads ~20x low
+# because it does not count MPS/MLX unified-memory allocations.
+def _int_env(name: str, default: int) -> int:
+    """Never let a mistyped env var kill the process at import.
+
+    A bare `int(os.environ[...])` raises before `main()` runs, so the launcher
+    sees an immediate exit with nothing useful in the log — the same silent
+    outage this file's cache handling exists to prevent, arriving via config.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"!! {name}={raw!r} is not an integer — using {default}", flush=True)
+        return default
+
+
+CACHE_LIMIT_MB = _int_env("TRANSCRIBER_CACHE_LIMIT_MB", 512)
+
+
+def _mx_fn(name: str):
+    """MLX moved these from `mx.metal.*` to top level; support both.
+
+    Returns None when neither exists. Callers treat that as a no-op, so it is
+    logged: an MLX build without these entry points would otherwise disable the
+    cache handling completely and look identical to it working.
+    """
+    fn = getattr(mx, name, None) or getattr(getattr(mx, "metal", None), name, None)
+    if fn is None:
+        print(f"!! mlx has no {name}() — cache handling disabled", flush=True)
+    return fn
+
+
+def _clear_mlx_cache() -> None:
+    """Return cached buffers to the OS. Cheap; the next allocation re-warms."""
+    fn = _mx_fn("clear_cache")
+    if fn:
+        fn()
+
+
+def _cap_mlx_cache() -> None:
+    """Hard ceiling, belt to `clear_cache`'s braces.
+
+    Worth having independently: it bounds the growth even on a path that forgets
+    to clear, which is exactly how this bug happened upstream — the local-LLM
+    path clears after every generation, the STT path never does.
+    """
+    fn = _mx_fn("set_cache_limit")
+    if fn:
+        fn(CACHE_LIMIT_MB * 1024 * 1024)
+        print(f"mlx cache limit {CACHE_LIMIT_MB} MB", flush=True)
+
 # .wav = captured audio needing STT. .txt = already-known text (the bot's own
 # replies, handed over verbatim by speech-to-speech). Both carry the same
 # epoch-ms prefix, so a filename sort interleaves them chronologically.
@@ -79,8 +141,13 @@ def transcribe(path: Path) -> str:
         mono = soxr.resample(mono, rate, STT_RATE, quality="HQ")
     if float(np.abs(mono).max() or 0) < 0.005:
         return ""  # silence or a click that slipped the length filter
-    result = model().generate(mx.array(mono))
-    return (getattr(result, "text", "") or "").strip()
+    try:
+        result = model().generate(mx.array(mono))
+        return (getattr(result, "text", "") or "").strip()
+    finally:
+        # In `finally` on purpose: a segment that raises still allocated, and the
+        # error path is exactly where a leak would go unnoticed.
+        _clear_mlx_cache()
 
 
 def process(session_dir: Path) -> int:
@@ -130,14 +197,30 @@ def process(session_dir: Path) -> int:
     return done
 
 
+def _memory_line() -> str:
+    """What MLX is holding, in the log, per batch of work.
+
+    Nothing in this stack reported its own memory, so unbounded growth was only
+    discovered when the machine ran out. `active` is live tensors, `cache` is the
+    reusable pool — it is the second number that used to climb forever.
+    """
+    parts = []
+    for label, name in (("active", "get_active_memory"), ("cache", "get_cache_memory")):
+        fn = _mx_fn(name)
+        if fn:
+            parts.append(f"{label} {fn() / 1024 / 1024:.0f} MB")
+    return "  [mlx " + ", ".join(parts) + "]" if parts else ""
+
+
 def main() -> int:
     ROOT.mkdir(parents=True, exist_ok=True)
+    _cap_mlx_cache()
     print(f"transcriber watching {ROOT}", flush=True)
     while True:
         try:
             total = sum(process(d) for d in sorted(ROOT.iterdir()) if d.is_dir())
             if total:
-                print(f"  ({total} segment(s))", flush=True)
+                print(f"  ({total} segment(s)){_memory_line()}", flush=True)
         except KeyboardInterrupt:
             return 0
         except Exception as e:
