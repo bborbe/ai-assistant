@@ -12,6 +12,12 @@
 # hammers the Discord API with a credential that will never work. Supersedes
 # scripts/supervise.sh, whose exit-2 rule this reproduces natively.
 #
+# Exit 0 is reachable ONLY via die_config. The components are not exec'd but run
+# under run_server(), which turns any exit of theirs into 75 — because a
+# long-running server that returns has failed, whatever status it reports. That
+# is not theoretical: `uv run` exits 0 when signalled directly, so a killed
+# speech-to-speech read as a successful job and launchd correctly left it down.
+#
 # Secrets are resolved HERE, at launch, never stored in the plist —
 # EnvironmentVariables is a literal dict and would put them on disk in cleartext.
 #
@@ -55,6 +61,50 @@ die_transient() {
   echo "launchd-run[${component:-?}]: $*" >&2
   echo "launchd-run[${component:-?}]: transient failure, letting launchd retry" >&2
   exit 75 # EX_TEMPFAIL; being non-zero is what actually matters
+}
+
+# Run the component and treat ANY exit from it as abnormal.
+#
+# These are long-running servers: reaching the end of one is never a success,
+# whatever status it reports. That distinction was previously left to the exit
+# code, and `uv run` gets it wrong in the one case that matters — measured
+# 2026-08-10:
+#
+#   kill the python CHILD of `uv run`  -> uv exits 143 (signal propagated)
+#   kill `uv run` ITSELF               -> uv exits 0   (clean shutdown)
+#
+# The plist sets KeepAlive/SuccessfulExit=false, so exit 0 means "do not
+# restart" — deliberately, since die_config uses it to stop a job whose config
+# can never work. A killed `uv` therefore looked like a job that had finished
+# its work, and speech-to-speech stayed down until someone noticed voice was
+# gone. That is the same silent outage the TeamVault fix above exists to
+# prevent, arriving from the opposite direction: there a transient failure was
+# treated as fatal, here a fatal one was treated as success.
+#
+# So the program is no longer exec'd. This wrapper stays alive as the launchd
+# job, and translates "the server came back" into exit 75 regardless of what it
+# reported. exit 0 is now reachable ONLY through die_config, which is what makes
+# the "bad config stops the job" contract mean something.
+#
+# The trap is what makes not-exec'ing safe: launchd stops a job by signalling
+# the process it spawned, which is now this shell, so the signal has to be
+# forwarded or the real server would be orphaned on unload.
+run_server() {
+  "$@" &
+  child=$!
+  trap 'kill -TERM "$child" 2>/dev/null' TERM INT
+  # `wait` returns early when a trapped signal arrives; loop until the child is
+  # genuinely gone, or a forwarded SIGTERM would look like an exit.
+  wait "$child"
+  rc=$?
+  while kill -0 "$child" 2>/dev/null; do
+    wait "$child"
+    rc=$?
+  done
+  if [ "$rc" -gt 128 ]; then
+    die_transient "$component exited on signal $((rc - 128))"
+  fi
+  die_transient "$component exited with status $rc — a server exiting is never success"
 }
 
 # Resolve a TeamVault secret into RESOLVED_SECRET, distinguishing "this key will
@@ -125,7 +175,7 @@ shim)
     SHIM_FRONT_API_KEY="$RESOLVED_SECRET"
     export SHIM_FRONT_API_KEY
   fi
-  exec python3 -u shim/claude_openai_shim.py
+  run_server python3 -u shim/claude_openai_shim.py
   ;;
 
 s2s)
@@ -146,7 +196,7 @@ s2s)
   # deliberately exports rather than passes as a flag.
   [ -n "${OPENAI_BASE_URL:-}" ] || die_config "OPENAI_BASE_URL unset in local.env — voice would silently fall back to MiniMax"
   [ -n "${OPENAI_MODEL:-}" ] || die_config "OPENAI_MODEL unset in local.env — voice would silently fall back to MiniMax"
-  exec "$launcher" \
+  run_server "$launcher" \
     --responses_api_base_url "$OPENAI_BASE_URL" \
     --responses_api_api_key "${OPENAI_API_KEY:-not-needed}" \
     --model_name "$OPENAI_MODEL"
@@ -154,7 +204,7 @@ s2s)
 
 transcriber)
   command -v uv >/dev/null 2>&1 || die_config "uv not on PATH"
-  exec uv run tools/transcriber.py
+  run_server uv run tools/transcriber.py
   ;;
 
 bot)
@@ -168,6 +218,6 @@ bot)
   export DISCORD_TOKEN
   # No supervise.sh wrapper: launchd is the supervisor now, and nesting one
   # inside the other would hide the exit code the KeepAlive rule depends on.
-  exec node src/index.js
+  run_server node src/index.js
   ;;
 esac

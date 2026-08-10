@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+- fix: Restart a component that is killed, instead of leaving it stopped. The launcher
+  `exec`ed each component, so launchd judged the job by whatever the program reported —
+  and `uv run` exits **0** when signalled directly, while propagating `143` when its
+  child is signalled. With `KeepAlive`/`SuccessfulExit: false`, a killed
+  `speech-to-speech` therefore looked like a job that had finished successfully and
+  launchd correctly declined to restart it. Voice stayed down until someone noticed it
+  was gone — the same silent outage the TeamVault classification fix in `v0.8.0` exists
+  to prevent, arriving from the opposite direction: there a transient failure was treated
+  as fatal, here a fatal one was treated as success.
+
+  Components now run under `run_server()` rather than `exec`, which translates **any**
+  exit of theirs into `75`, because a long-running server that returns has failed
+  whatever status it reports. `exit 0` is reachable only through `die_config`, which is
+  what makes "bad config stops the job" a contract rather than a side effect of what the
+  runtime happens to report. A `TERM`/`INT` trap forwards signals to the child, since
+  launchd now signals this wrapper instead of the server and would otherwise orphan it.
+
+  Verified end to end, both directions: `kill <job pid>` → `last exit 75` → launchd
+  restarts with a new PID and the full `uv` → `python` tree; a missing repo and an
+  unknown component still exit `0` and stay stopped.
+
 ## v0.11.0
 
 - fix: Release MLX's buffer cache per segment in `tools/transcriber.py`, and cap it
