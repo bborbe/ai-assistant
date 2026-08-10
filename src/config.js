@@ -69,6 +69,21 @@ const config = {
 
   s2sUrl: process.env.S2S_URL || 'ws://127.0.0.1:8765/v1/realtime',
 
+  // Is this instance capable of voice at all?
+  //
+  // Default true, so an existing deployment behaves identically with nothing
+  // set. Set VOICE_ENABLED=0 for a text-only instance: `join`/`leave` are not
+  // registered as slash commands, no socket is opened to S2S_URL, and `status`
+  // says so plainly.
+  //
+  // The reason this exists is deployment, not preference: speech-to-speech
+  // needs a GPU and the cluster has none on any node, so text-only is the only
+  // shape that can run outside a laptop.
+  //
+  // Distinct from SKIP_VOICE in scripts/dev.sh, which only skips LAUNCHING
+  // speech-to-speech locally and says nothing about what the bot advertises.
+  voiceEnabled: flag(process.env.VOICE_ENABLED, true),
+
   // Sender-level allowlist, applied to BOTH surfaces. Empty = nobody, on
   // purpose: this bot can reach a Claude Code session with vault and repo
   // access, so failing closed is the only safe default.

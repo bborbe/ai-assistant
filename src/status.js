@@ -120,9 +120,12 @@ async function sessionLines(hereKey) {
 async function report(client, hereKey) {
   const [s2sHost, s2sPort] = hostPort(config.s2sUrl);
 
+  // With voice disabled, speech-to-speech is not probed at all — a red cross
+  // against a service this instance was never meant to reach reads as a fault
+  // and sends the reader looking for a broken thing that does not exist.
   const [shimUp, s2sUp] = await Promise.all([
     httpOk(`${config.baseUrl}/models`),
-    s2sHost ? tcpOk(s2sHost, s2sPort) : Promise.resolve(false),
+    config.voiceEnabled && s2sHost ? tcpOk(s2sHost, s2sPort) : Promise.resolve(false),
   ]);
 
   // Voice sessions this process owns. A ghost connection left by a crashed
@@ -150,9 +153,13 @@ async function report(client, hereKey) {
     `${tick(ping >= 0)} gateway — ${ping} ms, ${client.guilds.cache.size} guild(s)`,
     `${tick(shimUp)} endpoint — ${config.baseUrl} (${config.model})`,
     ...claude,
-    `${tick(s2sUp)} speech-to-speech — ${config.s2sUrl}`,
+    config.voiceEnabled
+      ? `${tick(s2sUp)} speech-to-speech — ${config.s2sUrl}`
+      : '🚫 voice — disabled on this instance (VOICE_ENABLED=false), text only',
     `${tick(transcriptOk)} transcripts — ${transcriptOk ? 'writable' : 'NOT writable'}`,
-    sessions.length ? `🎙️ in voice — ${sessions.join(', ')}` : '🔇 not in a voice channel',
+    ...(config.voiceEnabled
+      ? [sessions.length ? `🎙️ in voice — ${sessions.join(', ')}` : '🔇 not in a voice channel']
+      : []),
     `👤 allowlist — ${config.allowedUserIds.length} user(s)`,
   ].join('\n');
 }

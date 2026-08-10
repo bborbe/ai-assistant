@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- feat: `VOICE_ENABLED=0` runs the bot text-only — `join`/`leave` are not registered as
+  slash commands, no socket is opened to `S2S_URL`, and `status` says voice is disabled
+  instead of reporting a red cross against a service the instance was never meant to
+  reach. Defaults to true, so an existing deployment behaves identically with nothing
+  set. This is what makes a cluster deployment possible at all: speech-to-speech needs a
+  GPU and there is none on any node, so text-only is the only shape that can run off the
+  laptop. Unregistering rather than stubbing is deliberate — a command in the guild's
+  list is a promise the instance can do the thing. The typed `join`/`leave` still answer
+  with a reason, since someone who tries anyway deserves better than silence.
+  Distinct from `SKIP_VOICE` in `scripts/dev.sh`, which only skips launching
+  speech-to-speech locally and says nothing about what the bot advertises.
+
 ## v0.12.0
 
 - feat: Derive the log directory and launcher path from `LAUNCHD_LABEL`, so a second

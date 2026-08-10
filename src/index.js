@@ -1,19 +1,12 @@
 #!/usr/bin/env node
 'use strict';
 
-const {
-  Client,
-  GatewayIntentBits,
-  Partials,
-  REST,
-  Routes,
-  SlashCommandBuilder,
-  MessageFlags,
-} = require('discord.js');
+const { Client, GatewayIntentBits, Partials, REST, Routes, MessageFlags } = require('discord.js');
 const config = require('./config');
 const voice = require('./voice');
 const text = require('./text');
 const { sessionKeyFor } = require('./llm');
+const { buildCommands, VOICE_DISABLED_REPLY } = require('./slash-commands');
 const log = require('./log');
 const { startHealthServer } = require('./health');
 
@@ -35,31 +28,7 @@ const health = startHealthServer({
   isReady: () => gatewayReady && !draining,
 });
 
-const commands = [
-  new SlashCommandBuilder()
-    .setName('join')
-    .setDescription('Join the voice channel you are in and start listening'),
-  new SlashCommandBuilder()
-    .setName('leave')
-    .setDescription('Stop listening and leave the voice channel'),
-  new SlashCommandBuilder()
-    .setName('status')
-    .setDescription('Health of the bot, endpoint, speech-to-speech and transcripts'),
-  // These two had working handlers below for weeks and were unreachable: a
-  // handler is not a command until it is in this array.
-  new SlashCommandBuilder()
-    .setName('new')
-    .setDescription('Start a fresh Claude Code session for this conversation'),
-  new SlashCommandBuilder()
-    .setName('sessions')
-    .setDescription('List Claude Code sessions, and transcripts you can switch to'),
-  new SlashCommandBuilder()
-    .setName('switch')
-    .setDescription('Point this conversation at an existing Claude Code session')
-    .addStringOption((o) =>
-      o.setName('id').setDescription('Session id from /sessions').setRequired(true),
-    ),
-].map((c) => c.toJSON());
+const commands = buildCommands({ voiceEnabled: config.voiceEnabled });
 
 const client = new Client({
   intents: [
@@ -78,7 +47,10 @@ client.once('clientReady', async () => {
     bot: client.user.tag,
     endpoint: config.baseUrl,
     model: config.model,
-    s2s: config.s2sUrl,
+    voice: config.voiceEnabled ? 'enabled' : 'disabled',
+    // Named as the reason rather than the value when off: `s2s: null` reads as
+    // a missing setting, which is the wrong thing to go looking for.
+    s2s: config.voiceEnabled ? config.s2sUrl : 'not used (VOICE_ENABLED=false)',
     allowed: config.allowedUserIds.length,
     version: config.build.version,
     chatBridge: Boolean(config.chatBridgeToken),
@@ -148,6 +120,13 @@ client.on('interactionCreate', async (i) => {
     await i.deferReply({ flags: MessageFlags.Ephemeral });
     const { report } = require('./status');
     return i.editReply(await report(client, sessionKeyFor(i.channel, i.user.id)));
+  }
+
+  // Belt and braces: with voice disabled these are not registered, but Discord
+  // keeps a guild's previous command list until the new one is PUT, so an
+  // instance restarted into text-only can still receive them for a moment.
+  if ((i.commandName === 'join' || i.commandName === 'leave') && !config.voiceEnabled) {
+    return i.reply({ content: VOICE_DISABLED_REPLY, flags: MessageFlags.Ephemeral });
   }
 
   if (i.commandName === 'join') {
