@@ -33,6 +33,7 @@ Fixing either is welcome in any PR that already touches the area.
 - **Transcription is separate from the command path.** `ALLOWED_USER_IDS` controls who can _drive_ the bot; `TRANSCRIBE` controls who gets _written down_ — which is everyone in the channel. Recording other people is a consent matter; `ANNOUNCE_TRANSCRIPTION` exists so it is never silent. Do not couple these two settings.
 - **`TRANSCRIPT_DIR` must be readable by the shim.** The shim runs with its cwd in the vault and no `--add-dir`, so a path outside it cannot be read mid-call and "what did we just discuss?" fails. Defaults to a repo-local directory so a fresh clone never writes into a vault it was not told about.
 - **The LLM endpoint is swappable by design** (`src/config.js`). Nothing in the bot may depend on which backend is behind `OPENAI_BASE_URL`.
+- **`VOICE_ENABLED=0` is the deployable mode, not a reduced one.** speech-to-speech needs a GPU and no cluster node has one, so a text-only instance is the only shape that runs outside a laptop. It omits `join`/`leave` from the guild's command list rather than registering them to refuse — a command in that list is a promise the instance can do the thing. Not to be confused with `SKIP_VOICE` in `scripts/dev.sh`, which only skips launching speech-to-speech locally.
 
 ## Non-Code Surfaces
 

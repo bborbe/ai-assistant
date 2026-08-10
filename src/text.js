@@ -5,6 +5,7 @@ const log = require('./log');
 const { chat, sessionKeyFor } = require('./llm');
 const voice = require('./voice');
 const { chunk, DISCORD_LIMIT } = require('./discord-chunk');
+const { VOICE_DISABLED_REPLY } = require('./slash-commands');
 
 /** Rebuild conversation history from the channel itself — no local state to lose. */
 async function history(channel, botId) {
@@ -33,6 +34,15 @@ async function voiceChannelOf(client, userId) {
 
 /** `join` / `leave` typed as a message — same effect as the slash command. */
 async function handleVoiceCommand(msg, client, cmd) {
+  // Refused with a reason rather than ignored. The slash commands are not
+  // registered on a text-only instance, but the typed forms cost nothing to
+  // answer, and someone who types `join` because it worked elsewhere deserves
+  // to be told why it did not, rather than watching the bot say nothing.
+  if (!config.voiceEnabled) {
+    log.info('voice command refused, voice disabled', { cmd, user: msg.author.tag });
+    return msg.reply(VOICE_DISABLED_REPLY);
+  }
+
   const voice = require('./voice');
   if (cmd === 'leave') {
     const guildId = msg.guild?.id ?? [...client.guilds.cache.keys()][0];
