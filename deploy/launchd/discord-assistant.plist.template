@@ -70,8 +70,8 @@
     </dict>
 
     <key>StandardOutPath</key>
-    <string>__HOME__/Library/Logs/discord-assistant/__COMPONENT__.log</string>
+    <string>__LOGDIR__/__COMPONENT__.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/Library/Logs/discord-assistant/__COMPONENT__.log</string>
+    <string>__LOGDIR__/__COMPONENT__.log</string>
 </dict>
 </plist>

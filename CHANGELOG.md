@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- feat: Derive the log directory and launcher path from `LAUNCHD_LABEL`, so a second
+  identity installs beside the first instead of on top of it:
+  `make launchd-install LAUNCHD_LABEL=com.github.bborbe.team-assistant`. The label was
+  already overridable; the log directory and the launcher path were not. The launcher was
+  the dangerous one — `launchd-install` re-copies it on every run, so installing from a
+  second checkout silently replaced the binary the first instance was running: harmless
+  while both sat on the same commit, a silent downgrade of a live service the moment they
+  did not, with nothing logging it. Logs would also have interleaved into one set of four
+  files. Defaults are byte-identical — the generated plist was diffed against the
+  installed one and matches exactly, so a single-instance setup needs no migration.
+
 ## v0.11.1
 
 - fix: Restart a component that is killed, instead of leaving it stopped. The launcher
