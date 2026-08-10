@@ -109,6 +109,7 @@ launchd-install: require-config
 	@echo "  launcher -> $(LAUNCHD_LAUNCHER)"
 	@for c in $(LAUNCHD_COMPONENTS); do \
 	  sed -e 's|__COMPONENT__|'"$$c"'|g' \
+	      -e 's|__LABEL__|$(LAUNCHD_LABEL)|g' \
 	      -e 's|__LAUNCHER__|$(LAUNCHD_LAUNCHER)|g' \
 	      -e 's|__REPO__|$(CURDIR)|g' \
 	      -e 's|__HOME__|$(HOME)|g' \

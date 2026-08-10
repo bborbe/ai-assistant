@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- fix: the LaunchAgent `Label` now derives from `LAUNCHD_LABEL` instead of being hardcoded
+  to `com.github.bborbe.discord-assistant-<component>`. `v0.12.0` moved the log directory
+  and launcher path onto the variable but left the label inside the plist a literal, so
+  `make launchd-install LAUNCHD_LABEL=…` wrote a correctly-named _file_ whose Label still
+  claimed the first instance's service. `launchctl bootstrap` then failed with
+  `Input/output error` — and that error was the lucky case: with the first instance
+  stopped it would have loaded, binding the original label to the second checkout, which
+  is precisely the silent takeover `v0.12.0` set out to prevent. Rendering for the default
+  label is unchanged; verified by diffing against an installed plist.
+- test: cover the plist template — Label follows the variable, two identities never
+  collide, and no `__PLACEHOLDER__` survives rendering. The template had no coverage at
+  all, and it fails only on a machine at install time, never in CI.
+
 ## v0.13.0
 
 - feat: `VOICE_ENABLED=0` runs the bot text-only — `join`/`leave` are not registered as

@@ -12,7 +12,13 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.github.bborbe.discord-assistant-__COMPONENT__</string>
+    <!-- From LAUNCHD_LABEL, not hardcoded. A literal here made the label the one
+         per-instance value that did NOT follow the variable: a second identity got
+         its own plist FILENAME while the Label inside still claimed the first
+         instance's. launchctl then refused the load as a duplicate — or, with the
+         first instance stopped, accepted it and pointed that label at the second
+         checkout, which is the silent-hijack this whole scheme exists to prevent. -->
+    <string>__LABEL__-__COMPONENT__</string>
 
     <!-- The launcher is referenced at its INSTALLED path, outside the repo.
          launchd cannot execute anything under ~/Documents — TCC denies it and
