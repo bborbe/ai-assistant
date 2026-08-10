@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.13.0
 
 - feat: `VOICE_ENABLED=0` runs the bot text-only — `join`/`leave` are not registered as
   slash commands, no socket is opened to `S2S_URL`, and `status` says voice is disabled
