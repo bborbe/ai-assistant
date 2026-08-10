@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.11.0
 
 - fix: Release MLX's buffer cache per segment in `tools/transcriber.py`, and cap it
   (`TRANSCRIBER_CACHE_LIMIT_MB`, default 512). MLX keeps freed Metal buffers in a
