@@ -779,6 +779,21 @@ async function join(channel) {
   });
   conn.on('stateChange', (o, n) => log.info(`  voice: ${o.status} -> ${n.status}`));
   await entersState(conn, VoiceConnectionStatus.Ready, 30000);
+
+  // Claim voice for THIS guild's conversation before the socket exists, so the
+  // first utterance cannot land in whichever server was bound last. Binding is
+  // deliberately not undone on leave: nothing generates spoken turns while no
+  // call is live, so the only effect of reverting would be a race against the
+  // `leave()` that `join()` itself performs. Leaving it pointed at the call that
+  // just ended also fails in the safe direction — a straggling turn lands in the
+  // conversation it was actually spoken into.
+  const voiceKey = llm.voiceKeyFor(channel.guild.id);
+  if (!(await llm.bindVoiceKey(voiceKey))) {
+    log.warn('voice: could not bind session key — spoken turns may land in another conversation', {
+      key: voiceKey,
+    });
+  }
+
   const session = new Session(
     conn,
     channel.guild.id,

@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased
+
+- feat: Key voice conversations per guild instead of globally. `speech-to-speech` owns
+  the HTTP call to the endpoint and cannot set `X-Session-Key`, so every spoken turn —
+  from any server — fell through to one `default` conversation: joining a call in a
+  second Discord server resumed the first server's conversation, which is a boundary
+  between contexts rather than a papercut. The bot now names the conversation out of
+  band on join (`POST /v1/voice/bind`, the same shape as the existing `/v1/turns/typed`
+  hint) and the endpoint routes headerless requests to that key. A voice channel's text
+  chat follows the same key, so a call stays ONE conversation whether a turn was spoken
+  or typed. Two voice channels in the same server still share a conversation — s2s
+  cannot say which channel a turn came from, and that part is unchanged.
+- fix: Keep the voice wake phrase working under per-guild keys. The shim decided a turn
+  was spoken by testing `":" not in key` — which silently meant "the key is `default`".
+  Per-guild keys gave every spoken turn a colon, so all of them classified as text, and
+  the wake-phrase gate (`if voice and not typed_turn`) stopped running: the assistant
+  answered every sentence said in a live meeting rather than only those addressed to it.
+  Nothing errored, `/readiness` stayed 200 and precommit stayed green. The classifier is
+  now the named `is_voice_turn()` and matches the voice keyspace explicitly, so the shape
+  of a key is never load-bearing again.
+- test: Add `test/test_shim.py` — the **first tests for the shim**, which had none. `npm test`
+  is `node --test`, so ~2000 lines of Python were never executed by any check, and that is
+  where the wake-phrase regression lived. `make test` now runs both runtimes (`test-node` +
+  `test-shim`, stdlib `unittest`, no venv). Ten cases covering turn classification and voice-key
+  routing; verified to fail against the previous classifier rather than assumed to.
+- test: Fix a Node fixture that hid the same change. `a voice channel shares the spoken
+conversation` asserted the old `default` key and kept passing after the behaviour flipped,
+  because its fixture had `guild: {}` — no id to key on, so the code fell into the fallback
+  branch. An underspecified fixture is a green test asserting nothing.
+- fix: Deliberately do NOT unbind on leave. No spoken turn exists while no call is live,
+  so reverting would only race the `leave()` that `join()` itself performs, and leaving
+  the pointer where it is means a straggling turn lands in the conversation it was
+  actually spoken into.
+
 ## v0.9.0
 
 - feat: Add `tools/llm-bench`, a hand-run chat-shaped LLM benchmark for choosing the

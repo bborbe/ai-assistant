@@ -7,11 +7,33 @@ const { sessionKeyFor, DEFAULT_SESSION_KEY } = require('../src/llm');
 
 const channel = (over) => ({ isThread: () => false, isVoiceBased: () => false, ...over });
 
-test('a voice channel shares the spoken conversation', () => {
+test('a voice channel shares the spoken conversation, per guild', () => {
   // The one case with teeth: a voice channel's integrated text chat is an
   // ordinary text channel to Discord, so without this it gets its own session
   // and a link pasted mid-call never reaches the conversation being spoken.
   // It is also what lets `switch` / `new` reach voice at all.
+  //
+  // The guild id is load-bearing and this fixture used to omit it (`guild: {}`),
+  // so the assertion held while the behaviour changed underneath it: the key
+  // fell back to the default exactly because there was no id to key on.
+  const key = sessionKeyFor(
+    channel({ id: 'V1', guild: { id: 'G1' }, isVoiceBased: () => true }),
+    'U9',
+  );
+  assert.equal(key, 'voice:G1');
+});
+
+test('two servers do not share one spoken conversation', () => {
+  // The regression that motivated per-guild keys: joining a call at work
+  // resumed the personal conversation, because ALL voice landed on one key.
+  // speech-to-speech cannot send a session header, so nothing else separates
+  // them.
+  const inGuild = (id) =>
+    sessionKeyFor(channel({ id: `V-${id}`, guild: { id }, isVoiceBased: () => true }), 'U9');
+  assert.notEqual(inGuild('G1'), inGuild('G2'));
+});
+
+test('a voice channel with no resolvable guild still yields a usable key', () => {
   const key = sessionKeyFor(channel({ id: 'V1', guild: {}, isVoiceBased: () => true }), 'U9');
   assert.equal(key, DEFAULT_SESSION_KEY);
 });

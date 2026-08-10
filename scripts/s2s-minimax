@@ -57,6 +57,15 @@ S2S_MIN_SILENCE_MS="${S2S_MIN_SILENCE_MS:-400}"
 #
 # Pinning the language makes unclear audio degrade into obviously-wrong words
 # rather than plausible ones. Set empty to restore auto-detect.
+#
+# The counter-finding, 2026-08-10: a Discord call conducted entirely in German
+# came back as phonetic English — "Ja" as "Yeah", "Ach so" as "Ooh, smell",
+# whole backchannel turns invented in a language nobody spoke. The pin does not
+# make foreign speech degrade visibly; it makes it degrade into confident
+# English. Both findings hold, and they point opposite ways: pin the language
+# for a single-language user, auto-detect for a multilingual room. The default
+# stays `en` because that is the solo case this launcher was written for —
+# override in local.env for anything else.
 S2S_STT_LANGUAGE="${S2S_STT_LANGUAGE-en}"
 
 # Upstream buffers THREE sentences before handing anything to TTS, which quietly

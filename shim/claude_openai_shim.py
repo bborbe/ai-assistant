@@ -270,6 +270,80 @@ def take_typed_turn(key: str) -> bool:
         return False
 
 
+# Which session spoken turns belong to right now.
+#
+# speech-to-speech owns the HTTP call and cannot set X-Session-Key, so every
+# spoken turn used to fall through to DEFAULT_KEY — ONE conversation for all
+# voice, in every guild. Joining a call in a second server resumed the first
+# server's conversation, which is a privacy boundary, not a papercut.
+#
+# So the bot names the key out of band on join, the same shape as the typed-turn
+# hint above. The difference is lifetime: that one is consumed by a single turn,
+# this one persists until the next bind or leave, because it describes WHICH
+# CONVERSATION is live rather than something about one utterance.
+#
+# A single pointer (not a map) is sound because speech-to-speech serves exactly
+# one session at a time — "All 1 session slots are in use" — and the bot holds at
+# most one call. Two concurrent voice conversations cannot exist to disagree
+# about. If s2s ever serves more, this must become a map keyed by whatever
+# identifies the socket, and the assert below is where that will surface.
+# Every voice conversation's key starts with this. It is not cosmetic: the
+# request handler matches on it to know a turn was SPOKEN, which is what gates
+# the wake phrase. Keep the bot's `voiceKeyFor()` in step with it.
+VOICE_KEY_PREFIX = "voice:"
+
+_VOICE_KEY = DEFAULT_KEY
+_VOICE_KEY_LOCK = Lock()
+
+
+def is_voice_turn(mode: str, key: str, text: str = "") -> bool:
+    """Was this turn SPOKEN? Decides whether the wake phrase is enforced.
+
+    Extracted from the request handler after living there as an inline
+    expression, which is how it came to be keyed on the SHAPE of a session key
+    (`":" not in key`, meaning "the key is `default`"). Keying voice per guild
+    gave every spoken turn a colon, so all of them classified as text, the wake
+    gate stopped running, and the assistant answered every sentence of a live
+    meeting. Nothing errored and every health check stayed green.
+
+    Order matters:
+
+    - an explicit `X-Output-Mode` header wins in both directions — the bot sets
+      it, and it is the only signal that distinguishes a message TYPED into a
+      call's text chat (same session key as the speech) from one spoken aloud
+    - otherwise a key in the voice keyspace is spoken, since speech-to-speech
+      owns the HTTP call and can send no headers
+    - `":" not in key` remains for the legacy `default` key and any client that
+      sends neither
+    - the prompt sniff is a last resort: s2s attaches its voice system prompt
+      only when `wants_audio` is set, which it never is with TTS as a separate
+      stage
+    """
+    mode = (mode or "").lower()
+    if mode == "voice":
+        return True
+    if mode == "text":
+        return False
+    low = (text or "").lower()
+    return (key.startswith(VOICE_KEY_PREFIX)
+            or ":" not in key
+            or "spoken conversation" in low
+            or "voice rules" in low)
+
+
+def bind_voice_key(key: str) -> str:
+    """Point spoken turns at `key` until the next bind. Returns the previous."""
+    global _VOICE_KEY
+    with _VOICE_KEY_LOCK:
+        previous, _VOICE_KEY = _VOICE_KEY, key or DEFAULT_KEY
+    return previous
+
+
+def voice_key() -> str:
+    with _VOICE_KEY_LOCK:
+        return _VOICE_KEY
+
+
 ASK_CLAUDE_TOOL = {
     "type": "function",
     "function": {
@@ -1703,7 +1777,10 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
 
     def _key(self) -> str:
-        return self.headers.get("X-Session-Key") or DEFAULT_KEY
+        # A header means the bot made the call and knows its own conversation.
+        # No header means speech-to-speech, which cannot send one — so the key
+        # is whatever the bot last bound for voice, not a fixed default.
+        return self.headers.get("X-Session-Key") or voice_key()
 
     def do_GET(self):
         path = self.path.rstrip("/")
@@ -1747,6 +1824,16 @@ class Handler(BaseHTTPRequestHandler):
         # The bot calls this immediately before pushing a typed turn into its
         # s2s socket — see `_TYPED_TURN_HINTS`. Deliberately takes no body: the
         # text arrives the normal way, this only says which SURFACE asked.
+        if self.path.rstrip("/").endswith("/voice/bind"):
+            # The bot names the conversation spoken turns belong to. Sent on
+            # join only — never unbound on leave, because no spoken turn exists
+            # while no call is live, and leaving the pointer where it is means a
+            # straggling turn lands in the conversation it was spoken into.
+            key = self.headers.get("X-Session-Key") or DEFAULT_KEY
+            previous = bind_voice_key(key)
+            print(f"-> VOICE KEY [{key}] (was {previous})", flush=True)
+            return self._json(200, {"key": key, "previous": previous})
+
         if self.path.rstrip("/").endswith("/turns/typed"):
             key = self._key()
             if self.headers.get("X-Turn-Typed", "").lower() == "false":
@@ -1810,10 +1897,7 @@ class Handler(BaseHTTPRequestHandler):
         # otherwise, which is exactly the speech-to-speech case (it owns the HTTP
         # call and can set no headers).
         mode = self.headers.get("X-Output-Mode", "").lower()
-        voice = (mode == "voice" or
-                 (mode != "text" and (":" not in key
-                                      or "spoken conversation" in low
-                                      or "voice rules" in low)))
+        voice = is_voice_turn(mode, key, low)
         print(f"-> {'VOICE' if voice else 'TEXT '} [{key}] {prompt[:70]!r}", flush=True)
 
         # Wake phrase: in a call the assistant hears everything said by an

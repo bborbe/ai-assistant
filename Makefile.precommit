@@ -24,9 +24,21 @@ formatcheck:
 check: lint formatcheck audit trivy
 
 .PHONY: test
+# Both runtimes. The shim is Python and went untested until 2026-08-10, when a
+# change to session keys silently disabled the voice wake phrase — `node --test`
+# cannot see a single line of it, so precommit was green throughout.
+test: test-node test-shim
+
+.PHONY: test-node
 # Run tests with the built-in node test runner
-test:
+test-node:
 	node --test
+
+.PHONY: test-shim
+# Python tests for shim/. Stdlib unittest — the shim has no dependencies and
+# neither do its tests, so this needs no venv and no install step.
+test-shim:
+	python3 -m unittest discover -s test -p 'test_*.py' -v
 
 .PHONY: audit
 # Dependency vulnerabilities from the npm advisory database.
