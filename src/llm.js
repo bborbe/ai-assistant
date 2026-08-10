@@ -71,6 +71,43 @@ async function markTypedTurn(sessionKey, typed = true) {
   }
 }
 
+/**
+ * Tell the endpoint which conversation spoken turns belong to from now on.
+ *
+ * speech-to-speech owns the HTTP call to the endpoint and cannot set
+ * `X-Session-Key`, so the endpoint would otherwise put every spoken turn — from
+ * any server — into one conversation. This is the only way it can be told which
+ * one, and it must be sent BEFORE the first utterance of a call.
+ *
+ * Unlike `markTypedTurn`, failure here is not cosmetic: the call still works,
+ * but it lands in whichever conversation was bound last, which may be another
+ * server's. Callers log it rather than swallow it.
+ */
+async function bindVoiceKey(sessionKey) {
+  try {
+    const res = await fetch(`${config.baseUrl}/voice/bind`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        'X-Session-Key': sessionKey,
+      },
+    });
+    if (res.ok) return { ok: true };
+    // 404 means the backend has no such route — a stateless endpoint like
+    // MiniMax, which keys nothing and cannot mis-route. Not a failure to warn
+    // about, and telling it apart matters: the bot may not depend on which
+    // backend sits behind OPENAI_BASE_URL, so an unsupported route must degrade
+    // to the old single-conversation behaviour rather than break voice.
+    if (res.status === 404) return { ok: false, unsupported: true };
+    return { ok: false, error: `endpoint ${res.status}` };
+  } catch (e) {
+    // Transient and retryable — the endpoint is unreachable right now. Returned
+    // rather than swallowed: silence here means spoken turns land in whatever
+    // conversation was bound last, which may be another server's.
+    return { ok: false, error: e.message, retryable: true };
+  }
+}
+
 /** Ask the backend to forget a conversation. Backends without the route say so. */
 async function resetSession(sessionKey) {
   const res = await fetch(`${config.baseUrl}/sessions/reset`, {
@@ -138,10 +175,16 @@ const DEFAULT_SESSION_KEY = 'default';
  * voice channel operated on a `channel:` session nothing was using, and the
  * spoken conversation was unmanageable from Discord.
  *
- * The consequence to know: `default` is one key for ALL voice, because
- * speech-to-speech has no notion of which channel a turn came from. Two voice
- * channels therefore share a conversation — already true of speech, and now
- * true of their text chats too.
+ * Voice is keyed per GUILD, not per channel and no longer globally. Two voice
+ * channels in one server still share a conversation — speech-to-speech has no
+ * notion of which channel a turn came from, so that part is unchanged — but two
+ * SERVERS do not. Joining a call at work must not resume the personal
+ * conversation; that is a boundary between contexts, not a preference.
+ *
+ * Guild rather than channel because guild is the coarsest thing s2s can be told
+ * about out of band (see `bindVoiceKey`) and the finest that is actually true:
+ * one call at a time, and moving between channels in the same server is
+ * continuing the same conversation.
  *
  * Clearing a session is only safe because anything worth keeping is written to
  * the vault — see the shim's MEMORY_DIRECTIVE. The session is a cache; the
@@ -150,8 +193,13 @@ const DEFAULT_SESSION_KEY = 'default';
 function sessionKeyFor(channel, userId) {
   if (channel?.isThread?.()) return `thread:${channel.id}`;
   if (!channel?.guild) return `dm:${userId}`;
-  if (channel?.isVoiceBased?.()) return DEFAULT_SESSION_KEY;
+  if (channel?.isVoiceBased?.()) return voiceKeyFor(channel.guild.id);
   return `channel:${channel.id}`;
+}
+
+/** The conversation spoken turns in `guildId` belong to. */
+function voiceKeyFor(guildId) {
+  return guildId ? `voice:${guildId}` : DEFAULT_SESSION_KEY;
 }
 
 module.exports = {
@@ -160,7 +208,9 @@ module.exports = {
   resetSession,
   listSessions,
   bindSession,
+  bindVoiceKey,
   availableSessions,
   sessionKeyFor,
+  voiceKeyFor,
   DEFAULT_SESSION_KEY,
 };

@@ -7,11 +7,33 @@ const { sessionKeyFor, DEFAULT_SESSION_KEY } = require('../src/llm');
 
 const channel = (over) => ({ isThread: () => false, isVoiceBased: () => false, ...over });
 
-test('a voice channel shares the spoken conversation', () => {
+test('a voice channel shares the spoken conversation, per guild', () => {
   // The one case with teeth: a voice channel's integrated text chat is an
   // ordinary text channel to Discord, so without this it gets its own session
   // and a link pasted mid-call never reaches the conversation being spoken.
   // It is also what lets `switch` / `new` reach voice at all.
+  //
+  // The guild id is load-bearing and this fixture used to omit it (`guild: {}`),
+  // so the assertion held while the behaviour changed underneath it: the key
+  // fell back to the default exactly because there was no id to key on.
+  const key = sessionKeyFor(
+    channel({ id: 'V1', guild: { id: 'G1' }, isVoiceBased: () => true }),
+    'U9',
+  );
+  assert.equal(key, 'voice:G1');
+});
+
+test('two servers do not share one spoken conversation', () => {
+  // The regression that motivated per-guild keys: joining a call at work
+  // resumed the personal conversation, because ALL voice landed on one key.
+  // speech-to-speech cannot send a session header, so nothing else separates
+  // them.
+  const inGuild = (id) =>
+    sessionKeyFor(channel({ id: `V-${id}`, guild: { id }, isVoiceBased: () => true }), 'U9');
+  assert.notEqual(inGuild('G1'), inGuild('G2'));
+});
+
+test('a voice channel with no resolvable guild still yields a usable key', () => {
   const key = sessionKeyFor(channel({ id: 'V1', guild: {}, isVoiceBased: () => true }), 'U9');
   assert.equal(key, DEFAULT_SESSION_KEY);
 });
@@ -67,4 +89,34 @@ test('two transcript lines written in the same millisecond both survive', () => 
   );
   // The transcriber only picks up names matching this shape.
   for (const f of files) assert.match(f, /^\d+-.+-\d+\.txt$/);
+});
+
+test('bindVoiceKey distinguishes unsupported from broken', async () => {
+  // The bot may not depend on which backend sits behind OPENAI_BASE_URL, so a
+  // stateless endpoint with no /voice/bind must degrade to one shared voice
+  // conversation — NOT warn, and never block the join. A real error has to stay
+  // distinguishable from that, because it means spoken turns are reaching a
+  // conversation the speaker did not choose.
+  const { bindVoiceKey } = require('../src/llm');
+  const realFetch = global.fetch;
+
+  try {
+    global.fetch = async () => ({ ok: false, status: 404 });
+    assert.deepEqual(await bindVoiceKey('voice:G1'), { ok: false, unsupported: true });
+
+    global.fetch = async () => ({ ok: false, status: 500 });
+    assert.deepEqual(await bindVoiceKey('voice:G1'), { ok: false, error: 'endpoint 500' });
+
+    global.fetch = async () => {
+      throw new Error('connect ECONNREFUSED');
+    };
+    const down = await bindVoiceKey('voice:G1');
+    assert.equal(down.retryable, true, 'an unreachable endpoint must be retried, not accepted');
+    assert.match(down.error, /ECONNREFUSED/, 'and the cause must not be swallowed');
+
+    global.fetch = async () => ({ ok: true });
+    assert.deepEqual(await bindVoiceKey('voice:G1'), { ok: true });
+  } finally {
+    global.fetch = realFetch;
+  }
 });

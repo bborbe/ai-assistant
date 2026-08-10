@@ -779,6 +779,32 @@ async function join(channel) {
   });
   conn.on('stateChange', (o, n) => log.info(`  voice: ${o.status} -> ${n.status}`));
   await entersState(conn, VoiceConnectionStatus.Ready, 30000);
+
+  // Claim voice for THIS guild's conversation before the socket exists, so the
+  // first utterance cannot land in whichever server was bound last. Binding is
+  // deliberately not undone on leave: nothing generates spoken turns while no
+  // call is live, so the only effect of reverting would be a race against the
+  // `leave()` that `join()` itself performs. Leaving it pointed at the call that
+  // just ended also fails in the safe direction — a straggling turn lands in the
+  // conversation it was actually spoken into.
+  const voiceKey = llm.voiceKeyFor(channel.guild.id);
+  let bind = await llm.bindVoiceKey(voiceKey);
+  // One retry, because the failure that matters here is a momentarily
+  // unreachable endpoint between join and the first utterance — and the cost of
+  // losing that race is spoken turns landing in another server's conversation.
+  if (bind.retryable) bind = await llm.bindVoiceKey(voiceKey);
+
+  if (bind.error) {
+    log.warn('voice: session key not bound — spoken turns may reach another conversation', {
+      key: voiceKey,
+      error: bind.error,
+    });
+  } else if (bind.unsupported) {
+    log.info('voice: endpoint has no /voice/bind — one shared conversation for all voice', {
+      key: voiceKey,
+    });
+  }
+
   const session = new Session(
     conn,
     channel.guild.id,
@@ -787,6 +813,12 @@ async function join(channel) {
     channel.id,
     channel,
   );
+  // Carried on the session so `status` can report it: a call whose key never
+  // bound still works, it just answers into the wrong conversation, and that is
+  // invisible from inside Discord.
+  session.voiceKey = voiceKey;
+  session.voiceKeyBound = !bind.error;
+
   // Resolve display names once so the transcript reads with names, not ids.
   for (const [id, member] of channel.members) {
     session.names.set(id, member.displayName ?? member.user.username);
