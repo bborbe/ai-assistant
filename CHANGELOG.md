@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.11.1
 
 - fix: Restart a component that is killed, instead of leaving it stopped. The launcher
   `exec`ed each component, so launchd judged the job by whatever the program reported —
