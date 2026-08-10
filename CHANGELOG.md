@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.10.0
 
 - feat: Key voice conversations per guild instead of globally. `speech-to-speech` owns
   the HTTP call to the endpoint and cannot set `X-Session-Key`, so every spoken turn —
