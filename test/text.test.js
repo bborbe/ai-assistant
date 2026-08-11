@@ -176,3 +176,17 @@ test('stripAddress tolerates a missing role cache', () => {
   assert.equal(text.stripAddress('<@42> hi', '42', undefined).trim(), 'hi');
   assert.equal(text.stripAddress('<@42> hi', '42', null).trim(), 'hi');
 });
+
+test('stripAddress leaves the @everyone role alone', () => {
+  // @everyone IS a role the bot holds, and its id is the guild id. Stripping it
+  // would silently eat an @everyone the user wrote on purpose; matching on it
+  // would make every server-wide ping an address to the assistant.
+  const guildId = 'guild-1';
+  const out = text.stripAddress(
+    `<@&${guildId}> heads up everyone`,
+    '42',
+    fakeRoleCache([guildId, '99']),
+    guildId,
+  );
+  assert.match(out, new RegExp(`<@&${guildId}>`));
+});

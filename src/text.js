@@ -89,9 +89,10 @@ function isOwnThread(channel, botId) {
  * Exported for tests: the id-interpolated regexes are exactly the kind of thing
  * that works on the case it was written against and silently misses `<@!id>`.
  */
-function stripAddress(content, botId, myRoles) {
+function stripAddress(content, botId, myRoles, everyoneId) {
   let out = content.replace(new RegExp(`<@!?${botId}>`, 'g'), '');
   for (const id of myRoles?.keys?.() ?? []) {
+    if (id === everyoneId) continue;
     out = out.replace(new RegExp(`<@&${id}>`, 'g'), '');
   }
   return out;
@@ -177,7 +178,14 @@ function register(client) {
     // mentioning some unrelated group does not summon it.
     const isDM = !msg.guild;
     const myRoles = msg.guild?.members?.me?.roles?.cache;
-    const mentionedByRole = Boolean(myRoles) && msg.mentions.roles.some((r) => myRoles.has(r.id));
+    // `@everyone` is a role the bot HOLDS, and its id is the guild id. discord.js
+    // reports it via `mentions.everyone` rather than `mentions.roles`, so this
+    // exclusion is belt-and-braces — but the failure it guards against is every
+    // `@everyone` ping in the server summoning the assistant, which is too large
+    // to leave resting on a library detail nothing here asserts.
+    const everyoneId = msg.guild?.id;
+    const mentionedByRole =
+      Boolean(myRoles) && msg.mentions.roles.some((r) => r.id !== everyoneId && myRoles.has(r.id));
     const mentioned = msg.mentions.users.has(client.user.id) || mentionedByRole;
     const inOwnThread = isOwnThread(msg.channel, client.user.id);
     if (!isDM && !mentioned && !inOwnThread) {
@@ -203,7 +211,7 @@ function register(client) {
     // front of the question and either echoes it back or treats it as content.
     // Only the bot's own roles are stripped — a mention of some other group is
     // part of what the user wrote.
-    const content = stripAddress(msg.content, client.user.id, myRoles).trim();
+    const content = stripAddress(msg.content, client.user.id, myRoles, everyoneId).trim();
     if (!content) return;
     log.info('text in', { user: msg.author.tag, content: content.slice(0, 80) });
 

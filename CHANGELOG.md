@@ -8,8 +8,12 @@
   `mentions.roles` and never in `mentions.users`. The message was then dropped with no
   reply and no log line, so choosing the wrong one of two indistinguishable entries looked
   exactly like the bot ignoring you. Scoped to roles the bot actually holds, so mentioning
-  an unrelated group still does nothing. The address is stripped in both forms before the
-  model sees it — left in, the question arrives with a literal `<@&…>` on the front.
+  an unrelated group still does nothing. `@everyone` is excluded explicitly: it IS a role
+  the bot holds, and although discord.js reports it via `mentions.everyone` rather than
+  `mentions.roles`, "every server-wide ping summons the assistant" is too large a failure
+  to rest on a library detail nothing here asserts. The address is stripped in both forms
+  before the model sees it — left in, the question arrives with a literal `<@&…>` on the
+  front.
 - An unaddressed message now logs at debug why it was ignored. Four separate "the bot
   ignored me" hunts this month ended at a filter that returned without saying so; from
   outside, an unaddressed message and a misrouted one are the same event.
