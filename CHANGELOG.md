@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- fix: a message typed into a live call's text chat is answered again. `speak()` sent the
+  typed-turn hint on `DEFAULT_SESSION_KEY` with a comment claiming "voice always lands on
+  the default session key" — true until `v0.10.0` keyed voice as `voice:<guildId>`. After
+  it, the hint was written to `default` and read from `voice:<guildId>`, so it never
+  matched: `typed_turn` stayed false and every typed message in a call was judged by the
+  WAKE PHRASE as if spoken. Anything not opening with "hey bot" was dropped as unaddressed,
+  with no error and nothing in the log but `QUIET`. The retraction on a failed turn had the
+  same mismatch, so a dead turn left its hint standing. Second instance of the `v0.9.x`
+  key-prefix regression — same release, different consumer.
 - feat: the wake phrase is no longer required when you are the only human in the voice
   channel. It exists because "a missed trigger costs one repeat; a false trigger interrupts
   a room" — alone there is no room to interrupt, so the cost side of that trade is empty

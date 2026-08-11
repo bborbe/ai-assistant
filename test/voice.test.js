@@ -794,3 +794,41 @@ test('not solo still requires the phrase on the bot side', () => {
   assert.equal(fake.answering, false);
   assert.equal(typing, 0, 'no dots for a turn the shim will not answer');
 });
+
+test('the typed-turn hint is keyed per guild, matching the turn it describes', async () => {
+  // THE REGRESSION. v0.10.0 keyed voice as `voice:<guildId>` but this call kept
+  // sending DEFAULT_SESSION_KEY, so the shim wrote the hint to `default` and
+  // read it from `voice:<guildId>`. It never matched, `typed_turn` stayed false,
+  // and every typed message in a live call was judged by the WAKE PHRASE as if
+  // spoken — anything not opening with "hey bot" dropped as unaddressed, with
+  // no error and no log line beyond QUIET.
+  const ws = fakeWs();
+  const fake = { closed: false, ws, typedReplyPending: false, guildId: 'guild-9' };
+  const pending = Session.prototype.speak.call(fake, 'what were we working on?');
+  await flush();
+
+  assert.deepEqual(typedTurnCalls, [{ key: 'voice:guild-9', typed: true }]);
+  assert.notEqual(typedTurnCalls[0].key, llm.DEFAULT_SESSION_KEY);
+
+  ws.emit('message', JSON.stringify({ type: 'response.created' }));
+  await pending;
+});
+
+test('a failed typed turn retracts the hint on the same key it set', async () => {
+  // A retraction on the wrong key leaves the hint standing, which marks the
+  // next unrelated SPOKEN reply as typed-originated.
+  const ws = fakeWs();
+  const fake = { closed: false, ws, typedReplyPending: false, guildId: 'guild-9' };
+  const pending = Session.prototype.speak.call(fake, 'this one dies');
+  await flush();
+  ws.emit(
+    'message',
+    JSON.stringify({ type: 'error', error: { type: 'conversation_already_has_active_response' } }),
+  );
+  assert.deepEqual(await pending, { ok: false, reason: 'busy' });
+
+  assert.deepEqual(typedTurnCalls, [
+    { key: 'voice:guild-9', typed: true },
+    { key: 'voice:guild-9', typed: false },
+  ]);
+});

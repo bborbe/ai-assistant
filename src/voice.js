@@ -433,9 +433,18 @@ class Session {
     // Before the turn, not after: the endpoint consumes the hint at the top of
     // the turn it belongs to, and s2s only calls the endpoint once generation
     // starts — strictly after the `response.created` awaited below. Awaited so
-    // it cannot lose the race against a fast turn. Voice always lands on the
-    // default session key, which is the key the endpoint will read.
-    await llm.markTypedTurn(llm.DEFAULT_SESSION_KEY);
+    // it cannot lose the race against a fast turn.
+    //
+    // KEYED PER GUILD, like the turn it describes. This said
+    // `llm.DEFAULT_SESSION_KEY` with a comment claiming "voice always lands on
+    // the default session key" — true until v0.10.0 keyed voice as
+    // `voice:<guildId>`. After it, the hint was written to `default` and read
+    // from `voice:<guildId>`, so it never matched: every typed message in a
+    // live call was judged by the WAKE PHRASE as if it had been spoken, and
+    // anything not opening with "hey bot" was dropped as unaddressed. No error,
+    // no log line beyond `QUIET`. Second instance of the v0.9.x key-prefix
+    // regression — same release, different consumer.
+    await llm.markTypedTurn(llm.voiceKeyFor(this.guildId));
     // Deliberately a local closure rather than a second method: `speak` is
     // driven in tests as `Session.prototype.speak.call(fakeSession, …)`, and
     // anything reached through `this` would have to be re-attached to every
@@ -493,8 +502,9 @@ class Session {
 
     const result = await awaitAck();
     // A hint left behind by a turn that died after the send would mark the
-    // next unrelated SPOKEN reply as typed-originated. Cheap to undo.
-    if (!result.ok) await llm.markTypedTurn(llm.DEFAULT_SESSION_KEY, false);
+    // next unrelated SPOKEN reply as typed-originated. Cheap to undo — and it
+    // has to clear the SAME key it set, or the retraction misses too.
+    if (!result.ok) await llm.markTypedTurn(llm.voiceKeyFor(this.guildId), false);
     return result;
   }
 
