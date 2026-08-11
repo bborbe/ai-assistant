@@ -76,6 +76,29 @@ function isOwnThread(channel, botId) {
 }
 
 /**
+ * Remove the bot's own address from a message, in either form it can take.
+ *
+ * `<@id>` / `<@!id>` is the user mention; `<@&roleId>` is a role mention, which
+ * Discord's autocomplete offers as a second, visually identical entry for a bot
+ * that has a managed role. Both mean "I am talking to you" and neither is part
+ * of the question, so both come out.
+ *
+ * `myRoles` is the bot's own role cache, and only those ids are stripped — a
+ * mention of some other group is content the user meant to write.
+ *
+ * Exported for tests: the id-interpolated regexes are exactly the kind of thing
+ * that works on the case it was written against and silently misses `<@!id>`.
+ */
+function stripAddress(content, botId, myRoles, everyoneId) {
+  let out = content.replace(new RegExp(`<@!?${botId}>`, 'g'), '');
+  for (const id of myRoles?.keys?.() ?? []) {
+    if (id === everyoneId) continue;
+    out = out.replace(new RegExp(`<@&${id}>`, 'g'), '');
+  }
+  return out;
+}
+
+/**
  * Where the answer goes.
  *
  * In a guild channel, the first mention opens a thread and everything after
@@ -144,17 +167,51 @@ function register(client) {
     if (msg.author.bot) return;
 
     // Answer DMs, mentions in a guild, and anything inside a thread we opened.
+    //
+    // A ROLE mention counts too, and only a role the bot actually holds.
+    // Discord's autocomplete offers the bot user and the bot's managed role as
+    // two visually identical entries — same name, same avatar, one blue pill —
+    // and picking the role produces `<@&roleId>`, which lands in
+    // `mentions.roles` and never in `mentions.users`. Before this, choosing the
+    // wrong one of two indistinguishable entries meant the message was dropped
+    // with no reply and no log line. Scoped to roles the bot holds so that
+    // mentioning some unrelated group does not summon it.
     const isDM = !msg.guild;
-    const mentioned = msg.mentions.users.has(client.user.id);
+    const myRoles = msg.guild?.members?.me?.roles?.cache;
+    // `@everyone` is a role the bot HOLDS, and its id is the guild id. discord.js
+    // reports it via `mentions.everyone` rather than `mentions.roles`, so this
+    // exclusion is belt-and-braces — but the failure it guards against is every
+    // `@everyone` ping in the server summoning the assistant, which is too large
+    // to leave resting on a library detail nothing here asserts.
+    const everyoneId = msg.guild?.id;
+    const mentionedByRole =
+      Boolean(myRoles) && msg.mentions.roles.some((r) => r.id !== everyoneId && myRoles.has(r.id));
+    const mentioned = msg.mentions.users.has(client.user.id) || mentionedByRole;
     const inOwnThread = isOwnThread(msg.channel, client.user.id);
-    if (!isDM && !mentioned && !inOwnThread) return;
+    if (!isDM && !mentioned && !inOwnThread) {
+      // Debug, not info: the bot sees every message in every channel it can
+      // read, so this is the common case and would drown the log at any louder
+      // level. It exists at all because four separate "the bot ignored me"
+      // hunts this month ended at a filter that returned without saying so —
+      // an unaddressed message and a misrouted one look identical from outside.
+      log.debug('text: not addressed, ignoring', {
+        channel: msg.channel.id,
+        roleMentions: msg.mentions.roles.size,
+      });
+      return;
+    }
 
     if (!config.isAllowed(msg.author.id)) {
       log.warn('text message dropped', { user: msg.author.tag, id: msg.author.id });
       return;
     }
 
-    const content = msg.content.replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '').trim();
+    // Strip the address, whichever form it took. The role form has to go too:
+    // left in, the model receives a literal `<@&1533564399195918399>` at the
+    // front of the question and either echoes it back or treats it as content.
+    // Only the bot's own roles are stripped — a mention of some other group is
+    // part of what the user wrote.
+    const content = stripAddress(msg.content, client.user.id, myRoles, everyoneId).trim();
     if (!content) return;
     log.info('text in', { user: msg.author.tag, content: content.slice(0, 80) });
 
@@ -271,4 +328,4 @@ function register(client) {
   });
 }
 
-module.exports = { register, chunk };
+module.exports = { register, chunk, stripAddress };

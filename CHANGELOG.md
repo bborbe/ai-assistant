@@ -2,6 +2,24 @@
 
 ## v0.14.0
 
+- fix: mentioning the bot's ROLE now addresses it, like mentioning the bot user does.
+  Discord's autocomplete offers both as visually identical entries — same name, same
+  avatar, one blue pill — and picking the role produces `<@&roleId>`, which lands in
+  `mentions.roles` and never in `mentions.users`. The message was then dropped with no
+  reply and no log line, so choosing the wrong one of two indistinguishable entries looked
+  exactly like the bot ignoring you. Scoped to roles the bot actually holds, so mentioning
+  an unrelated group still does nothing. `@everyone` is excluded explicitly: it IS a role
+  the bot holds, and although discord.js reports it via `mentions.everyone` rather than
+  `mentions.roles`, "every server-wide ping summons the assistant" is too large a failure
+  to rest on a library detail nothing here asserts. The address is stripped in both forms
+  before the model sees it — left in, the question arrives with a literal `<@&…>` on the
+  front.
+- An unaddressed message now logs at debug why it was ignored. Four separate "the bot
+  ignored me" hunts this month ended at a filter that returned without saying so; from
+  outside, an unaddressed message and a misrouted one are the same event.
+
+## v0.14.0
+
 - fix: a message typed into a live call's text chat is answered again. `speak()` sent the
   typed-turn hint on `DEFAULT_SESSION_KEY` with a comment claiming "voice always lands on
   the default session key" — true until `v0.10.0` keyed voice as `voice:<guildId>`. After

@@ -139,3 +139,54 @@ test('a refused speak() is reported in the channel and recorded in the transcrip
   assert.equal(msg._sent.length, 1);
   assert.match(msg._sent[0], /busy/);
 });
+
+// A Collection-like stand-in for the bot's own role cache: `has` and `keys` are
+// the whole surface stripAddress and the mention check depend on.
+function fakeRoleCache(ids) {
+  return { has: (id) => ids.includes(id), keys: () => ids[Symbol.iterator]() };
+}
+
+test('stripAddress removes the user mention in both spellings', () => {
+  assert.equal(text.stripAddress('<@42> hello', '42', fakeRoleCache([])).trim(), 'hello');
+  // The nickname form. Easy to miss, and a miss leaves the raw id in the prompt.
+  assert.equal(text.stripAddress('<@!42> hello', '42', fakeRoleCache([])).trim(), 'hello');
+});
+
+test('stripAddress removes a mention of the bot own role', () => {
+  // Discord offers the bot user and the bot's managed role as two identical
+  // autocomplete entries; picking the role produces this form.
+  assert.equal(
+    text.stripAddress('<@&99> plan my month', '42', fakeRoleCache(['99'])).trim(),
+    'plan my month',
+  );
+});
+
+test('stripAddress leaves other roles alone — they are content', () => {
+  const out = text.stripAddress('<@&77> and <@&99> ship it', '42', fakeRoleCache(['99']));
+  assert.match(out, /<@&77>/, "another group's mention is part of what the user wrote");
+  assert.doesNotMatch(out, /<@&99>/);
+});
+
+test('stripAddress is a no-op on a message that addresses nobody', () => {
+  assert.equal(text.stripAddress('just talking', '42', fakeRoleCache(['99'])), 'just talking');
+});
+
+test('stripAddress tolerates a missing role cache', () => {
+  // DMs have no guild, so there is no member and no role cache to read.
+  assert.equal(text.stripAddress('<@42> hi', '42', undefined).trim(), 'hi');
+  assert.equal(text.stripAddress('<@42> hi', '42', null).trim(), 'hi');
+});
+
+test('stripAddress leaves the @everyone role alone', () => {
+  // @everyone IS a role the bot holds, and its id is the guild id. Stripping it
+  // would silently eat an @everyone the user wrote on purpose; matching on it
+  // would make every server-wide ping an address to the assistant.
+  const guildId = 'guild-1';
+  const out = text.stripAddress(
+    `<@&${guildId}> heads up everyone`,
+    '42',
+    fakeRoleCache([guildId, '99']),
+    guildId,
+  );
+  assert.match(out, new RegExp(`<@&${guildId}>`));
+});
