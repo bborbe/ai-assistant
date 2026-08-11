@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.14.0
 
 - fix: a message typed into a live call's text chat is answered again. `speak()` sent the
   typed-turn hint on `DEFAULT_SESSION_KEY` with a comment claiming "voice always lands on
