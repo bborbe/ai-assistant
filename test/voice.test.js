@@ -325,33 +325,41 @@ test('showTyping does not stack a second ticker on a repeated response.created',
   clearInterval(fake.typingTimer);
 });
 
+// These two carry a real `guildId`. Without one, `voiceKeyFor(undefined)` falls
+// back to `default` — so a keyless fake made them pass against BOTH the buggy
+// and the fixed code, which is how they came to assert `default` and quietly
+// contradict the regression test below.
 test('speak tells the endpoint the turn was typed, before sending anything', async () => {
   const ws = fakeWs();
-  const fake = { closed: false, ws, typedReplyPending: false };
+  const fake = { closed: false, ws, typedReplyPending: false, guildId: 'guild-1' };
   const pending = Session.prototype.speak.call(fake, 'what is my most important task');
   // Ordering is the whole point: the endpoint consumes the hint at the top of
   // the turn, so a hint that lands after the send is a hint that arrives too
   // late for the turn it describes.
-  assert.deepEqual(typedTurnCalls, [{ key: 'default', typed: true }]);
+  assert.deepEqual(typedTurnCalls, [{ key: 'voice:guild-1', typed: true }]);
   assert.equal(ws.sent.length, 0, 'nothing sent until the hint is in');
   await flush();
   assert.equal(ws.sent.length, 2);
   ws.emit('message', JSON.stringify({ type: 'response.created' }));
   await pending;
-  assert.deepEqual(typedTurnCalls, [{ key: 'default', typed: true }], 'not retracted on success');
+  assert.deepEqual(
+    typedTurnCalls,
+    [{ key: 'voice:guild-1', typed: true }],
+    'not retracted on success',
+  );
 });
 
 test('speak retracts the typed hint when the turn never happens', async () => {
   const ws = fakeWs();
-  const fake = { closed: false, ws, typedReplyPending: false };
+  const fake = { closed: false, ws, typedReplyPending: false, guildId: 'guild-1' };
   const pending = Session.prototype.speak.call(fake, 'hi', { timeoutMs: 20 });
   await flush();
   assert.deepEqual(await pending, { ok: false, reason: 'timeout' });
   // Otherwise the next unrelated SPOKEN reply inherits the flag and gets
   // posted to the channel as though someone had typed the question.
   assert.deepEqual(typedTurnCalls, [
-    { key: 'default', typed: true },
-    { key: 'default', typed: false },
+    { key: 'voice:guild-1', typed: true },
+    { key: 'voice:guild-1', typed: false },
   ]);
 });
 
@@ -723,4 +731,112 @@ test('a busy refusal does not cut off the answer already being spoken', async ()
   assert.equal(endAudioCalls, 0, 'playback must not be stopped');
   assert.equal(sent.length, 0, 'text.js already reports this one');
   assert.equal(fake._transcriptWrites.length, 0);
+});
+
+// A Collection-like stand-in: `.filter` returning something with `.size` is the
+// whole contract humansIn depends on, so a Map-backed fake is enough.
+function fakeMembers(users) {
+  return {
+    filter: (fn) => ({ size: users.filter(fn).length }),
+  };
+}
+
+test('humansIn does not count the assistant itself', () => {
+  // The bot is a member of the channel it listens to, so counting naively makes
+  // "alone" unreachable — the case this whole feature turns on.
+  const channel = {
+    members: fakeMembers([{ user: { bot: false } }, { user: { bot: true } }]),
+  };
+  assert.equal(voice.humansIn(channel), 1);
+});
+
+test('humansIn returns null for an unreadable channel, not zero', () => {
+  // null and 0 must not collapse: an unreadable room leaves the gate where it
+  // is, while zero would read as "nobody here" and is a different claim.
+  assert.equal(voice.humansIn(undefined), null);
+  assert.equal(voice.humansIn({}), null);
+  assert.equal(voice.humansIn({ members: {} }), null);
+});
+
+test('humansIn counts a second person, which is what re-arms the gate', () => {
+  const channel = {
+    members: fakeMembers([
+      { user: { bot: false } },
+      { user: { bot: false } },
+      { user: { bot: true } },
+    ]),
+  };
+  assert.equal(voice.humansIn(channel), 2);
+});
+
+test('solo raises the typing indicator for an unaddressed utterance', () => {
+  let typing = 0;
+  const fake = fakeOnEventTarget({ solo: true, showTyping: () => (typing += 1) });
+
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({
+      type: 'conversation.item.input_audio_transcription.completed',
+      transcript: 'so what does that leave for tomorrow',
+    }),
+  );
+
+  // The shim answers this turn when solo, so the bot must raise the dots for it
+  // — a drift between the two sides shows up exactly here.
+  assert.equal(fake.answering, true);
+  assert.equal(typing, 1);
+});
+
+test('not solo still requires the phrase on the bot side', () => {
+  let typing = 0;
+  const fake = fakeOnEventTarget({ solo: false, showTyping: () => (typing += 1) });
+
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({
+      type: 'conversation.item.input_audio_transcription.completed',
+      transcript: 'so what does that leave for tomorrow',
+    }),
+  );
+
+  assert.equal(fake.answering, false);
+  assert.equal(typing, 0, 'no dots for a turn the shim will not answer');
+});
+
+test('the typed-turn hint is keyed per guild, matching the turn it describes', async () => {
+  // THE REGRESSION. v0.10.0 keyed voice as `voice:<guildId>` but this call kept
+  // sending DEFAULT_SESSION_KEY, so the shim wrote the hint to `default` and
+  // read it from `voice:<guildId>`. It never matched, `typed_turn` stayed false,
+  // and every typed message in a live call was judged by the WAKE PHRASE as if
+  // spoken — anything not opening with "hey bot" dropped as unaddressed, with
+  // no error and no log line beyond QUIET.
+  const ws = fakeWs();
+  const fake = { closed: false, ws, typedReplyPending: false, guildId: 'guild-9' };
+  const pending = Session.prototype.speak.call(fake, 'what were we working on?');
+  await flush();
+
+  assert.deepEqual(typedTurnCalls, [{ key: 'voice:guild-9', typed: true }]);
+  assert.notEqual(typedTurnCalls[0].key, llm.DEFAULT_SESSION_KEY);
+
+  ws.emit('message', JSON.stringify({ type: 'response.created' }));
+  await pending;
+});
+
+test('a failed typed turn retracts the hint on the same key it set', async () => {
+  // A retraction on the wrong key leaves the hint standing, which marks the
+  // next unrelated SPOKEN reply as typed-originated.
+  const ws = fakeWs();
+  const fake = { closed: false, ws, typedReplyPending: false, guildId: 'guild-9' };
+  const pending = Session.prototype.speak.call(fake, 'this one dies');
+  await flush();
+  ws.emit(
+    'message',
+    JSON.stringify({ type: 'error', error: { type: 'conversation_already_has_active_response' } }),
+  );
+  assert.deepEqual(await pending, { ok: false, reason: 'busy' });
+
+  assert.deepEqual(typedTurnCalls, [
+    { key: 'voice:guild-9', typed: true },
+    { key: 'voice:guild-9', typed: false },
+  ]);
 });
