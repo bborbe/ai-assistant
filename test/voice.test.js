@@ -621,3 +621,106 @@ test('ooh is a hesitation too — the ninth attempt in the reliability run', () 
   // Unchanged: only noise may precede the phrase.
   assert.equal(config.isAddressed("So, hey bot, what's my task"), false);
 });
+
+test('an s2s error is reported on both surfaces, not just logged', async () => {
+  const sent = [];
+  const fake = fakeOnEventTarget({
+    channel: { send: async (t) => sent.push(t) },
+  });
+
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({
+      type: 'error',
+      error: { type: 'response_failed', message: 'Language model generation failed: boom' },
+    }),
+  );
+  await new Promise((r) => setImmediate(r));
+
+  // From inside Discord a failed answer and an ignored utterance are the same
+  // event — silence. Both surfaces must carry the reason.
+  assert.equal(fake._transcriptWrites.length, 1);
+  assert.match(fake._transcriptWrites[0].text, /^\(voice reply failed: Language model/);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], /Could not answer that out loud/);
+});
+
+test('an s2s error clears the flags no response.done will clear', async () => {
+  const fake = fakeOnEventTarget({
+    channel: { send: async () => {} },
+    answering: true,
+    inResponse: true,
+    typedReplyPending: true,
+  });
+
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({ type: 'error', error: { type: 'response_failed', message: 'boom' } }),
+  );
+
+  // A turn failing before any assistant text emits no response.done, so these
+  // would stay raised and wedge every later speak() as permanently busy —
+  // observed on 2026-08-11 as a typed turn refused with reason `busy` while
+  // nothing was in flight.
+  assert.equal(fake.answering, false);
+  assert.equal(fake.inResponse, false);
+  assert.equal(fake.typedReplyPending, false);
+});
+
+test('a multi-line server error is compacted to one readable line', async () => {
+  const sent = [];
+  const fake = fakeOnEventTarget({ channel: { send: async (t) => sent.push(t) } });
+
+  // Verbatim shape of the NLTK LookupError that caused the 30h silent outage:
+  // a banner line, the reason, then a bulleted list of searched paths.
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({
+      type: 'error',
+      error: {
+        type: 'response_failed',
+        message:
+          '\n**********************************************************************\n' +
+          "  Resource 'punkt_tab' not found.\n  Please use the NLTK Downloader:\n" +
+          "  Searched in:\n    - '/Users/x/nltk_data'\n",
+      },
+    }),
+  );
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(sent.length, 1);
+  assert.doesNotMatch(sent[0], /\n/, 'a chat notice must stay one line');
+  assert.match(sent[0], /punkt_tab' not found/);
+});
+
+test('a busy refusal does not cut off the answer already being spoken', async () => {
+  const sent = [];
+  let endAudioCalls = 0;
+  const fake = fakeOnEventTarget({
+    channel: { send: async (t) => sent.push(t) },
+    endAudio: () => {
+      endAudioCalls += 1;
+    },
+    answering: true,
+    inResponse: true,
+  });
+
+  // conversation_already_has_active_response arrives BY DEFINITION while a
+  // response is in flight. Treating it as a dead turn would clear the flags and
+  // stop playback mid-answer -- and text.js already reports it for typed turns,
+  // so handling it here would also double-post.
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({
+      type: 'error',
+      error: { type: 'conversation_already_has_active_response', message: 'busy' },
+    }),
+  );
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(fake.answering, true, 'an in-flight answer must survive a busy refusal');
+  assert.equal(fake.inResponse, true);
+  assert.equal(endAudioCalls, 0, 'playback must not be stopped');
+  assert.equal(sent.length, 0, 'text.js already reports this one');
+  assert.equal(fake._transcriptWrites.length, 0);
+});

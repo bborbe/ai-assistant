@@ -59,6 +59,19 @@ const TYPING_TICK_MS = 8000;
 // broken", which is the thing the indicator exists to prevent.
 const TYPING_MAX_MS = 2 * 60 * 1000;
 
+// A server error message is not written for a chat channel: an NLTK LookupError
+// arrives as ~20 lines with a bullet list of searched paths. Collapse to the
+// first meaningful line so the notice stays one readable sentence — the full
+// text is in the log, which is where a stack trace belongs.
+function reasonLine(raw, max = 140) {
+  const first = String(raw ?? '')
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l && !/^\*+$/.test(l));
+  if (!first) return 'unknown';
+  return first.length > max ? `${first.slice(0, max - 1)}…` : first;
+}
+
 // 48k stereo -> 16k mono. Mix channels first, then average groups of 3 (box
 // low-pass). NOT naive striding, which walks alternating channels on an
 // interleaved stream and aliases everything above 8 kHz back into the band.
@@ -640,9 +653,38 @@ class Session {
         this.answering = false;
         this.endAudio();
         break;
-      case 'error':
+      case 'error': {
         log.error('  voice: s2s event error', JSON.stringify(e).slice(0, 200));
+        // ONLY `response_failed` — the type `_on_response_failed` sends — is a
+        // turn that died with no other reporter. The other error types must not
+        // reach the code below:
+        //   - `conversation_already_has_active_response` arrives BY DEFINITION
+        //     while a response is in flight, so clearing the flags and calling
+        //     endAudio() would cut off the answer being spoken.
+        //   - every error on a typed turn is already answered by speak()'s own
+        //     onAck listener, which text.js turns into exactly the notice and
+        //     transcript line written below — handling it here too would post
+        //     the same failure twice.
+        if (e.error?.type !== 'response_failed') break;
+        const reason = reasonLine(e.error?.message || e.error?.type);
+        // A turn that fails before any assistant text emits NO `response.done`,
+        // so the flags that event normally clears stay raised — `answering`
+        // then wedges every later speak() as permanently busy. That is the
+        // observed follow-on symptom of a silent failure, not a separate
+        // defect: a typed turn during the 2026-08-11 outage was refused with
+        // reason `busy` while nothing was actually in flight.
+        this.typedReplyPending = false;
+        this.inResponse = false;
+        this.answering = false;
+        this.endAudio();
+        // From inside Discord, a failed answer and an utterance the wake gate
+        // ignored are the same event: silence. Both surfaces the busy path
+        // already writes to (src/text.js) get the reason, so whichever one a
+        // reader looks at says why nothing was spoken.
+        this.transcript?.writeText(config.botName, `(voice reply failed: ${reason})`);
+        this.channel?.send(`Could not answer that out loud (${reason}).`).catch(() => {});
         break;
+      }
     }
   }
 
