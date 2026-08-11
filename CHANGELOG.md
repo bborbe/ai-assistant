@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.13.2
 
 - fix: a failed voice turn now says so in the channel and the transcript instead of going
   silent. `case 'error'` only called `log.error`, so from inside Discord a failed answer
