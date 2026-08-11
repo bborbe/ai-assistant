@@ -724,3 +724,73 @@ test('a busy refusal does not cut off the answer already being spoken', async ()
   assert.equal(sent.length, 0, 'text.js already reports this one');
   assert.equal(fake._transcriptWrites.length, 0);
 });
+
+// A Collection-like stand-in: `.filter` returning something with `.size` is the
+// whole contract humansIn depends on, so a Map-backed fake is enough.
+function fakeMembers(users) {
+  return {
+    filter: (fn) => ({ size: users.filter(fn).length }),
+  };
+}
+
+test('humansIn does not count the assistant itself', () => {
+  // The bot is a member of the channel it listens to, so counting naively makes
+  // "alone" unreachable — the case this whole feature turns on.
+  const channel = {
+    members: fakeMembers([{ user: { bot: false } }, { user: { bot: true } }]),
+  };
+  assert.equal(voice.humansIn(channel), 1);
+});
+
+test('humansIn returns null for an unreadable channel, not zero', () => {
+  // null and 0 must not collapse: an unreadable room leaves the gate where it
+  // is, while zero would read as "nobody here" and is a different claim.
+  assert.equal(voice.humansIn(undefined), null);
+  assert.equal(voice.humansIn({}), null);
+  assert.equal(voice.humansIn({ members: {} }), null);
+});
+
+test('humansIn counts a second person, which is what re-arms the gate', () => {
+  const channel = {
+    members: fakeMembers([
+      { user: { bot: false } },
+      { user: { bot: false } },
+      { user: { bot: true } },
+    ]),
+  };
+  assert.equal(voice.humansIn(channel), 2);
+});
+
+test('solo raises the typing indicator for an unaddressed utterance', () => {
+  let typing = 0;
+  const fake = fakeOnEventTarget({ solo: true, showTyping: () => (typing += 1) });
+
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({
+      type: 'conversation.item.input_audio_transcription.completed',
+      transcript: 'so what does that leave for tomorrow',
+    }),
+  );
+
+  // The shim answers this turn when solo, so the bot must raise the dots for it
+  // — a drift between the two sides shows up exactly here.
+  assert.equal(fake.answering, true);
+  assert.equal(typing, 1);
+});
+
+test('not solo still requires the phrase on the bot side', () => {
+  let typing = 0;
+  const fake = fakeOnEventTarget({ solo: false, showTyping: () => (typing += 1) });
+
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({
+      type: 'conversation.item.input_audio_transcription.completed',
+      transcript: 'so what does that leave for tomorrow',
+    }),
+  );
+
+  assert.equal(fake.answering, false);
+  assert.equal(typing, 0, 'no dots for a turn the shim will not answer');
+});

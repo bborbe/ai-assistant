@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- feat: the wake phrase is no longer required when you are the only human in the voice
+  channel. It exists because "a missed trigger costs one repeat; a false trigger interrupts
+  a room" — alone there is no room to interrupt, so the cost side of that trade is empty
+  and a one-to-one conversation no longer needs "hey bot" on every turn. This reverses only
+  the `always on rather than switching on head count` clause of the original design; how the
+  phrase MATCHES (prefix-anchored, fixed variant list, filler-word skipping) is untouched,
+  and a phrase said out of habit is still stripped before the model sees it.
+- The bot posts the room state to `POST /v1/voice/solo` on join and on every arrival or
+  departure — sticky, like `/voice/bind` and unlike the one-shot typed hint, because it
+  describes a standing state rather than one utterance. Bots are not counted, or the
+  assistant's own membership would make "alone" unreachable.
+- Every failure path leaves the gate ARMED: the shim defaults to not-solo, a 404 from an
+  endpoint without the route logs a capability note, and a failed post resets the bot's own
+  flag so the two sides cannot drift into answering unaddressed speech. An unreadable
+  channel is distinguished from an empty one and changes nothing.
+- Someone joining re-arms the gate on arrival rather than on the next turn, and does so
+  ahead of the transcript guard so it still happens with `TRANSCRIBE` off.
+
 ## v0.13.2
 
 - fix: a failed voice turn now says so in the channel and the transcript instead of going

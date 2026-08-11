@@ -339,6 +339,31 @@ def bind_voice_key(key: str) -> str:
     return previous
 
 
+# Whether the operator is the only human in the call. Sticky, like the voice
+# key above and unlike the one-shot typed hint: it describes a standing state of
+# the room, not something about one utterance.
+#
+# DEFAULTS TO FALSE, and that direction is load-bearing. An endpoint that is
+# never told stays exactly as it was — gate armed — so a shim that predates this
+# route, a bot that fails to post, and a backend that 404s the path all degrade
+# to the safe behaviour rather than to an assistant that answers everything.
+_SOLO = False
+_SOLO_LOCK = Lock()
+
+
+def set_solo(solo: bool) -> bool:
+    """Record whether the operator is alone. Returns the previous value."""
+    global _SOLO
+    with _SOLO_LOCK:
+        previous, _SOLO = _SOLO, bool(solo)
+    return previous
+
+
+def is_solo() -> bool:
+    with _SOLO_LOCK:
+        return _SOLO
+
+
 def voice_key() -> str:
     with _VOICE_KEY_LOCK:
         return _VOICE_KEY
@@ -1834,6 +1859,17 @@ class Handler(BaseHTTPRequestHandler):
             print(f"-> VOICE KEY [{key}] (was {previous})", flush=True)
             return self._json(200, {"key": key, "previous": previous})
 
+        # Sticky, and sent whenever the room changes — not per turn. The bot is
+        # the only side that can see who is in the voice channel; the shim is
+        # the only side that runs the wake gate. Same out-of-band shape as
+        # /voice/bind above, for the same reason: speech-to-speech owns the HTTP
+        # call and can attach no headers of its own.
+        if self.path.rstrip("/").endswith("/voice/solo"):
+            solo = self.headers.get("X-Voice-Solo", "").strip().strip("\"'").lower()
+            previous = set_solo(solo in ("1", "true", "yes", "on"))
+            print(f"-> SOLO [{is_solo()}] (was {previous})", flush=True)
+            return self._json(200, {"solo": is_solo(), "previous": previous})
+
         if self.path.rstrip("/").endswith("/turns/typed"):
             key = self._key()
             if self.headers.get("X-Turn-Typed", "").lower() == "false":
@@ -1910,15 +1946,23 @@ class Handler(BaseHTTPRequestHandler):
         # carry an @mention or arrive in a thread/DM to be answered at all, so
         # it is addressed by construction; demanding a wake phrase on top of
         # that would be asking the user to say it twice.
+        # ALONE, the gate is off. "Better silent than too eager" was priced on a
+        # false trigger interrupting a room; with no room there is nothing to
+        # interrupt, and the cost of a miss (say it again) is unchanged. This
+        # reverses only WHEN the gate is armed — how it matches is untouched.
         if voice and not typed_turn:
-            if not is_addressed(prompt):
+            solo = is_solo()
+            if not solo and not is_addressed(prompt):
                 print(f"-> QUIET [{key}] not addressed: {prompt[:60]!r}", flush=True)
                 if req.get("stream"):
                     return self._stream("")
                 return self._json(200, self._completion(""))
             # Addressed: hand on the question without the address. The full
             # utterance, wake phrase and all, is already in the transcript —
-            # this only changes what the model is asked.
+            # this only changes what the model is asked. Still stripped when
+            # solo: saying "hey bot" out of habit should not change the
+            # question the model is asked, and strip_wake_phrase is a no-op on
+            # an utterance that carries no phrase.
             prompt = strip_wake_phrase(prompt)
 
         # The transcript directive is voice-only: it is the record of a call,

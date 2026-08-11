@@ -108,6 +108,35 @@ async function bindVoiceKey(sessionKey) {
   }
 }
 
+/**
+ * Tell the endpoint whether the operator is the only human in the call.
+ *
+ * Sticky like `bindVoiceKey`, not one-shot like `markTypedTurn`: it describes a
+ * standing state of the room, so it is sent when the room CHANGES, never per
+ * turn. The bot is the only side that can see who is in the voice channel; the
+ * shim is the only side that runs the wake gate.
+ *
+ * Failure degrades toward the gate staying armed, which is the direction that
+ * cannot surprise anyone: an unreached endpoint keeps demanding the wake phrase
+ * rather than answering every sentence in a room it can no longer see.
+ */
+async function setVoiceSolo(solo) {
+  try {
+    const res = await fetch(`${config.baseUrl}/voice/solo`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        'X-Voice-Solo': solo ? 'true' : 'false',
+      },
+    });
+    if (res.ok) return { ok: true };
+    if (res.status === 404) return { ok: false, unsupported: true };
+    return { ok: false, error: `endpoint ${res.status}` };
+  } catch (e) {
+    return { ok: false, error: e.message, retryable: true };
+  }
+}
+
 /** Ask the backend to forget a conversation. Backends without the route say so. */
 async function resetSession(sessionKey) {
   const res = await fetch(`${config.baseUrl}/sessions/reset`, {
@@ -209,6 +238,7 @@ module.exports = {
   listSessions,
   bindSession,
   bindVoiceKey,
+  setVoiceSolo,
   availableSessions,
   sessionKeyFor,
   voiceKeyFor,

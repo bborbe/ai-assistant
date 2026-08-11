@@ -119,6 +119,11 @@ class Session {
     // chat-bridge posts arrive with no channel id (see postToChannel below),
     // so this is what lets the bot answer "which channel" on its own.
     this.channel = channel;
+    // Whether the operator is the only human here. Mirrors what the shim was
+    // last told, so both sides gate on the same fact. FALSE until proven
+    // otherwise — the safe direction, since being wrong the other way means
+    // answering every sentence of a conversation held with someone else.
+    this.solo = false;
     // Per-speaker buffers. Discord gives a separate stream per user (per SSRC),
     // which is the expensive half of any diarization pipeline — appending them
     // all to one buffer would throw that away AND garble the audio, since the
@@ -599,7 +604,12 @@ class Session {
         // re-evaluating here bounds any stuck state to "until you speak again"
         // instead of "until the cap". The `response.done` reset still exists;
         // this is the backstop for turns that never reach it.
-        this.answering = config.isAddressed(e.transcript);
+        // `this.solo` mirrors what the shim was last told. Both sides evaluate
+        // the wake rule — the shim decides what is answered, the bot needs the
+        // same verdict seconds earlier to raise the dots — so a drift between
+        // them costs a typing indicator with no answer behind it. One source
+        // (the room) posted to the shim and kept here is what keeps them level.
+        this.answering = this.solo || config.isAddressed(e.transcript);
         if (this.answering) this.showTyping();
         else log.debug('  voice: not addressed, no typing indicator');
         break;
@@ -866,6 +876,10 @@ async function join(channel) {
     session.names.set(id, member.displayName ?? member.user.username);
   }
   sessions.set(channel.guild.id, session);
+  // Awaited, unlike the voiceStateUpdate path: this must land BEFORE the first
+  // utterance, or the opening question of a private call is judged against a
+  // gate that is still armed from whatever the last call left behind.
+  await syncSolo(session, channel);
   log.info('voice: joined', { channel: channel.name, transcribing: Boolean(session.transcript) });
   return session;
 }
@@ -934,12 +948,24 @@ async function evictGhost(guild) {
 function noteVoiceState(oldState, newState) {
   const guildId = newState.guild?.id ?? oldState.guild?.id;
   const session = guildId ? sessions.get(guildId) : null;
-  if (!session?.transcript) return;
+  if (!session) return;
 
   const here = session.channelId;
   const was = oldState.channelId === here;
   const is = newState.channelId === here;
   if (was === is) return; // mute/deafen/camera — not an arrival or departure
+
+  // BEFORE the transcript guard below, and before the arrival is announced.
+  // Someone walking into a private conversation must re-arm the gate on their
+  // first breath, not on the first turn after it — and transcription is a
+  // separate setting, so a call with `TRANSCRIBE` off still has to notice the
+  // room changed. Fire-and-forget: the local flag is already correct, and
+  // blocking a Discord event handler on an HTTP round-trip would delay every
+  // other listener.
+  const channel = (is ? newState : oldState).guild?.channels?.cache?.get(here);
+  void syncSolo(session, channel);
+
+  if (!session.transcript) return;
 
   const member = newState.member ?? oldState.member;
   const userId = member?.id ?? newState.id ?? oldState.id;
@@ -948,6 +974,61 @@ function noteVoiceState(oldState, newState) {
 
   session.transcript.writeText(name, is ? '(joined the channel)' : '(left the channel)');
   log.info(`voice: ${is ? 'joined' : 'left'}`, { user: name });
+}
+
+/**
+ * Count the humans in a voice channel. Bots do not count — the assistant is
+ * itself a member of the channel it is listening to, so counting naively makes
+ * "alone" impossible to reach.
+ *
+ * Returns null when the channel cannot be read, which is NOT the same as zero:
+ * an unreadable room must leave the gate where it is rather than assert privacy
+ * it cannot see.
+ */
+function humansIn(channel) {
+  const members = channel?.members;
+  if (!members?.filter) return null;
+  return members.filter((m) => !m.user?.bot).size;
+}
+
+/**
+ * Recompute whether the operator is alone and tell the endpoint when it changed.
+ *
+ * Only posts on a CHANGE. The state is sticky on both sides, so re-sending it
+ * per voice event would be a request per mute, per camera toggle, per join
+ * anywhere in the guild — and the log line is worth reading precisely because it
+ * appears when the room actually changed.
+ */
+async function syncSolo(session, channel) {
+  const humans = humansIn(channel);
+  if (humans === null) return;
+  const solo = humans === 1;
+  if (solo === session.solo) return;
+  session.solo = solo;
+  const res = await llm.setVoiceSolo(solo);
+  if (res.unsupported) {
+    // The gate stays armed on an endpoint that never heard of the route, so
+    // this is a note about capability, not a failure.
+    log.info('voice: endpoint has no /voice/solo — wake phrase always required');
+    session.solo = false;
+    return;
+  }
+  if (res.error) {
+    // The shim still holds whatever it was told last, so the two sides have now
+    // drifted. Assume the armed state locally — matching what a shim that never
+    // got the message is doing — rather than answering unaddressed speech.
+    log.warn('voice: could not sync solo state, wake phrase stays required', {
+      error: res.error,
+    });
+    session.solo = false;
+    return;
+  }
+  log.info(
+    `voice: ${solo ? 'alone — wake phrase not required' : 'not alone — wake phrase required'}`,
+    {
+      humans,
+    },
+  );
 }
 
 function transcriptFor(guildId, channelId) {
@@ -1013,6 +1094,10 @@ module.exports = {
   transcriptFor,
   liveSessionFor,
   noteVoiceState,
+  // Exported for unit tests: "who is in the room" is the whole input to the
+  // wake-gate decision, and the bot-is-a-member case is exactly the one that
+  // makes "alone" unreachable if counted naively.
+  humansIn,
   postToChannel,
   // Exported for unit tests to exercise Session.prototype.speak against a
   // fake ws (no real audio pipeline needed) — see test/voice.test.js.
