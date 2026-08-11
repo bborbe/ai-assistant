@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- fix: a failed voice turn now says so in the channel and the transcript instead of going
+  silent. `case 'error'` only called `log.error`, so from inside Discord a failed answer
+  and an utterance the wake gate ignored were the same event — silence. On 2026-08-11 a
+  missing NLTK `punkt_tab` made every spoken answer die before synthesis for ~30 hours
+  while `/readiness` returned 200, all four launchd jobs were up and TTS warmup logged
+  success; diagnosis needed three log files. The reason now reaches both surfaces the
+  typed-turn busy path already writes to, and multi-line server errors are compacted to
+  one readable line (the NLTK error is ~20 lines of searched paths).
+- fix: an error event now clears `answering` / `inResponse` / `typedReplyPending`. A turn
+  that fails before any assistant text emits no `response.done`, so those flags stayed
+  raised and wedged every later `speak()` as permanently busy — visible during the same
+  outage as a typed turn refused with reason `busy` while nothing was in flight.
+
 ## v0.13.1
 
 - fix: the LaunchAgent `Label` now derives from `LAUNCHD_LABEL` instead of being hardcoded
