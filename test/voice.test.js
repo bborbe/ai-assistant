@@ -325,33 +325,41 @@ test('showTyping does not stack a second ticker on a repeated response.created',
   clearInterval(fake.typingTimer);
 });
 
+// These two carry a real `guildId`. Without one, `voiceKeyFor(undefined)` falls
+// back to `default` — so a keyless fake made them pass against BOTH the buggy
+// and the fixed code, which is how they came to assert `default` and quietly
+// contradict the regression test below.
 test('speak tells the endpoint the turn was typed, before sending anything', async () => {
   const ws = fakeWs();
-  const fake = { closed: false, ws, typedReplyPending: false };
+  const fake = { closed: false, ws, typedReplyPending: false, guildId: 'guild-1' };
   const pending = Session.prototype.speak.call(fake, 'what is my most important task');
   // Ordering is the whole point: the endpoint consumes the hint at the top of
   // the turn, so a hint that lands after the send is a hint that arrives too
   // late for the turn it describes.
-  assert.deepEqual(typedTurnCalls, [{ key: 'default', typed: true }]);
+  assert.deepEqual(typedTurnCalls, [{ key: 'voice:guild-1', typed: true }]);
   assert.equal(ws.sent.length, 0, 'nothing sent until the hint is in');
   await flush();
   assert.equal(ws.sent.length, 2);
   ws.emit('message', JSON.stringify({ type: 'response.created' }));
   await pending;
-  assert.deepEqual(typedTurnCalls, [{ key: 'default', typed: true }], 'not retracted on success');
+  assert.deepEqual(
+    typedTurnCalls,
+    [{ key: 'voice:guild-1', typed: true }],
+    'not retracted on success',
+  );
 });
 
 test('speak retracts the typed hint when the turn never happens', async () => {
   const ws = fakeWs();
-  const fake = { closed: false, ws, typedReplyPending: false };
+  const fake = { closed: false, ws, typedReplyPending: false, guildId: 'guild-1' };
   const pending = Session.prototype.speak.call(fake, 'hi', { timeoutMs: 20 });
   await flush();
   assert.deepEqual(await pending, { ok: false, reason: 'timeout' });
   // Otherwise the next unrelated SPOKEN reply inherits the flag and gets
   // posted to the channel as though someone had typed the question.
   assert.deepEqual(typedTurnCalls, [
-    { key: 'default', typed: true },
-    { key: 'default', typed: false },
+    { key: 'voice:guild-1', typed: true },
+    { key: 'voice:guild-1', typed: false },
   ]);
 });
 
