@@ -14,7 +14,7 @@
   ignored me" hunts this month ended at a filter that returned without saying so; from
   outside, an unaddressed message and a misrouted one are the same event.
 
-## Unreleased
+## v0.14.0
 
 - fix: a message typed into a live call's text chat is answered again. `speak()` sent the
   typed-turn hint on `DEFAULT_SESSION_KEY` with a comment claiming "voice always lands on
