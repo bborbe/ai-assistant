@@ -692,3 +692,35 @@ test('a multi-line server error is compacted to one readable line', async () => 
   assert.doesNotMatch(sent[0], /\n/, 'a chat notice must stay one line');
   assert.match(sent[0], /punkt_tab' not found/);
 });
+
+test('a busy refusal does not cut off the answer already being spoken', async () => {
+  const sent = [];
+  let endAudioCalls = 0;
+  const fake = fakeOnEventTarget({
+    channel: { send: async (t) => sent.push(t) },
+    endAudio: () => {
+      endAudioCalls += 1;
+    },
+    answering: true,
+    inResponse: true,
+  });
+
+  // conversation_already_has_active_response arrives BY DEFINITION while a
+  // response is in flight. Treating it as a dead turn would clear the flags and
+  // stop playback mid-answer -- and text.js already reports it for typed turns,
+  // so handling it here would also double-post.
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({
+      type: 'error',
+      error: { type: 'conversation_already_has_active_response', message: 'busy' },
+    }),
+  );
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(fake.answering, true, 'an in-flight answer must survive a busy refusal');
+  assert.equal(fake.inResponse, true);
+  assert.equal(endAudioCalls, 0, 'playback must not be stopped');
+  assert.equal(sent.length, 0, 'text.js already reports this one');
+  assert.equal(fake._transcriptWrites.length, 0);
+});

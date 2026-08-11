@@ -10,10 +10,14 @@
   success; diagnosis needed three log files. The reason now reaches both surfaces the
   typed-turn busy path already writes to, and multi-line server errors are compacted to
   one readable line (the NLTK error is ~20 lines of searched paths).
-- fix: an error event now clears `answering` / `inResponse` / `typedReplyPending`. A turn
-  that fails before any assistant text emits no `response.done`, so those flags stayed
-  raised and wedged every later `speak()` as permanently busy — visible during the same
-  outage as a typed turn refused with reason `busy` while nothing was in flight.
+- fix: a `response_failed` error now clears `answering` / `inResponse` / `typedReplyPending`.
+  A turn that fails before any assistant text emits no `response.done`, so those flags
+  stayed raised and wedged every later `speak()` as permanently busy — visible during the
+  same outage as a typed turn refused with reason `busy` while nothing was in flight. Both
+  behaviours are scoped to `response_failed` deliberately: a
+  `conversation_already_has_active_response` arrives while a response is in flight, so
+  treating it the same way would stop playback mid-answer, and every error on a typed turn
+  is already reported by `speak()`'s own listener via `src/text.js`.
 
 ## v0.13.1
 

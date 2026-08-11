@@ -655,6 +655,17 @@ class Session {
         break;
       case 'error': {
         log.error('  voice: s2s event error', JSON.stringify(e).slice(0, 200));
+        // ONLY `response_failed` — the type `_on_response_failed` sends — is a
+        // turn that died with no other reporter. The other error types must not
+        // reach the code below:
+        //   - `conversation_already_has_active_response` arrives BY DEFINITION
+        //     while a response is in flight, so clearing the flags and calling
+        //     endAudio() would cut off the answer being spoken.
+        //   - every error on a typed turn is already answered by speak()'s own
+        //     onAck listener, which text.js turns into exactly the notice and
+        //     transcript line written below — handling it here too would post
+        //     the same failure twice.
+        if (e.error?.type !== 'response_failed') break;
         const reason = reasonLine(e.error?.message || e.error?.type);
         // A turn that fails before any assistant text emits NO `response.done`,
         // so the flags that event normally clears stay raised — `answering`
