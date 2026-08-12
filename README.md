@@ -219,3 +219,7 @@ Diagnostics from the spikes that proved each leg, kept because they isolate faul
 - `to16k.py` — mono mix + `soxr` HQ resample to 16 kHz.
 - `transcriber.py` — watches for voice segments and appends the speaker-labelled transcript. Dependencies are declared inline (PEP 723), so `uv run` resolves them and no speech-to-speech checkout is needed.
 - `realtime_probe.py` — send a WAV to the speech-to-speech realtime socket and report every event type it emits. Proves the endpoint with no Discord involved; the reference for the protocol handling in `src/voice.js`.
+
+## License
+
+BSD-3-Clause. See [LICENSE](LICENSE).

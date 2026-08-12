@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- chore: repo is public — add BSD-3-Clause LICENSE, set `package.json` license (was `UNLICENSED`), add README License section.
+
 ## v0.14.0
 
 - fix: mentioning the bot's ROLE now addresses it, like mentioning the bot user does.
