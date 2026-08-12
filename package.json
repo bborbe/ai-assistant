@@ -15,7 +15,7 @@
     "format": "prettier --write .",
     "shim": "python3 -u shim/claude_openai_shim.py"
   },
-  "license": "UNLICENSED",
+  "license": "BSD-3-Clause",
   "dependencies": {
     "@discordjs/voice": "^0.19.2",
     "discord.js": "^14.27.0",
