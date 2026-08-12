@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.14.1
 
 - chore: repo is public — add BSD-3-Clause LICENSE, set `package.json` license (was `UNLICENSED`), add README License section.
 
