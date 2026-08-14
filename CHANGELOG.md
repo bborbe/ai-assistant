@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- feat: send `reasoning_effort: none` on front-tier requests, so a local reasoning model reached over an OpenAI-compatible endpoint cannot spend the whole token budget thinking and return empty content — which ended the turn silently instead of falling through to Claude.
+
 ## v0.14.1
 
 - chore: repo is public — add BSD-3-Clause LICENSE, set `package.json` license (was `UNLICENSED`), add README License section.
