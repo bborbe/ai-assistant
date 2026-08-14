@@ -410,6 +410,27 @@ _FACTUAL = re.compile(r"""(
         |deploys?|logs?|transcripts?|objectives?|goals?|commits?
         |branch(es)?|tests?|errors?|meetings?|calendars?|plans?
         |sessions?|projects?|tickets?|issues?|prs?|reviews?)\b
+    # INFRASTRUCTURE, added 2026-08-14 after a live fabrication. The list above
+    # covers the user's WORK — tasks, notes, repos — because that is what the
+    # assistant was originally asked about. It does not cover the user's own
+    # SETUP, and a growing share of spoken questions are exactly that.
+    #
+    # "Can you now give me a complete answer? Can we run the benchmark against
+    # the router?" matches nothing above: no interrogative in the first list, no
+    # `my`/`our`, and neither "benchmark" nor "router" was a known noun. It went
+    # to the front tier, which answered "No — not yet because the necessary
+    # router components are missing" — a confident invention about the user's own
+    # router, spoken aloud. Same shape as the 2026-08-04 incident, different
+    # vocabulary.
+    #
+    # The asymmetry rule decides the breadth here: a needless consult costs a
+    # second, a missed one puts an invented fact in the assistant's mouth. These
+    # can only push turns TOWARD Claude — `looks_factual` returns early for
+    # anything the chitchat whitelist already matched, so small talk is unaffected.
+    | \b(routers?|benchmarks?|models?|endpoints?|shims?|servers?|clusters?
+        |pods?|services?|apis?|configs?|configuration(s)?|settings?
+        |subscriptions?|accounts?|keys?|tokens?|costs?|latency|throughput
+        |containers?|images?|builds?|releases?|versions?)\b
     | \b(my|our)\b
 )""", re.I | re.X)
 

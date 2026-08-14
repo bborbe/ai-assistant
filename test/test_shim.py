@@ -145,3 +145,54 @@ class SoloGate(unittest.TestCase):
         # on the ordinary case rather than eating the first words.
         shim.set_solo(True)
         self.assertEqual(shim.strip_wake_phrase("what's my next task"), "what's my next task")
+
+
+class LooksFactual(unittest.TestCase):
+    """The backstop that forces a consult regardless of what the front tier chose.
+
+    This is the layer that fails toward SLOW. Where it does not match, the only
+    thing standing between the user and an invented fact is the front model
+    deciding to refuse — and it has now been observed not to, twice, on two
+    different models and two different vocabularies.
+    """
+
+    def test_the_2026_08_14_infrastructure_fabrication(self):
+        # Verbatim from the live transcript. Matched nothing: no interrogative
+        # in the first alternation, no `my`/`our`, and neither "benchmark" nor
+        # "router" was a known noun. The front tier answered it itself with
+        # "No — not yet because the necessary router components are missing",
+        # an invention about the user's own setup, spoken aloud.
+        self.assertTrue(shim.looks_factual(
+            "Can you now give me a complete answer? Can we run the benchmark "
+            "against the router?"))
+
+    def test_the_2026_08_04_plural_fabrication(self):
+        # The original incident: \btask\b cannot match "tasks", so this reached
+        # the front tier and came back with an invented task name, count and
+        # due date. Pinned here so the plurals cannot regress.
+        self.assertTrue(shim.looks_factual("can you list all active tasks?"))
+
+    def test_infrastructure_nouns_force_a_consult(self):
+        # A growing share of spoken questions are about the setup rather than
+        # the work. Each of these must reach Claude even if phrased with no
+        # interrogative and no possessive.
+        for text in (
+            "is the router still on the old config",
+            "run the benchmark again",
+            "which model are we using",
+            "the shim seems slow",
+            "check the endpoint",
+            "how much does the subscription cost",
+            "what version shipped",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(shim.looks_factual(text))
+
+    def test_small_talk_is_not_dragged_into_a_consult(self):
+        # looks_factual returns early for anything the chitchat whitelist
+        # matched, so widening the noun list must not cost a greeting its
+        # sub-second answer. This is the property that makes broadening safe.
+        for text in ("hello", "thanks a lot", "good evening", "how are you",
+                     "can you hear me", "bye"):
+            with self.subTest(text=text):
+                self.assertFalse(shim.looks_factual(text))
