@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- fix: route infrastructure questions to Claude — `_FACTUAL` covered the user's work (tasks, notes, repos) but not their own setup, so "can we run the benchmark against the router?" reached the front tier, which answered with an invented claim about the router. Adds router/benchmark/model/endpoint/config/subscription and similar nouns, pinned by tests.
+
 ## v0.15.0
 
 - feat: send `reasoning_effort: none` on front-tier requests, so a local reasoning model reached over an OpenAI-compatible endpoint cannot spend the whole token budget thinking and return empty content — which ended the turn silently instead of falling through to Claude.
