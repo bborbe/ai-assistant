@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.15.1
 
 - fix: route infrastructure questions to Claude — `_FACTUAL` covered the user's work (tasks, notes, repos) but not their own setup, so "can we run the benchmark against the router?" reached the front tier, which answered with an invented claim about the router. Adds router/benchmark/model/endpoint/config/subscription and similar nouns, pinned by tests.
 
