@@ -557,6 +557,23 @@ def front_route(key: str, prompt: str) -> tuple[str, bool]:
         # see patches/speech-to-speech-minimax-thinking.patch for the same fix in
         # the other client. Harmlessly ignored by non-MiniMax endpoints.
         "thinking": {"type": "disabled"},
+        # The same job for OpenAI-shaped endpoints, and NOT redundant with the
+        # key above — each is honoured by a disjoint set of providers.
+        #
+        # A local reasoning model reached through Ollama's /v1 endpoint ignores
+        # `thinking` entirely and spends the whole max_tokens budget thinking,
+        # returning EMPTY content with finish_reason "length". Measured
+        # 2026-08-14 on gemma4:e2b-mlx: 2 of 6 chitchat prompts came back empty;
+        # with this flag, 0 of 10. The failure is silent and lands in the worst
+        # place — front_route returns ("", False) for a non-factual prompt, so
+        # want_claude is False and the turn ends having said NOTHING, rather
+        # than falling through to Claude. Same shape as the other "0 chars"
+        # outages: nothing errors, /readiness stays 200.
+        #
+        # Ollama's own `"think": false` does nothing on the /v1 endpoint, and a
+        # Modelfile `PARAMETER think` is rejected as unknown (0.32.7) — the
+        # request body is the only lever.
+        "reasoning_effort": "none",
     }).encode()
     req = urllib.request.Request(
         f"{FRONT_BASE_URL}/chat/completions", data=body,
