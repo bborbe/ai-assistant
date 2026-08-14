@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.15.0
 
 - feat: send `reasoning_effort: none` on front-tier requests, so a local reasoning model reached over an OpenAI-compatible endpoint cannot spend the whole token budget thinking and return empty content — which ended the turn silently instead of falling through to Claude.
 
