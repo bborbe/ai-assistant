@@ -88,6 +88,32 @@ transcript_dir: ~/Documents/Obsidian/Personal/60 Periodic Notes/Transcripts
 # `voice:<guildId>:<identity>`).
 #   "123456789012345678":       # a guild, for a bot with no IDENTITY set
 #     cwd: ~/Documents/Obsidian/StarCitizen
+#
+# strict: true                 # opt-in, default false — see below
+
+# ── identities.strict (opt-in, default OFF) ────────────────────────────────
+# WHY THIS EXISTS: the fallback above is the ONE thing in this shim that
+# fails OPEN. Every other guard fails closed — an empty CHAT_BRIDGE_TOKEN
+# refuses all posts, a malformed identities entry above warns and skips, a
+# 404 from /voice/bind degrades to one shared conversation — but a turn whose
+# key names no identity, or an identity absent from the map above, is served
+# by the top-level cwd/claude_script at the head of this file, which is the
+# MOST PRIVILEGED persona on the machine: the Personal vault, and
+# cc-personal's --add-dir over every repo under ~/Documents/workspaces. A
+# new bot whose IDENTITY is unset, misspelled, or missing an entry above
+# does not error — it silently inherits that access.
+#
+# With `identities:` non-empty and `strict: true`, such a turn is REFUSED
+# (HTTP 403, no process spawned) instead of served by the default. Default
+# is OFF and only takes effect when `identities:` is also configured — a
+# fresh single-identity install has no `identities:` block at all and keeps
+# resolving to the default silently, which is correct for that shape, not a
+# misconfiguration. Even with strict off, a turn that falls back to the
+# default while `identities:` is configured logs a WARNING (once per key)
+# naming which case it was, so the drift is visible in the log either way.
+#
+# strict: true
+# SHIM_IDENTITIES_STRICT=1 works the same, env-first like every other setting.
 
 # ── serving ────────────────────────────────────────────────────────────────
 host: 127.0.0.1
