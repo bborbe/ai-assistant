@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: text session keys carry persona the same way voice already does — `thread:<channelId>:<identity>` / `channel:<channelId>:<identity>` / `dm:<userId>:<identity>` when `IDENTITY` is set, unchanged 2-segment forms when unset. Multiple Discord identities can now share one guild: without the identity segment, two identities typing in the same channel collided on one `thread:`/`channel:`/`dm:` key and shared one Claude Code session, so a text turn from any identity resumed whichever identity's conversation was there and spawned it under the wrong cwd. `identity_for()` in the shim resolves the identity from the LAST segment of any prefix, falling back to the 2-segment guild-id lookup for voice only and to the instance default otherwise — mirroring the `v0.16.1` voice fix. Existing 2-segment text sessions stay reachable for a bot with no `IDENTITY` set; a bot that gains `IDENTITY` starts fresh conversations rather than silently adopting whatever the 2-segment key already held — that is intended, not a bug.
+
 ## v0.16.1
 
 - fix: voice session/persona routing keyed by the wrong axis — `identity_for(key)` resolved persona from the GUILD id, so two identities sharing a guild collided on one `voice:<guildId>` session and one identity serving several guilds fragmented into several personas. `IDENTITY` (bot env) now names the identity; when set, the bound key becomes `voice:<guildId>:<identity>` and the shim resolves persona from the identity segment, keeping the guild segment only to keep sessions apart. Unset reproduces `v0.16.0` exactly; a `v0.16.0` guild-id-keyed `identities:` config still resolves for any bot that has no `IDENTITY` set.

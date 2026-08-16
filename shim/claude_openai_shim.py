@@ -361,7 +361,7 @@ IDENTITIES = _load_identities()
 
 
 def identity_for(key: str) -> dict:
-    """Resolve {cwd, claude_script, mcp_config, allowed_tools} for a session key.
+    """Resolve {cwd, claude_script, mcp_config, allowed_tools} for a turn.
 
     This is the routing fix itself: everything that used to read the
     module-level CWD / CLAUDE_SCRIPT / MCP_CONFIG / ALLOWED_TOOLS constants
@@ -369,33 +369,63 @@ def identity_for(key: str) -> dict:
     conversation a turn belongs to rather than a process-wide constant every
     identity shared by accident.
 
-    Only voice keys (`voice:<guildId>` or `voice:<guildId>:<identity>`) carry
-    anything to look up — a text key (`thread:`/`dm:`/`channel:`) names a
-    channel or user, not a guild or identity, so it always resolves to this
-    instance's own defaults. Consolidating identity resolution for text
-    surfaces is a separate concern (they are driven by per-instance Discord
-    bot processes, not by session key), so it is deliberately not attempted
-    here.
+    Identity rides in the KEY for every surface, not just voice — a header
+    was tried first and dropped: two bots in the SAME Discord channel produce
+    the IDENTICAL `thread:`/`channel:`/`dm:` key, so a header fixes which
+    persona a process spawns with but does NOT separate the sessions — one
+    identity would resume the conversation another was holding, then spawn
+    it under the wrong cwd. Only the key can do both jobs at once, which is
+    why voice already worked this way and text now matches it:
+
+    - `voice:<guildId>:<identity>` — unchanged since `v0.16.1`.
+      `speech-to-speech` owns the HTTP call for a spoken turn and cannot set
+      `X-Session-Key` at all, which is why the bot binds this key out of band
+      instead (`bind_voice_key`) — see the module docstring above.
+    - `thread:<channelId>:<identity>` / `channel:<channelId>:<identity>` /
+      `dm:<userId>:<identity>` — the bot DOES own `X-Session-Key` on every
+      text surface, so it embeds identity there uniformly rather than
+      needing a second mechanism. Before this, a text key carried no
+      identity at all and every text turn from every identity resolved to
+      this instance's own default persona.
+
+    The identity segment is always LAST regardless of prefix, so resolution
+    is one rule for every surface: split off the prefix, then split the
+    remainder on `:`. A 3-segment key resolves by IDENTITY, in whichever
+    segment it lands. A 2-segment key falls through to the identity map
+    keyed by GUILD id — but only for voice: `thread:111`/`dm:111`/
+    `channel:111` name a channel or user, never a guild, so a bare 2-segment
+    text key must never accidentally pick up a guildId entry that happens to
+    share the string. An unconfigured identity name falls back to this
+    instance's own default rather than crashing or guessing.
 
     Persona and session are different axes and the key format reflects it:
-    the guild segment keeps sessions apart (two identities in one guild get
-    two conversations), the optional identity segment is what picks persona
-    (one identity across two guilds gets one persona). A `voice:<guildId>`
-    key with no third segment means the bot never set `IDENTITY` — this
-    instance behaves exactly as `v0.16.0` did, resolving persona by guild id
-    for backward compatibility with that config shape.
+    the guild/channel/user segment keeps sessions apart (two identities
+    sharing one channel get two conversations), the optional identity
+    segment is what picks persona (one identity across several
+    guilds/channels gets one persona). A key with no identity segment means
+    the bot never set `IDENTITY` — this instance behaves exactly as
+    `v0.16.0`/pre-identity did, resolving voice by guild id and text by
+    instance default, for backward compatibility with that config shape.
     """
     defaults = {"cwd": CWD, "claude_script": CLAUDE_SCRIPT,
                 "mcp_config": MCP_CONFIG, "allowed_tools": ALLOWED_TOOLS}
-    if not key.startswith(VOICE_KEY_PREFIX):
+    prefix, sep, rest = key.partition(":")
+    if not sep:
         return defaults
-    rest = key[len(VOICE_KEY_PREFIX):]
-    guild_id, sep, identity = rest.partition(":")
-    # 3-segment key (`voice:<guildId>:<identity>`): persona is resolved by
-    # IDENTITY, never by guild — that is the whole point of the segment.
-    # 2-segment key (`voice:<guildId>`, no `IDENTITY` set on the bot): the
-    # v0.16.0 lookup, unchanged — resolve by guild id.
-    overrides = IDENTITIES.get(identity) if sep else IDENTITIES.get(guild_id)
+    first, sep2, identity = rest.partition(":")
+    if sep2:
+        # 3-segment key of ANY prefix — identity always lands in the last
+        # segment, resolved by IDENTITY, never by guild/channel/user even
+        # when that segment's value happens to match a configured one.
+        overrides = IDENTITIES.get(identity)
+    elif f"{prefix}:" == VOICE_KEY_PREFIX:
+        # 2-segment `voice:<guildId>`, no `IDENTITY` set on the bot — the
+        # v0.16.0 lookup, unchanged: resolve by guild id.
+        overrides = IDENTITIES.get(first)
+    else:
+        # 2-segment text key (`thread:<id>`/`dm:<id>`/`channel:<id>`) — never
+        # a guild, so never consults the guild-keyed map.
+        overrides = None
     if not overrides:
         return defaults
     return {**defaults, **overrides}
@@ -1392,9 +1422,10 @@ class ClaudeProcess:
         # Persona/cwd/launcher/tools are resolved PER KEY, not read off the
         # module-level CWD/CLAUDE_SCRIPT/MCP_CONFIG/ALLOWED_TOOLS constants —
         # see `identity_for()`. That is the actual routing fix: a second
-        # identity's voice key (`voice:<guildId>`) now spawns its own process
-        # against its own cwd, rather than every guild's spoken turns landing
-        # in this instance's one default persona.
+        # identity's key — `voice:<guildId>:<identity>` or
+        # `thread:`/`channel:`/`dm:<id>:<identity>` — now spawns its own
+        # process against its own cwd, rather than every turn landing in
+        # this instance's one default persona.
         identity = identity_for(key)
         cwd = identity["cwd"]
         claude_script = identity["claude_script"]
@@ -2388,5 +2419,5 @@ if __name__ == "__main__":
         for guild_id, overrides in sorted(IDENTITIES.items()):
             print(f"  identity {guild_id} -> cwd={overrides.get('cwd', CWD)}")
     else:
-        print("  identities  none configured — every voice key resolves to the default persona")
+        print("  identities  none configured — every key resolves to the default persona")
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

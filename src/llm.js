@@ -141,7 +141,10 @@ async function setVoiceSolo(solo) {
 async function resetSession(sessionKey) {
   const res = await fetch(`${config.baseUrl}/sessions/reset`, {
     method: 'POST',
-    headers: { 'X-Session-Key': sessionKey, Authorization: `Bearer ${config.apiKey}` },
+    headers: {
+      'X-Session-Key': sessionKey,
+      Authorization: `Bearer ${config.apiKey}`,
+    },
   });
   if (!res.ok) throw new Error(`endpoint ${res.status} — does it support sessions?`);
   return res.json();
@@ -215,18 +218,19 @@ const DEFAULT_SESSION_KEY = 'default';
  * one call at a time, and moving between channels in the same server is
  * continuing the same conversation.
  *
- * When this process has `IDENTITY` set, the guild is not enough on its own —
- * see `voiceKeyFor` for why the identity rides along in the key too.
+ * When this process has `IDENTITY` set, the guild/channel/user id is not
+ * enough on its own — see `voiceKeyFor` and `textKeyFor` for why the
+ * identity rides along in the key too, on EVERY surface, not just voice.
  *
  * Clearing a session is only safe because anything worth keeping is written to
  * the vault — see the shim's MEMORY_DIRECTIVE. The session is a cache; the
  * vault is the record.
  */
 function sessionKeyFor(channel, userId) {
-  if (channel?.isThread?.()) return `thread:${channel.id}`;
-  if (!channel?.guild) return `dm:${userId}`;
+  if (channel?.isThread?.()) return textKeyFor('thread', channel.id);
+  if (!channel?.guild) return textKeyFor('dm', userId);
   if (channel?.isVoiceBased?.()) return voiceKeyFor(channel.guild.id);
-  return `channel:${channel.id}`;
+  return textKeyFor('channel', channel.id);
 }
 
 /**
@@ -247,6 +251,33 @@ function sessionKeyFor(channel, userId) {
 function voiceKeyFor(guildId) {
   if (!guildId) return DEFAULT_SESSION_KEY;
   return config.identity ? `voice:${guildId}:${config.identity}` : `voice:${guildId}`;
+}
+
+/**
+ * The conversation a text turn on `prefix:<id>` belongs to.
+ *
+ * A header was tried here first and dropped: multiple Discord identities can
+ * share one guild (three bots in the same server, confirmed in production),
+ * so two identities in the SAME channel/thread/DM produce the IDENTICAL
+ * `thread:`/`channel:`/`dm:` key. A header fixes which persona a process
+ * spawns WITH, but not which session it resumes — the shim's session store
+ * is keyed by the string alone, so a header-only fix would have one identity
+ * resume the conversation another was holding, then spawn it under the
+ * wrong cwd. Only the key can separate the sessions AND pick the persona at
+ * once, which is exactly what `voiceKeyFor` already relies on for voice —
+ * this mirrors it for every surface the bot itself owns `X-Session-Key` for.
+ *
+ * With `config.identity` unset this reproduces the pre-existing
+ * `<prefix>:<id>` key exactly — an existing single-identity deployment needs
+ * no config change and keeps resuming its existing sessions. Set, it becomes
+ * `<prefix>:<id>:<identity>`, a NEW session: an existing 2-segment session on
+ * disk stays reachable for a bot with no `IDENTITY` set, but a bot that
+ * gains `IDENTITY` starts fresh conversations rather than silently adopting
+ * whatever the 2-segment key already held. That is intended, not a bug —
+ * see `identity_for()` in the shim.
+ */
+function textKeyFor(prefix, id) {
+  return config.identity ? `${prefix}:${id}:${config.identity}` : `${prefix}:${id}`;
 }
 
 module.exports = {

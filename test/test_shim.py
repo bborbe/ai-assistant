@@ -62,6 +62,17 @@ class IsVoiceTurn(unittest.TestCase):
             with self.subTest(key=key):
                 self.assertFalse(shim.is_voice_turn("", key))
 
+    def test_identity_keyed_text_surfaces_are_still_not_spoken(self):
+        # Text now gains a 3rd segment too (`thread:<id>:<identity>` etc.) —
+        # classification keys on the PREFIX only, so an identity segment must
+        # not flip a text key to spoken any more than it flips a voice key to
+        # text. Pinned per-prefix: this is the exact shape change that broke
+        # the wake gate once already (see the class docstring).
+        for key in ("thread:123:sc", "dm:456:sc", "channel:789:sc"):
+            with self.subTest(key=key):
+                self.assertFalse(shim.is_voice_turn("", key))
+        self.assertTrue(shim.is_voice_turn("", "voice:123:sc"))
+
     def test_prompt_sniff_still_catches_a_client_that_sends_neither(self):
         self.assertTrue(
             shim.is_voice_turn("", "channel:789", "you are in a spoken conversation")
@@ -189,6 +200,38 @@ class IdentityForKey(unittest.TestCase):
 
     def test_legacy_default_key_resolves_to_the_instance_default(self):
         self.assertEqual(shim.identity_for(shim.DEFAULT_KEY)["cwd"], shim.CWD)
+
+    def test_a_3_segment_text_key_resolves_that_identity(self):
+        # THE GAP THIS PR CLOSES: a 2-segment text key (`thread:`/`dm:`/
+        # `channel:`) carries no identity on its own — a bot with `IDENTITY`
+        # set now embeds it as a third segment, exactly like voice already
+        # does, so it resolves the same way `identity_for` already resolves
+        # a 3-segment voice key.
+        resolved = shim.identity_for("thread:H1:sc")
+        self.assertEqual(resolved["cwd"], "/tmp/sc")
+        self.assertEqual(resolved["claude_script"], "/tmp/cc-sc")
+
+    def test_a_2_segment_text_key_falls_back_to_the_instance_default(self):
+        # No `IDENTITY` set on the bot — the pre-existing shape, unchanged.
+        resolved = shim.identity_for("thread:H1")
+        self.assertEqual(resolved["cwd"], shim.CWD)
+
+    def test_two_identities_in_one_channel_resolve_to_different_personas(self):
+        # THE LEAK THIS FIX EXISTS TO PREVENT: multiple Discord identities
+        # can share one guild, so two bots typing in the SAME channel
+        # produce the IDENTICAL 2-segment key without the identity segment —
+        # a header could not have separated the SESSIONS, only the persona
+        # a process spawns with. The key does both at once.
+        shim.IDENTITIES["boss"] = {"cwd": "/tmp/boss"}
+        as_sc = shim.identity_for("channel:H1:sc")
+        as_boss = shim.identity_for("channel:H1:boss")
+        self.assertEqual(as_sc["cwd"], "/tmp/sc")
+        self.assertEqual(as_boss["cwd"], "/tmp/boss")
+
+    def test_unknown_identity_in_a_text_key_falls_back_to_default_not_a_crash(self):
+        resolved = shim.identity_for("dm:U1:nonexistent")
+        self.assertEqual(resolved["cwd"], shim.CWD)
+        self.assertEqual(resolved["claude_script"], shim.CLAUDE_SCRIPT)
 
 
 class LoadIdentitiesFromConfig(unittest.TestCase):

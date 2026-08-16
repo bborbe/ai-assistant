@@ -149,6 +149,65 @@ test('two transcript lines written in the same millisecond both survive', () => 
   for (const f of files) assert.match(f, /^\d+-.+-\d+\.txt$/);
 });
 
+test('IDENTITY unset reproduces existing thread/dm/channel keys exactly', () => {
+  // No behaviour change for an existing single-identity deployment — same
+  // guarantee `voiceKeyFor` already gives for voice.
+  delete process.env.IDENTITY;
+  delete require.cache[require.resolve('../src/config')];
+  delete require.cache[require.resolve('../src/llm')];
+  const { sessionKeyFor } = require('../src/llm');
+  assert.equal(
+    sessionKeyFor(channel({ id: 'H1', guild: {}, isThread: () => true }), 'U9'),
+    'thread:H1',
+  );
+  assert.equal(sessionKeyFor(channel({ id: 'T1', guild: {} }), 'U9'), 'channel:T1');
+  assert.equal(sessionKeyFor(channel({ id: 'D1' }), 'U9'), 'dm:U9');
+});
+
+test('IDENTITY set adds a third segment to thread/dm/channel keys', () => {
+  // THE GAP THIS PR CLOSES: a header was tried first and dropped — multiple
+  // identities sharing one Discord guild produce the IDENTICAL
+  // thread:/channel:/dm: key, so only the KEY (not a header) can separate
+  // their sessions. This mirrors voiceKeyFor's `:<identity>` suffix.
+  process.env.IDENTITY = 'sc';
+  delete require.cache[require.resolve('../src/config')];
+  delete require.cache[require.resolve('../src/llm')];
+  const { sessionKeyFor } = require('../src/llm');
+  try {
+    assert.equal(
+      sessionKeyFor(channel({ id: 'H1', guild: {}, isThread: () => true }), 'U9'),
+      'thread:H1:sc',
+    );
+    assert.equal(sessionKeyFor(channel({ id: 'T1', guild: {} }), 'U9'), 'channel:T1:sc');
+    assert.equal(sessionKeyFor(channel({ id: 'D1' }), 'U9'), 'dm:U9:sc');
+  } finally {
+    delete process.env.IDENTITY;
+    delete require.cache[require.resolve('../src/config')];
+    delete require.cache[require.resolve('../src/llm')];
+  }
+});
+
+test('two identities in the same channel produce different session keys', () => {
+  // THE LEAK THIS FIX EXISTS TO PREVENT: three bots now share one guild in
+  // production — without the identity segment, two of them typing in the
+  // SAME channel would collide on one `channel:<id>` key and resume each
+  // other's conversation under the wrong cwd.
+  process.env.IDENTITY = 'personal';
+  delete require.cache[require.resolve('../src/config')];
+  delete require.cache[require.resolve('../src/llm')];
+  const asPersonal = require('../src/llm').sessionKeyFor(channel({ id: 'T1', guild: {} }), 'U9');
+
+  process.env.IDENTITY = 'boss';
+  delete require.cache[require.resolve('../src/config')];
+  delete require.cache[require.resolve('../src/llm')];
+  const asBoss = require('../src/llm').sessionKeyFor(channel({ id: 'T1', guild: {} }), 'U9');
+
+  assert.notEqual(asPersonal, asBoss);
+  delete process.env.IDENTITY;
+  delete require.cache[require.resolve('../src/config')];
+  delete require.cache[require.resolve('../src/llm')];
+});
+
 test('bindVoiceKey distinguishes unsupported from broken', async () => {
   // The bot may not depend on which backend sits behind OPENAI_BASE_URL, so a
   // stateless endpoint with no /voice/bind must degrade to one shared voice
