@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- feat: per-guild persona/cwd routing in the shim (`identities:` in `config.yaml`) — a voice turn's session key (`voice:<guildId>`) now resolves its own `cwd`/`claude_script`/`mcp_config`/`allowed_tools`, so multiple Discord identities can share the one shim `speech-to-speech` is wired to without a spoken turn ever answering with another identity's persona, session store or vault. Unconfigured guilds keep behaving exactly as before.
+
 ## v0.15.1
 
 - fix: route infrastructure questions to Claude — `_FACTUAL` covered the user's work (tasks, notes, repos) but not their own setup, so "can we run the benchmark against the router?" reached the front tier, which answered with an invented claim about the router. Adds router/benchmark/model/endpoint/config/subscription and similar nouns, pinned by tests.

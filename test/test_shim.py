@@ -95,6 +95,116 @@ class VoiceKeyBinding(unittest.TestCase):
         self.assertTrue(shim.is_voice_turn("", shim.voice_key()))
 
 
+class IdentityForKey(unittest.TestCase):
+    """Which cwd/launcher/mcp/tools a session key resolves to.
+
+    THE ROUTING FIX: `ClaudeProcess` used to read the module-level CWD
+    constant no matter which key spawned it, so every identity's spoken turns
+    landed in this instance's one default persona regardless of which guild
+    was actually talking — s2s wires its backend once at process startup, so
+    the shim itself has to make persona a function of the key.
+    """
+
+    def setUp(self):
+        self._previous = shim.IDENTITIES
+        shim.IDENTITIES = {
+            "111": {"cwd": "/tmp/guild-a", "claude_script": "/tmp/cc-a"},
+            "222": {"cwd": "/tmp/guild-b"},   # only cwd overridden
+        }
+
+    def tearDown(self):
+        shim.IDENTITIES = self._previous
+
+    def test_an_unconfigured_guild_falls_back_to_the_instance_default(self):
+        resolved = shim.identity_for("voice:999")
+        self.assertEqual(resolved["cwd"], shim.CWD)
+        self.assertEqual(resolved["claude_script"], shim.CLAUDE_SCRIPT)
+
+    def test_a_configured_guild_gets_its_own_cwd_and_launcher(self):
+        resolved = shim.identity_for("voice:111")
+        self.assertEqual(resolved["cwd"], "/tmp/guild-a")
+        self.assertEqual(resolved["claude_script"], "/tmp/cc-a")
+
+    def test_fields_left_unset_for_a_guild_still_fall_back_to_the_default(self):
+        # Guild 222 overrides only cwd — claude_script/mcp_config/allowed_tools
+        # must come from the instance default, not go missing or empty.
+        resolved = shim.identity_for("voice:222")
+        self.assertEqual(resolved["cwd"], "/tmp/guild-b")
+        self.assertEqual(resolved["claude_script"], shim.CLAUDE_SCRIPT)
+        self.assertEqual(resolved["mcp_config"], shim.MCP_CONFIG)
+        self.assertEqual(resolved["allowed_tools"], shim.ALLOWED_TOOLS)
+
+    def test_text_surfaces_never_consult_the_guild_map(self):
+        # thread:/dm:/channel: keys name a channel or user, never a guild —
+        # identity_for must not misread a channel/user id as a guild id that
+        # happens to collide with a configured one.
+        for key in ("thread:111", "dm:111", "channel:111"):
+            with self.subTest(key=key):
+                self.assertEqual(shim.identity_for(key)["cwd"], shim.CWD)
+
+    def test_legacy_default_key_resolves_to_the_instance_default(self):
+        self.assertEqual(shim.identity_for(shim.DEFAULT_KEY)["cwd"], shim.CWD)
+
+
+class LoadIdentitiesFromConfig(unittest.TestCase):
+    """Parsing the `identities:` block out of config.yaml's shape.
+
+    A typo here must degrade to "no per-identity routing", never take the
+    shim down — the same rule the rest of `_load_config()` already follows.
+    """
+
+    def setUp(self):
+        self._previous_cfg = shim._CFG
+
+    def tearDown(self):
+        shim._CFG = self._previous_cfg
+
+    def test_a_non_mapping_identities_block_is_ignored_not_fatal(self):
+        shim._CFG = {"identities": "not a mapping"}
+        self.assertEqual(shim._load_identities(), {})
+
+    def test_a_non_mapping_guild_entry_is_skipped_not_fatal(self):
+        shim._CFG = {"identities": {"111": "not a mapping", "222": {"cwd": "/tmp/x"}}}
+        out = shim._load_identities()
+        self.assertNotIn("111", out)
+        self.assertEqual(out["222"]["cwd"], "/tmp/x")
+
+    def test_only_recognised_fields_are_carried_over(self):
+        shim._CFG = {"identities": {"111": {"cwd": "/tmp/x", "bogus": "ignored"}}}
+        out = shim._load_identities()
+        self.assertEqual(set(out["111"]), {"cwd"})
+
+    def test_a_missing_identities_block_yields_no_overrides(self):
+        shim._CFG = {}
+        self.assertEqual(shim._load_identities(), {})
+
+
+class TranscriptDirPerKey(unittest.TestCase):
+    """Which cwd's project transcripts a key resolves to.
+
+    A second identity's resumable-session listing must come from ITS cwd
+    slug, not this instance's default one — otherwise `/v1/sessions/available`
+    offers guild B someone else's conversations to resume into.
+    """
+
+    def setUp(self):
+        self._previous = shim.IDENTITIES
+        shim.IDENTITIES = {"111": {"cwd": "/tmp/guild-a"}}
+
+    def tearDown(self):
+        shim.IDENTITIES = self._previous
+
+    def test_empty_key_keeps_the_instance_default_cwd(self):
+        self.assertEqual(shim.transcript_dir(""), shim.transcript_dir())
+
+    def test_a_configured_guild_key_resolves_under_its_own_cwd(self):
+        expected_slug = str(shim.Path("/tmp/guild-a").resolve()).replace("/", "-")
+        self.assertTrue(str(shim.transcript_dir("voice:111")).endswith(expected_slug))
+
+    def test_an_unconfigured_voice_key_matches_the_default(self):
+        self.assertEqual(shim.transcript_dir("voice:999"), shim.transcript_dir(""))
+
+
 if __name__ == "__main__":
     unittest.main()
 

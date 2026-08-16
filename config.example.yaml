@@ -38,6 +38,30 @@ sessions_file: ~/.claude/shim-sessions.json
 # Told to the assistant so it knows the call is being written down, and where.
 transcript_dir: ~/Documents/Obsidian/Personal/60 Periodic Notes/Transcripts
 
+# ── per-identity persona (voice) ───────────────────────────────────────────
+# Lets multiple Discord identities share this ONE shim — and the one
+# `speech-to-speech` process every voice call goes through — without
+# answering with each other's persona, session store or vault.
+#
+# WHY THIS EXISTS: speech-to-speech wires its backend at process startup and
+# never changes it, so every spoken turn from EVERY identity's bot reaches
+# this same shim regardless of which guild is talking. Without an entry
+# below, a second identity's spoken turns are answered using the top-level
+# `cwd`/`claude_script`/`mcp_config`/`allowed_tools` above — i.e. this
+# instance's own default persona, not the guild's.
+#
+# Keyed by Discord GUILD id (a voice session key is `voice:<guildId>`, see
+# the Development Instructions page § *Session handling*), not by identity
+# name — the shim never sees a name, only the key the bot bound on join. Any
+# field left unset for a guild falls back to the top-level default above.
+# identities:
+#   "123456789012345678":       # sc-assistant's guild
+#     cwd: ~/Documents/Obsidian/StarCitizen
+#     claude_script: ~/Documents/workspaces/scripts/cc-sc
+#   "234567890123456789":       # boss-assistant's guild
+#     cwd: ~/Documents/Obsidian/Boss
+#     claude_script: ~/Documents/workspaces/scripts/cc-boss
+
 # ── serving ────────────────────────────────────────────────────────────────
 host: 127.0.0.1
 port: 8080
