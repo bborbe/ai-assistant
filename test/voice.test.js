@@ -513,6 +513,9 @@ function fakeOnEventTarget(overrides = {}) {
     // tests that are ABOUT the indicator pass the real prototype method in.
     showTyping: () => {},
     answering: false,
+    // Wait state for the "slot already in use" retry deadline — see
+    // Session.prototype.onSlotFreed and the 'error' handler in onEvent.
+    slotWaitStartedAt: null,
     ...overrides,
   };
 }
@@ -766,9 +769,21 @@ test('a busy refusal does not cut off the answer already being spoken', async ()
   assert.equal(fake._transcriptWrites.length, 0);
 });
 
-test('a slot-in-use error leaves voice instead of retrying forever', async () => {
+function slotInUseErrorJson() {
+  // speech-to-speech has exactly one session slot machine-wide — this is the
+  // error text it sends when another process already holds it.
+  return JSON.stringify({
+    type: 'error',
+    error: {
+      type: 'server_error',
+      message: 'session slots are in use, disconnect an existing client',
+    },
+  });
+}
+
+test('the FIRST slot-in-use refusal waits instead of leaving immediately', async () => {
   const sent = [];
-  const guildId = 'guild-slot-in-use';
+  const guildId = 'guild-slot-wait';
   let destroyed = false;
   voice.sessions.set(guildId, { destroy: () => (destroyed = true) });
   const fake = fakeOnEventTarget({
@@ -776,28 +791,118 @@ test('a slot-in-use error leaves voice instead of retrying forever', async () =>
     channel: { send: async (t) => sent.push(t) },
   });
 
-  // speech-to-speech has exactly one session slot machine-wide — this is the
-  // error text it sends when another process already holds it. Left
-  // unhandled, connectS2S()'s close handler retries every 2s forever: a
-  // healthy-looking process that answers nothing.
-  Session.prototype.onEvent.call(
-    fake,
-    JSON.stringify({
-      type: 'error',
-      error: {
-        type: 'server_error',
-        message: 'session slots are in use, disconnect an existing client',
-      },
-    }),
-  );
+  // v0.19.0 left on the FIRST refusal — a race against its own handover, which
+  // asks the previous holder to yield before this bot even tries to connect.
+  // The first refusal can arrive while that yield is still in flight.
+  Session.prototype.onEvent.call(fake, slotInUseErrorJson());
   await new Promise((r) => setImmediate(r));
 
-  assert.equal(destroyed, true, 'the session must be left, not left retrying');
+  assert.equal(destroyed, false, 'must not leave on the first refusal');
+  assert.equal(voice.sessions.has(guildId), true);
+  assert.equal(sent.length, 0, 'no channel notice while still within the retry window');
+  assert.equal(fake._transcriptWrites.length, 0);
+  assert.ok(fake.slotWaitStartedAt, 'wait state must be recorded');
+});
+
+test('a slot-in-use refusal within the deadline keeps waiting on later attempts too', async () => {
+  const sent = [];
+  const guildId = 'guild-slot-still-waiting';
+  let destroyed = false;
+  voice.sessions.set(guildId, { destroy: () => (destroyed = true) });
+  // Started 3s ago — well inside the 10s default deadline, mirroring the 2s
+  // retry cadence's second or third attempt.
+  const fake = fakeOnEventTarget({
+    guildId,
+    channel: { send: async (t) => sent.push(t) },
+    slotWaitStartedAt: Date.now() - 3000,
+  });
+
+  Session.prototype.onEvent.call(fake, slotInUseErrorJson());
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(destroyed, false);
+  assert.equal(voice.sessions.has(guildId), true);
+  assert.equal(sent.length, 0, 'still no channel notice — a successful handover must be silent');
+  assert.equal(fake._transcriptWrites.length, 0);
+});
+
+test('a slot-in-use refusal past the deadline leaves loudly, exactly as before', async () => {
+  const sent = [];
+  const guildId = 'guild-slot-deadline-expired';
+  let destroyed = false;
+  voice.sessions.set(guildId, { destroy: () => (destroyed = true) });
+  // Started well before the 10s default deadline.
+  const fake = fakeOnEventTarget({
+    guildId,
+    channel: { send: async (t) => sent.push(t) },
+    slotWaitStartedAt: Date.now() - (config.voiceSlotRetryDeadlineMs + 1000),
+  });
+
+  Session.prototype.onEvent.call(fake, slotInUseErrorJson());
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(destroyed, true, 'the session must be left once the deadline passes');
   assert.equal(voice.sessions.has(guildId), false);
   assert.equal(sent.length, 1);
   assert.match(sent[0], /already in use/i);
   assert.equal(fake._transcriptWrites.length, 1);
   assert.match(fake._transcriptWrites[0].text, /slot in use elsewhere/);
+});
+
+test('the retry deadline is configurable', () => {
+  const original = process.env.VOICE_SLOT_RETRY_DEADLINE_MS;
+  try {
+    process.env.VOICE_SLOT_RETRY_DEADLINE_MS = '2500';
+    delete require.cache[require.resolve('../src/config')];
+    const freshConfig = require('../src/config');
+    assert.equal(freshConfig.voiceSlotRetryDeadlineMs, 2500);
+  } finally {
+    if (original === undefined) delete process.env.VOICE_SLOT_RETRY_DEADLINE_MS;
+    else process.env.VOICE_SLOT_RETRY_DEADLINE_MS = original;
+    delete require.cache[require.resolve('../src/config')];
+    require('../src/config');
+  }
+});
+
+test('onSlotFreed logs recovery and clears the wait state, once the slot frees', () => {
+  const fake = fakeOnEventTarget({ slotWaitStartedAt: Date.now() - 4000 });
+  Session.prototype.onSlotFreed.call(fake);
+  assert.equal(fake.slotWaitStartedAt, null);
+});
+
+test('onSlotFreed is a no-op when nothing was being waited on', () => {
+  const fake = fakeOnEventTarget({ slotWaitStartedAt: null });
+  // Must not throw computing Date.now() - null in some unexpected way, and
+  // must leave the (already-null) state alone.
+  Session.prototype.onSlotFreed.call(fake);
+  assert.equal(fake.slotWaitStartedAt, null);
+});
+
+test('a non-slot s2s error still follows its existing path unchanged', async () => {
+  const sent = [];
+  const guildId = 'guild-non-slot-error';
+  let destroyed = false;
+  voice.sessions.set(guildId, { destroy: () => (destroyed = true) });
+  const fake = fakeOnEventTarget({
+    guildId,
+    channel: { send: async (t) => sent.push(t) },
+    answering: true,
+    inResponse: true,
+  });
+
+  // A generic server error unrelated to the slot must never trip the
+  // slot-in-use wait/leave machinery.
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({ type: 'error', error: { type: 'server_error', message: 'boom, unrelated' } }),
+  );
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(destroyed, false);
+  assert.equal(voice.sessions.has(guildId), true);
+  assert.equal(sent.length, 0);
+  assert.equal(fake._transcriptWrites.length, 0);
+  assert.equal(fake.slotWaitStartedAt, null);
 });
 
 // A Collection-like stand-in: `.filter` returning something with `.size` is the
