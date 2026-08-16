@@ -57,13 +57,29 @@ transcript_dir: ~/Documents/Obsidian/Personal/60 Periodic Notes/Transcripts
 # across all of them, and two identities sharing a guild must NOT collide on
 # the same key. Any field left unset for an identity falls back to the
 # top-level default above.
+# `chat_bridge_url` overrides where THIS identity's spoken-turn full answer
+# gets posted — the endpoint a spoken reply's full text is bridged to as
+# chat, normally set globally via `chat_bridge.url` / `SHIM_CHAT_BRIDGE_URL`
+# (default http://127.0.0.1:8081/chat). WHY IT HAS TO BE PER IDENTITY: the
+# shim is shared by N bots and each bot runs its OWN health server on its OWN
+# port (personal :8081, sc :8091, boss :8101). The global default names ONE
+# of those ports, so without an override here every identity's bridged
+# answer posts to the SAME bot — whichever one owns that default. The other
+# identities still SPEAK correctly (persona/cwd routing is unaffected), but
+# their bridged text lands on the wrong bot, which then drops it because it
+# has no live voice session — from Discord this looked like "the assistant
+# said the details are in the chat" into an empty channel. Left unset, an
+# identity falls back to the global default exactly as before — a
+# single-identity install needs no migration.
 # identities:
 #   sc:                          # matches sc-assistant's IDENTITY=sc
 #     cwd: ~/Documents/Obsidian/StarCitizen
 #     claude_script: ~/Documents/workspaces/scripts/cc-sc
+#     chat_bridge_url: http://127.0.0.1:8091/chat
 #   boss:                        # matches boss-assistant's IDENTITY=boss
 #     cwd: ~/Documents/Obsidian/Boss
 #     claude_script: ~/Documents/workspaces/scripts/cc-boss
+#     chat_bridge_url: http://127.0.0.1:8101/chat
 #
 # Still accepted, for a bot that has no IDENTITY set: an entry keyed by
 # Discord GUILD id instead, exactly as `v0.16.0` shipped it — the shim falls

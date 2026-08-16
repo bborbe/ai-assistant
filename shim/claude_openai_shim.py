@@ -43,6 +43,7 @@ import subprocess
 import time
 import uuid
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import defaultdict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -323,7 +324,8 @@ VOICE_KEY_PREFIX = "voice:"
 # lookups do not collide in practice — identity names and Discord guild
 # snowflakes do not share a namespace — so one map serves both shapes.
 def _load_identities() -> dict[str, dict]:
-    """identityName-or-guildId -> {cwd, claude_script, mcp_config, allowed_tools}.
+    """identityName-or-guildId -> {cwd, claude_script, mcp_config, allowed_tools,
+    chat_bridge_url}.
 
     Read straight off the parsed config file rather than through `setting()`:
     that helper resolves ONE scalar against env/file/default, and an identity
@@ -353,6 +355,29 @@ def _load_identities() -> dict[str, dict]:
             # can carry a `~`-rooted path, and passing the literal `~` through to
             # --allowed-tools fails silently rather than erroring.
             entry["allowed_tools"] = _expand(str(cfg["allowed_tools"]))
+        if cfg.get("chat_bridge_url"):
+            # NOT path-expanded — this is a URL, not a filesystem path, and the
+            # top-level CHAT_BRIDGE_URL constant it overrides is not expanded
+            # either (see `setting()` above).
+            #
+            # Validated at LOAD time, not at post time. An unusable value here
+            # fails exactly like the bug this field exists to fix: the answer is
+            # produced, the post goes nowhere, and nothing surfaces in Discord.
+            # `htp://` is a plausible typo that urlopen only rejects on the
+            # first spoken turn, which may be hours later. Warn and drop the
+            # override so the identity falls back to the working global rather
+            # than posting into a hole.
+            raw_url = str(cfg["chat_bridge_url"])
+            parsed = urllib.parse.urlparse(raw_url)
+            if parsed.scheme in ("http", "https") and parsed.netloc:
+                entry["chat_bridge_url"] = raw_url
+            else:
+                print(
+                    f"  config: identities.{guild_id}.chat_bridge_url is not an "
+                    f"http(s) URL ({raw_url!r}) — ignoring, falling back to the "
+                    f"default bridge target",
+                    flush=True,
+                )
         out[str(guild_id)] = entry
     return out
 
@@ -361,7 +386,8 @@ IDENTITIES = _load_identities()
 
 
 def identity_for(key: str) -> dict:
-    """Resolve {cwd, claude_script, mcp_config, allowed_tools} for a turn.
+    """Resolve {cwd, claude_script, mcp_config, allowed_tools, chat_bridge_url}
+    for a turn.
 
     This is the routing fix itself: everything that used to read the
     module-level CWD / CLAUDE_SCRIPT / MCP_CONFIG / ALLOWED_TOOLS constants
@@ -408,7 +434,8 @@ def identity_for(key: str) -> dict:
     instance default, for backward compatibility with that config shape.
     """
     defaults = {"cwd": CWD, "claude_script": CLAUDE_SCRIPT,
-                "mcp_config": MCP_CONFIG, "allowed_tools": ALLOWED_TOOLS}
+                "mcp_config": MCP_CONFIG, "allowed_tools": ALLOWED_TOOLS,
+                "chat_bridge_url": CHAT_BRIDGE_URL}
     prefix, sep, rest = key.partition(":")
     if not sep:
         return defaults
@@ -1346,8 +1373,19 @@ def _has_postable_shape(text: str) -> bool:
     return len(_LIST_LINE_RE.findall(text)) >= 2
 
 
-def post_chat_message(text: str) -> None:
+def post_chat_message(text: str, key: str) -> None:
     """POST the full answer to the bot's chat-bridge route. Never raises.
+
+    `key` resolves the target through `identity_for()`, same as cwd/persona —
+    three bots can share this one shim, each with its own health server on
+    its own port, and CHAT_BRIDGE_URL is a single GLOBAL default. Without a
+    per-identity override every identity's answer posts to the SAME bot
+    (whichever one owns the global URL), so the other two speak but never see
+    their own reply land in the channel — the spoken assistant is dropped
+    silently by the bot that has no live voice session, while the wrong bot's
+    chat fills up instead. An identity with no `chat_bridge_url` override
+    falls back to the global exactly as before — a single-identity install
+    behaves unchanged.
 
     No channel id in the payload — the bot owns routing to whichever voice
     call is actually live (see `# Design`). Best-effort: a failure here must
@@ -1356,17 +1394,18 @@ def post_chat_message(text: str) -> None:
     if not CHAT_BRIDGE_TOKEN:
         print("  chat bridge: CHAT_BRIDGE_TOKEN not set — skipping post", flush=True)
         return
+    url = identity_for(key)["chat_bridge_url"]
     try:
         body = json.dumps({"text": text}).encode()
         req = urllib.request.Request(
-            CHAT_BRIDGE_URL, data=body, method="POST",
+            url, data=body, method="POST",
             headers={"Content-Type": "application/json",
                      "Authorization": f"Bearer {CHAT_BRIDGE_TOKEN}"})
         with urllib.request.urlopen(req, timeout=CHAT_BRIDGE_TIMEOUT) as resp:
             resp.read()
-        print(f"  chat bridge: posted ({len(text)} chars)", flush=True)
+        print(f"  chat bridge: posted ({len(text)} chars) -> {url}", flush=True)
     except Exception as e:
-        print(f"  chat bridge: post failed ({e})", flush=True)
+        print(f"  chat bridge: post failed ({e}) -> {url}", flush=True)
 
 
 # ── persistent claude processes ────────────────────────────────────────────
@@ -2342,7 +2381,7 @@ class Handler(BaseHTTPRequestHandler):
                     # surfaces", and this path was the one place that skipped
                     # it, so "📌 No task anchor" and "⏰ Next:" lines were
                     # landing in the channel verbatim.
-                    post_chat_message(strip_panels(answer))
+                    post_chat_message(strip_panels(answer), key)
                 else:
                     print("  chat bridge: not posting (short, plain, "
                           "and not requested)", flush=True)

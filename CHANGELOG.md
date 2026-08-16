@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: bridged voice replies posted to a single global `CHAT_BRIDGE_URL`, so with three identities sharing one shim (personal, sc, boss) every identity's spoken answer posted to whichever bot owned that global default — the identity that actually spoke never received its own text, and the bot with no live voice session dropped it silently (`chat bridge: no live voice session, dropping`). Adds `chat_bridge_url` to each entry in `identities:`, resolved per turn through `identity_for()` the same way persona already is; unconfigured identities fall back to the existing global default unchanged.
+
 ## v0.17.0
 
 - feat: text session keys carry persona the same way voice already does — `thread:<channelId>:<identity>` / `channel:<channelId>:<identity>` / `dm:<userId>:<identity>` when `IDENTITY` is set, unchanged 2-segment forms when unset. Multiple Discord identities can now share one guild: without the identity segment, two identities typing in the same channel collided on one `thread:`/`channel:`/`dm:` key and shared one Claude Code session, so a text turn from any identity resumed whichever identity's conversation was there and spawned it under the wrong cwd. `identity_for()` in the shim resolves the identity from the LAST segment of any prefix, falling back to the 2-segment guild-id lookup for voice only and to the instance default otherwise — mirroring the `v0.16.1` voice fix. Existing 2-segment text sessions stay reachable for a bot with no `IDENTITY` set; a bot that gains `IDENTITY` starts fresh conversations rather than silently adopting whatever the 2-segment key already held — that is intended, not a bug.
