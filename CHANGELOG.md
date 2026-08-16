@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: a losing bot's very first "session slots are in use" refusal no longer leaves voice immediately — it raced v0.19.0's own last-joiner-wins handover, walking away from a slot that was about to free while the yield it triggered was still in flight. Now retries at the existing 2s cadence for a bounded, configurable window (`VOICE_SLOT_RETRY_DEADLINE_MS`, default 10s) before giving up loudly exactly as before; a successful handover within the window is silent in the channel, only the deadline expiring posts the notice and leaves.
+
 ## v0.19.0
 
 - feat: three Discord identities sharing one speech-to-speech slot no longer silently wedge the loser. Adds `POST /voice/yield` (bot side, same `CHAT_BRIDGE_TOKEN` auth as `/chat`), called by the shim's `/voice/bind` handler whenever a bind changes which identity spoken turns belong to — the previous holder leaves its call and posts who took over, machine-wide, never per-guild. Independently, a speech-to-speech session refused with the "session slots are in use" error now leaves voice immediately instead of retrying every 2s forever, which is the behavior that made a lost race look like a perfectly healthy, silently unresponsive process.

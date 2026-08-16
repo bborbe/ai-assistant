@@ -138,6 +138,11 @@ class Session {
     this.closed = false;
     this.ws = null;
     this.retry = null; // at most one outstanding reconnect
+    // Set on the FIRST "slot already in use" refusal, cleared on a
+    // successful (re)connect. Bounds how long the 'error' handler below
+    // waits out a possible handover before giving up loudly — see
+    // config.voiceSlotRetryDeadlineMs.
+    this.slotWaitStartedAt = null;
     // Set while a response triggered by speak() (a typed turn, not a mic
     // turn) is in flight, so the transcript line it produces can be marked
     // distinctly from an ordinary spoken reply. Cleared once that reply's
@@ -340,6 +345,7 @@ class Session {
     this.ws = ws;
     ws.on('open', () => {
       log.info('  voice: s2s connected');
+      this.onSlotFreed();
       // Deliberately a PARTIAL session.update: speech-to-speech deep-merges
       // incoming fields (handlers/session.py:28), so sending only this one
       // leaves the launcher's VAD tuning — thresholds, silence durations —
@@ -551,6 +557,26 @@ class Session {
     this.typingTimer.unref?.();
   }
 
+  /**
+   * A slot we were waiting out just freed — say so once, quietly, and clear
+   * the wait state. Called on every successful (re)connect; a no-op unless
+   * `slotWaitStartedAt` is actually set.
+   *
+   * This is the successful-handover case: the shim's yield had already asked
+   * the previous holder to leave, and it finished before our deadline. Stays
+   * silent in the channel by design — a normal handover must read as silent
+   * from the user's point of view, or every ordinary switch spams the
+   * channel with a notice nobody needed. Split out from connectS2S()'s
+   * 'open' handler so it can be exercised directly, the same way onEvent is.
+   */
+  onSlotFreed() {
+    if (!this.slotWaitStartedAt) return;
+    log.info('  voice: slot freed, connected — handover completed', {
+      waitedMs: Date.now() - this.slotWaitStartedAt,
+    });
+    this.slotWaitStartedAt = null;
+  }
+
   onEvent(raw) {
     let e;
     try {
@@ -681,15 +707,38 @@ class Session {
         // the socket is refused at the protocol level with this error, and
         // then closed. Left unhandled, `connectS2S()`'s close handler retries
         // every 2s forever: a perfectly healthy-looking process that answers
-        // nothing, observed live as "s2s closed, retrying in 2s" on loop. The
-        // fix here is the same shape either way the slot ends up occupied —
-        // leave voice loudly instead of retrying into a wall.
+        // nothing, observed live as "s2s closed, retrying in 2s" on loop.
+        //
+        // Leaving on the very FIRST refusal (as this used to) is just as
+        // wrong the other way: last-joiner-wins handover asks the previous
+        // holder to yield before this bot even tries to connect, and the
+        // first refusal can arrive while that yield is still in flight — the
+        // handover then frees a slot nobody is left waiting for. So this
+        // rides out the existing 2s retry cadence (`connectS2S()`'s close
+        // handler, untouched) for a bounded deadline before giving up loudly,
+        // exactly as before. The deadline is mandatory, never infinite — see
+        // config.voiceSlotRetryDeadlineMs.
         if (
           /session slots are in use|disconnect an existing client/i.test(e.error?.message || '')
         ) {
           const reason = reasonLine(e.error?.message || e.error?.type);
-          log.error('  voice: s2s slot already in use elsewhere, leaving instead of retrying', {
+          const now = Date.now();
+          if (!this.slotWaitStartedAt) {
+            this.slotWaitStartedAt = now;
+            log.info('  voice: slot in use, waiting — a handover may be in flight', {
+              reason,
+              deadlineMs: config.voiceSlotRetryDeadlineMs,
+            });
+            break;
+          }
+          const waitedMs = now - this.slotWaitStartedAt;
+          if (waitedMs < config.voiceSlotRetryDeadlineMs) {
+            log.info('  voice: still waiting for slot to free', { reason, waitedMs });
+            break;
+          }
+          log.error('  voice: s2s slot still in use after deadline, leaving instead of retrying', {
             reason,
+            waitedMs,
           });
           this.channel
             ?.send(`Voice slot is already in use by another identity — leaving (${reason}).`)

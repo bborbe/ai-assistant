@@ -181,6 +181,20 @@ const config = {
   // before giving up and reporting 'timeout'.
   speakAckTimeoutMs: parseInt(process.env.SPEAK_ACK_TIMEOUT_MS || '5000', 10),
 
+  // How long a bot facing "slot already in use" keeps retrying — at the
+  // existing 2s cadence, so roughly 5 attempts by default — before giving up
+  // and leaving loudly.
+  //
+  // v0.19.0 shipped last-joiner-wins handover (ask the previous holder to
+  // yield) AND "leave on the first refusal" in the same release, and they
+  // raced: the loser's very first slot-in-use error can arrive while the
+  // handover it triggered is still in flight, so it walked away from a slot
+  // that was about to free. A bounded retry covers a yield round-trip
+  // comfortably while a genuinely occupied slot still fails fast and visibly
+  // — the infinite-retry bug this deadline's sibling behaviour fixed must not
+  // come back, so this is a deadline, never unset.
+  voiceSlotRetryDeadlineMs: parseInt(process.env.VOICE_SLOT_RETRY_DEADLINE_MS || '10000', 10),
+
   build: {
     version: process.env.BUILD_GIT_VERSION || 'dev',
     commit: process.env.BUILD_GIT_COMMIT || 'none',
