@@ -149,61 +149,63 @@ test('two transcript lines written in the same millisecond both survive', () => 
   for (const f of files) assert.match(f, /^\d+-.+-\d+\.txt$/);
 });
 
-test('chat() sends X-Identity when IDENTITY is set', async () => {
-  // THE GAP THIS PR CLOSES: text turns carried no identity at all before
-  // this, so every identity's text answered out of the shim's one default
-  // persona. This header is what a text-surface process CAN send that
-  // speech-to-speech cannot.
+test('IDENTITY unset reproduces existing thread/dm/channel keys exactly', () => {
+  // No behaviour change for an existing single-identity deployment — same
+  // guarantee `voiceKeyFor` already gives for voice.
+  delete process.env.IDENTITY;
+  delete require.cache[require.resolve('../src/config')];
+  delete require.cache[require.resolve('../src/llm')];
+  const { sessionKeyFor } = require('../src/llm');
+  assert.equal(
+    sessionKeyFor(channel({ id: 'H1', guild: {}, isThread: () => true }), 'U9'),
+    'thread:H1',
+  );
+  assert.equal(sessionKeyFor(channel({ id: 'T1', guild: {} }), 'U9'), 'channel:T1');
+  assert.equal(sessionKeyFor(channel({ id: 'D1' }), 'U9'), 'dm:U9');
+});
+
+test('IDENTITY set adds a third segment to thread/dm/channel keys', () => {
+  // THE GAP THIS PR CLOSES: a header was tried first and dropped — multiple
+  // identities sharing one Discord guild produce the IDENTICAL
+  // thread:/channel:/dm: key, so only the KEY (not a header) can separate
+  // their sessions. This mirrors voiceKeyFor's `:<identity>` suffix.
   process.env.IDENTITY = 'sc';
   delete require.cache[require.resolve('../src/config')];
   delete require.cache[require.resolve('../src/llm')];
-  const { chat } = require('../src/llm');
-
-  const realFetch = global.fetch;
-  let seenHeaders;
+  const { sessionKeyFor } = require('../src/llm');
   try {
-    global.fetch = async (url, opts) => {
-      seenHeaders = opts.headers;
-      return {
-        ok: true,
-        json: async () => ({ choices: [{ message: { content: 'hi' } }] }),
-      };
-    };
-    await chat([{ role: 'user', content: 'hello' }]);
-    assert.equal(seenHeaders['X-Identity'], 'sc');
+    assert.equal(
+      sessionKeyFor(channel({ id: 'H1', guild: {}, isThread: () => true }), 'U9'),
+      'thread:H1:sc',
+    );
+    assert.equal(sessionKeyFor(channel({ id: 'T1', guild: {} }), 'U9'), 'channel:T1:sc');
+    assert.equal(sessionKeyFor(channel({ id: 'D1' }), 'U9'), 'dm:U9:sc');
   } finally {
-    global.fetch = realFetch;
     delete process.env.IDENTITY;
     delete require.cache[require.resolve('../src/config')];
     delete require.cache[require.resolve('../src/llm')];
   }
 });
 
-test('chat() omits X-Identity when IDENTITY is unset', async () => {
+test('two identities in the same channel produce different session keys', () => {
+  // THE LEAK THIS FIX EXISTS TO PREVENT: three bots now share one guild in
+  // production — without the identity segment, two of them typing in the
+  // SAME channel would collide on one `channel:<id>` key and resume each
+  // other's conversation under the wrong cwd.
+  process.env.IDENTITY = 'personal';
+  delete require.cache[require.resolve('../src/config')];
+  delete require.cache[require.resolve('../src/llm')];
+  const asPersonal = require('../src/llm').sessionKeyFor(channel({ id: 'T1', guild: {} }), 'U9');
+
+  process.env.IDENTITY = 'boss';
+  delete require.cache[require.resolve('../src/config')];
+  delete require.cache[require.resolve('../src/llm')];
+  const asBoss = require('../src/llm').sessionKeyFor(channel({ id: 'T1', guild: {} }), 'U9');
+
+  assert.notEqual(asPersonal, asBoss);
   delete process.env.IDENTITY;
   delete require.cache[require.resolve('../src/config')];
   delete require.cache[require.resolve('../src/llm')];
-  const { chat } = require('../src/llm');
-
-  const realFetch = global.fetch;
-  let seenHeaders;
-  try {
-    global.fetch = async (url, opts) => {
-      seenHeaders = opts.headers;
-      return {
-        ok: true,
-        json: async () => ({ choices: [{ message: { content: 'hi' } }] }),
-      };
-    };
-    await chat([{ role: 'user', content: 'hello' }]);
-    assert.equal(
-      'X-Identity' in seenHeaders,
-      false,
-      'a single-identity deployment must be unchanged',
-    );
-  } finally {
-    global.fetch = realFetch;
-  }
 });
 
 test('bindVoiceKey distinguishes unsupported from broken', async () => {

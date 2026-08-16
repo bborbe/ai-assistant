@@ -3,26 +3,6 @@
 const config = require('./config');
 
 /**
- * The identity header for every request this process makes to the shim, or
- * `{}` when `IDENTITY` is unset.
- *
- * Voice cannot carry this — `speech-to-speech` owns the HTTP call for a
- * spoken turn and sets no headers of its own, which is why persona for voice
- * still rides in the session key (`voiceKeyFor`) instead. Every OTHER
- * request this process makes — chat, bind, reset, the typed/solo hints —
- * comes straight from this bot process and CAN carry a header, so it does,
- * uniformly, rather than only on the one path that needed it first. One
- * mechanism per surface, not one path patched and the rest left inconsistent.
- *
- * Unset (`config.identity === ''`) omits the header entirely — a
- * single-identity deployment reaches the shim exactly as it did before this
- * existed.
- */
-function identityHeaders() {
-  return config.identity ? { 'X-Identity': config.identity } : {};
-}
-
-/**
  * Minimal OpenAI chat-completions client.
  *
  * Deliberately assumes NOTHING about server statefulness: it sends the full
@@ -46,7 +26,6 @@ async function chat(messages, { sessionKey, signal } = {}) {
       // SPOKEN session, so the key can no longer tell the shim which kind of
       // output this turn wants — only the transport knows, and this is it.
       'X-Output-Mode': 'text',
-      ...identityHeaders(),
     },
     body: JSON.stringify({ model: config.model, messages, stream: false }),
     signal,
@@ -84,7 +63,6 @@ async function markTypedTurn(sessionKey, typed = true) {
         Authorization: `Bearer ${config.apiKey}`,
         ...(sessionKey ? { 'X-Session-Key': sessionKey } : {}),
         'X-Turn-Typed': typed ? 'true' : 'false',
-        ...identityHeaders(),
       },
     });
     return res.ok;
@@ -112,7 +90,6 @@ async function bindVoiceKey(sessionKey) {
       headers: {
         Authorization: `Bearer ${config.apiKey}`,
         'X-Session-Key': sessionKey,
-        ...identityHeaders(),
       },
     });
     if (res.ok) return { ok: true };
@@ -150,7 +127,6 @@ async function setVoiceSolo(solo) {
       headers: {
         Authorization: `Bearer ${config.apiKey}`,
         'X-Voice-Solo': solo ? 'true' : 'false',
-        ...identityHeaders(),
       },
     });
     if (res.ok) return { ok: true };
@@ -168,7 +144,6 @@ async function resetSession(sessionKey) {
     headers: {
       'X-Session-Key': sessionKey,
       Authorization: `Bearer ${config.apiKey}`,
-      ...identityHeaders(),
     },
   });
   if (!res.ok) throw new Error(`endpoint ${res.status} — does it support sessions?`);
@@ -183,7 +158,6 @@ async function bindSession(sessionKey, id) {
       'Content-Type': 'application/json',
       'X-Session-Key': sessionKey,
       Authorization: `Bearer ${config.apiKey}`,
-      ...identityHeaders(),
     },
     body: JSON.stringify({ id }),
   });
@@ -195,7 +169,7 @@ async function bindSession(sessionKey, id) {
 /** Transcripts on disk that a conversation could be switched to. */
 async function availableSessions() {
   const res = await fetch(`${config.baseUrl}/sessions/available`, {
-    headers: { Authorization: `Bearer ${config.apiKey}`, ...identityHeaders() },
+    headers: { Authorization: `Bearer ${config.apiKey}` },
   });
   if (!res.ok) throw new Error(`endpoint ${res.status} — does it support sessions?`);
   return res.json();
@@ -203,7 +177,7 @@ async function availableSessions() {
 
 async function listSessions() {
   const res = await fetch(`${config.baseUrl}/sessions`, {
-    headers: { Authorization: `Bearer ${config.apiKey}`, ...identityHeaders() },
+    headers: { Authorization: `Bearer ${config.apiKey}` },
   });
   if (!res.ok) throw new Error(`endpoint ${res.status} — does it support sessions?`);
   return res.json();
@@ -244,18 +218,19 @@ const DEFAULT_SESSION_KEY = 'default';
  * one call at a time, and moving between channels in the same server is
  * continuing the same conversation.
  *
- * When this process has `IDENTITY` set, the guild is not enough on its own —
- * see `voiceKeyFor` for why the identity rides along in the key too.
+ * When this process has `IDENTITY` set, the guild/channel/user id is not
+ * enough on its own — see `voiceKeyFor` and `textKeyFor` for why the
+ * identity rides along in the key too, on EVERY surface, not just voice.
  *
  * Clearing a session is only safe because anything worth keeping is written to
  * the vault — see the shim's MEMORY_DIRECTIVE. The session is a cache; the
  * vault is the record.
  */
 function sessionKeyFor(channel, userId) {
-  if (channel?.isThread?.()) return `thread:${channel.id}`;
-  if (!channel?.guild) return `dm:${userId}`;
+  if (channel?.isThread?.()) return textKeyFor('thread', channel.id);
+  if (!channel?.guild) return textKeyFor('dm', userId);
   if (channel?.isVoiceBased?.()) return voiceKeyFor(channel.guild.id);
-  return `channel:${channel.id}`;
+  return textKeyFor('channel', channel.id);
 }
 
 /**
@@ -276,6 +251,33 @@ function sessionKeyFor(channel, userId) {
 function voiceKeyFor(guildId) {
   if (!guildId) return DEFAULT_SESSION_KEY;
   return config.identity ? `voice:${guildId}:${config.identity}` : `voice:${guildId}`;
+}
+
+/**
+ * The conversation a text turn on `prefix:<id>` belongs to.
+ *
+ * A header was tried here first and dropped: multiple Discord identities can
+ * share one guild (three bots in the same server, confirmed in production),
+ * so two identities in the SAME channel/thread/DM produce the IDENTICAL
+ * `thread:`/`channel:`/`dm:` key. A header fixes which persona a process
+ * spawns WITH, but not which session it resumes — the shim's session store
+ * is keyed by the string alone, so a header-only fix would have one identity
+ * resume the conversation another was holding, then spawn it under the
+ * wrong cwd. Only the key can separate the sessions AND pick the persona at
+ * once, which is exactly what `voiceKeyFor` already relies on for voice —
+ * this mirrors it for every surface the bot itself owns `X-Session-Key` for.
+ *
+ * With `config.identity` unset this reproduces the pre-existing
+ * `<prefix>:<id>` key exactly — an existing single-identity deployment needs
+ * no config change and keeps resuming its existing sessions. Set, it becomes
+ * `<prefix>:<id>:<identity>`, a NEW session: an existing 2-segment session on
+ * disk stays reachable for a bot with no `IDENTITY` set, but a bot that
+ * gains `IDENTITY` starts fresh conversations rather than silently adopting
+ * whatever the 2-segment key already held. That is intended, not a bug —
+ * see `identity_for()` in the shim.
+ */
+function textKeyFor(prefix, id) {
+  return config.identity ? `${prefix}:${id}:${config.identity}` : `${prefix}:${id}`;
 }
 
 module.exports = {
