@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.19.1
 
 - fix: a losing bot's very first "session slots are in use" refusal no longer leaves voice immediately — it raced v0.19.0's own last-joiner-wins handover, walking away from a slot that was about to free while the yield it triggered was still in flight. Now retries at the existing 2s cadence for a bounded, configurable window (`VOICE_SLOT_RETRY_DEADLINE_MS`, default 10s) before giving up loudly exactly as before; a successful handover within the window is silent in the channel, only the deadline expiring posts the notice and leaves.
 
