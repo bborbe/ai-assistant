@@ -414,9 +414,24 @@ class IdentityRefused(Exception):
     """
 
     def __init__(self, key: str, reason: str):
-        self.key = key
-        self.reason = reason
+        self._key = key
+        self._reason = reason
         super().__init__(f"identity refused for {key!r}: {reason}")
+
+    @property
+    def reason(self) -> str:
+        """Read-only accessor for the refusal reason.
+
+        The fields are private per the IOC rule; the handler still needs the
+        reason to log it and to put it in the 403 body, and a property keeps
+        that a read rather than reaching into the instance.
+        """
+        return self._reason
+
+    @property
+    def key(self) -> str:
+        """Read-only accessor for the refused session key."""
+        return self._key
 
 
 # Warned once per (key, reason) rather than every turn, so a busy channel
