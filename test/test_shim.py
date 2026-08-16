@@ -11,6 +11,7 @@ Run: python3 -m unittest discover -s test -p 'test_*.py'
 
 import contextlib
 import io
+import json
 import pathlib
 import sys
 import unittest
@@ -513,6 +514,67 @@ class ChatBridgePosting(unittest.TestCase):
             shim.post_chat_message("hello", "voice:999")
         posted_request = urlopen.call_args[0][0]
         self.assertEqual(posted_request.full_url, shim.CHAT_BRIDGE_URL)
+
+
+class VoiceYieldHandover(unittest.TestCase):
+    """LAST JOINER WINS: who gets asked to leave voice when the bind changes.
+
+    Three Discord identities share one speech-to-speech slot machine-wide.
+    Without this, the loser of a join race stays connected in Discord —
+    subscribed to audio, transcribing — while its spoken turns never reach
+    the model again. `maybe_yield_voice` is what makes the handover explicit
+    instead of a silent, permanently wedged loser.
+    """
+
+    def setUp(self):
+        self._previous_identities = shim.IDENTITIES
+        self._previous_token = shim.CHAT_BRIDGE_TOKEN
+        self._previous_bind_count = shim._VOICE_BIND_COUNT
+        shim.IDENTITIES = {
+            "personal": {"chat_bridge_url": "http://127.0.0.1:8081/chat"},
+            "sc": {"chat_bridge_url": "http://127.0.0.1:8091/chat"},
+        }
+        shim.CHAT_BRIDGE_TOKEN = "test-token"
+        shim._VOICE_BIND_COUNT = 0
+
+    def tearDown(self):
+        shim.IDENTITIES = self._previous_identities
+        shim.CHAT_BRIDGE_TOKEN = self._previous_token
+        shim._VOICE_BIND_COUNT = self._previous_bind_count
+
+    def test_first_bind_ever_has_no_previous_holder_and_is_a_no_op(self):
+        with mock.patch.object(shim.urllib.request, "urlopen") as urlopen:
+            shim.maybe_yield_voice(shim.DEFAULT_KEY, "voice:111:personal")
+        urlopen.assert_not_called()
+
+    def test_bind_from_a_new_identity_asks_the_previous_holder_to_yield(self):
+        # A first bind (personal) establishes a previous holder, then sc binds
+        # over it — sc's arrival must ask personal to leave.
+        shim.maybe_yield_voice(shim.DEFAULT_KEY, "voice:111:personal")
+        with mock.patch.object(shim.urllib.request, "urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = b""
+            shim.maybe_yield_voice("voice:111:personal", "voice:111:sc")
+        posted_request = urlopen.call_args[0][0]
+        self.assertEqual(posted_request.full_url, "http://127.0.0.1:8081/voice/yield")
+        self.assertEqual(
+            json.loads(posted_request.data.decode())["newIdentity"], "sc")
+
+    def test_bind_from_the_same_identity_does_not_ask_it_to_yield(self):
+        shim.maybe_yield_voice(shim.DEFAULT_KEY, "voice:111:sc")
+        with mock.patch.object(shim.urllib.request, "urlopen") as urlopen:
+            shim.maybe_yield_voice("voice:111:sc", "voice:222:sc")
+        urlopen.assert_not_called()
+
+    def test_an_unreachable_previous_holder_logs_and_still_allows_the_new_bind(self):
+        shim.maybe_yield_voice(shim.DEFAULT_KEY, "voice:111:personal")
+        with mock.patch.object(shim.urllib.request, "urlopen") as urlopen:
+            urlopen.side_effect = OSError("connection refused")
+            captured = io.StringIO()
+            with contextlib.redirect_stdout(captured):
+                # Must not raise — a crashed bot must never wedge voice for
+                # the identity taking over.
+                shim.maybe_yield_voice("voice:111:personal", "voice:111:sc")
+        self.assertIn("notify failed", captured.getvalue())
 
 
 if __name__ == "__main__":

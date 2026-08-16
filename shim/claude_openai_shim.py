@@ -580,6 +580,13 @@ def _identity_label(key: str) -> str:
 
 _VOICE_KEY = DEFAULT_KEY
 _VOICE_KEY_LOCK = Lock()
+# Counts /voice/bind calls so the handler can tell "first bind ever" (nothing
+# to yield — no process has held the slot yet) apart from "bound back to the
+# default identity" (which DOES have a previous holder). `_VOICE_KEY` alone
+# cannot make that distinction: it initializes to DEFAULT_KEY at import time,
+# identical to what a legitimate later bind-to-default would see.
+_VOICE_BIND_COUNT = 0
+_VOICE_BIND_COUNT_LOCK = Lock()
 
 
 def is_voice_turn(mode: str, key: str, text: str = "") -> bool:
@@ -1528,6 +1535,81 @@ def post_chat_message(text: str, key: str) -> None:
         print(f"  chat bridge: post failed ({e}) -> {url}", flush=True)
 
 
+def notify_voice_yield(previous_key: str, new_identity: str) -> None:
+    """Ask the PREVIOUS holder of the shared speech-to-speech slot to leave.
+
+    LAST JOINER WINS: called from the `/voice/bind` handler when a bind
+    changes which identity spoken turns belong to. Mirrors `post_chat_message`
+    deliberately — same target resolution (`identity_for(...)["chat_bridge_url"]`),
+    same env-only `CHAT_BRIDGE_TOKEN`, same fail-closed-on-empty-token guard —
+    reusing the one bridge auth mechanism rather than inventing a second.
+
+    Derived from `chat_bridge_url` (always `.../chat` by convention) rather
+    than a separate config key: one URL per identity to maintain, not two.
+
+    Best-effort, like `post_chat_message`: a bot that crashed or was never
+    reachable must not block the NEW bind — the cost of failure here is a
+    stale voice session lingering until its own retry/error path notices, not
+    a wedged handover.
+    """
+    if not CHAT_BRIDGE_TOKEN:
+        print("  voice yield: CHAT_BRIDGE_TOKEN not set — skipping notify", flush=True)
+        return
+    chat_url = identity_for(previous_key)["chat_bridge_url"]
+    url = chat_url.rsplit("/", 1)[0] + "/voice/yield"
+    try:
+        body = json.dumps({"newIdentity": new_identity}).encode()
+        req = urllib.request.Request(
+            url, data=body, method="POST",
+            headers={"Content-Type": "application/json",
+                     "Authorization": f"Bearer {CHAT_BRIDGE_TOKEN}"})
+        with urllib.request.urlopen(req, timeout=CHAT_BRIDGE_TIMEOUT) as resp:
+            resp.read()
+        print(f"  voice yield: asked previous holder to leave -> {url}", flush=True)
+    except Exception as e:
+        print(f"  voice yield: notify failed ({e}) -> {url}", flush=True)
+
+
+def maybe_yield_voice(previous: str, key: str) -> None:
+    """Decide whether the `/voice/bind` handler needs to ask anyone to yield.
+
+    LAST JOINER WINS: called AFTER `bind_voice_key(key)` already moved the
+    pointer, `previous` being whatever it returned. Kept separate from
+    `bind_voice_key` itself so that function's return contract (pinned by
+    `VoiceKeyBinding` tests) never has to change.
+
+    Every branch logs its reason, including the two decisions NOT to notify —
+    a bridge call that silently never fires is indistinguishable from one
+    that is broken:
+
+    - first bind ever (nothing has held the slot before this process saw a
+      bind) — a no-op, not "yield to default", which `_VOICE_KEY`'s own
+      DEFAULT_KEY initial value would otherwise look identical to.
+    - same identity binding again — no handover happened, nothing to yield.
+    - otherwise — best-effort notify via `notify_voice_yield`; a previous
+      holder that is unreachable must never block THIS bind, so failure
+      there is swallowed (see `notify_voice_yield`'s own docstring).
+    """
+    global _VOICE_BIND_COUNT
+    with _VOICE_BIND_COUNT_LOCK:
+        first_bind = _VOICE_BIND_COUNT == 0
+        _VOICE_BIND_COUNT += 1
+
+    new_label = _identity_label(key)
+    if first_bind:
+        print("-> VOICE YIELD: first bind ever, no previous holder — nothing to yield",
+              flush=True)
+        return
+
+    previous_label = _identity_label(previous)
+    if previous_label == new_label:
+        print(f"-> VOICE YIELD: same identity ({new_label}), nothing to yield", flush=True)
+        return
+
+    print(f"-> VOICE YIELD: asking {previous_label} to yield to {new_label}", flush=True)
+    notify_voice_yield(previous, new_label)
+
+
 # ── persistent claude processes ────────────────────────────────────────────
 # One long-lived `claude` per session key, fed over stdin as stream-json.
 #
@@ -2218,6 +2300,7 @@ class Handler(BaseHTTPRequestHandler):
             key = self.headers.get("X-Session-Key") or DEFAULT_KEY
             previous = bind_voice_key(key)
             print(f"-> VOICE KEY [{key}] (was {previous})", flush=True)
+            maybe_yield_voice(previous, key)
             return self._json(200, {"key": key, "previous": previous})
 
         # Sticky, and sent whenever the room changes — not per turn. The bot is

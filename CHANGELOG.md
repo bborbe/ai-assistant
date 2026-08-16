@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: three Discord identities sharing one speech-to-speech slot no longer silently wedge the loser. Adds `POST /voice/yield` (bot side, same `CHAT_BRIDGE_TOKEN` auth as `/chat`), called by the shim's `/voice/bind` handler whenever a bind changes which identity spoken turns belong to — the previous holder leaves its call and posts who took over, machine-wide, never per-guild. Independently, a speech-to-speech session refused with the "session slots are in use" error now leaves voice immediately instead of retrying every 2s forever, which is the behavior that made a lost race look like a perfectly healthy, silently unresponsive process.
+
 ## v0.18.0
 
 - feat: identity fallback is now visible and, optionally, refusable. An unresolved session key (no identity segment, or an identity absent from `identities:`) has always fallen back to the top-level default persona — the MOST PRIVILEGED one on the instance (Personal vault cwd, `cc-personal`'s `--add-dir` over every repo under `~/Documents/workspaces`), and that fallback fired silently. It now logs a `WARNING` (once per key/reason) whenever `identities:` is configured and a turn still lands on the default, and the `spawned claude` log line now names the resolved `identity=` alongside `cwd=`. New opt-in `identities.strict: true` (`SHIM_IDENTITIES_STRICT`, default off) refuses such a turn outright (HTTP 403, no process spawned) instead of serving it with the default persona; a fresh single-identity install with no `identities:` block keeps behaving exactly as before either way.

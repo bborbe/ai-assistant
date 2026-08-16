@@ -83,6 +83,52 @@ async function handleChatPost(req, send) {
 }
 
 /**
+ * The shim's other back-edge: LAST JOINER WINS. Called by the identity that
+ * just took the shared speech-to-speech slot, telling this process (whichever
+ * identity previously held it) to leave voice — see voice.yieldVoice. Same
+ * auth mechanism as /chat, deliberately: one shared secret, one fail-closed
+ * check, not a second scheme for a second bridge route. No channel id in the
+ * payload either, for the same reason as /chat — only WHO is taking over,
+ * never WHICH channel.
+ */
+async function handleVoiceYieldPost(req, send) {
+  if (!config.chatBridgeToken) {
+    return send(503, { error: 'chat bridge not configured' });
+  }
+  const auth = Buffer.from(req.headers['authorization'] || '');
+  const expected = Buffer.from(`Bearer ${config.chatBridgeToken}`);
+  const authorized = auth.length === expected.length && crypto.timingSafeEqual(auth, expected);
+  if (!authorized) {
+    return send(401, { error: 'unauthorized' });
+  }
+
+  let body;
+  try {
+    body = await readBody(req);
+  } catch (e) {
+    return send(400, { error: e.message });
+  }
+
+  let parsed = {};
+  if (body) {
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      return send(400, { error: 'invalid json' });
+    }
+  }
+  const newIdentity = typeof parsed?.newIdentity === 'string' ? parsed.newIdentity.trim() : '';
+
+  try {
+    const result = await voice.yieldVoice(newIdentity || undefined);
+    return send(200, result);
+  } catch (e) {
+    log.error('voice yield: handler failed', { error: e.message });
+    return send(500, { error: 'internal error' });
+  }
+}
+
+/**
  * Liveness/readiness endpoints so this can run as a normal k8s workload.
  *
  * The split matters more here than in a plain web service, because the bot's
@@ -94,6 +140,7 @@ async function handleChatPost(req, send) {
  *   /readiness — the gateway is connected AND the endpoint answered recently.
  *                503 here only drains traffic, which is the right response.
  *   POST /chat — the shim's chat-bridge back-edge (see handleChatPost).
+ *   POST /voice/yield — LAST JOINER WINS handover (see handleVoiceYieldPost).
  */
 function startHealthServer({ port, host, isReady, build }) {
   const server = http.createServer((req, res) => {
@@ -113,6 +160,19 @@ function startHealthServer({ port, host, isReady, build }) {
       // process and drops every live voice call with it.
       handleChatPost(req, send).catch((e) => {
         log.error('chat bridge: unhandled', { error: e.message });
+        try {
+          send(500, { error: 'internal error' });
+        } catch {
+          // Response already sent or the socket is gone; nothing more to do.
+        }
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/voice/yield') {
+      // Same unhandled-rejection guard as /chat above.
+      handleVoiceYieldPost(req, send).catch((e) => {
+        log.error('voice yield: unhandled', { error: e.message });
         try {
           send(500, { error: 'internal error' });
         } catch {

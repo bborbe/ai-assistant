@@ -675,6 +675,32 @@ class Session {
         break;
       case 'error': {
         log.error('  voice: s2s event error', JSON.stringify(e).slice(0, 200));
+        // speech-to-speech has exactly ONE session slot machine-wide. When
+        // another process already holds it, the connection still opens fully
+        // in Discord — this bot subscribes to audio, joins the channel — but
+        // the socket is refused at the protocol level with this error, and
+        // then closed. Left unhandled, `connectS2S()`'s close handler retries
+        // every 2s forever: a perfectly healthy-looking process that answers
+        // nothing, observed live as "s2s closed, retrying in 2s" on loop. The
+        // fix here is the same shape either way the slot ends up occupied —
+        // leave voice loudly instead of retrying into a wall.
+        if (
+          /session slots are in use|disconnect an existing client/i.test(e.error?.message || '')
+        ) {
+          const reason = reasonLine(e.error?.message || e.error?.type);
+          log.error('  voice: s2s slot already in use elsewhere, leaving instead of retrying', {
+            reason,
+          });
+          this.channel
+            ?.send(`Voice slot is already in use by another identity — leaving (${reason}).`)
+            .catch(() => {});
+          this.transcript?.writeText(
+            config.botName,
+            `(voice: left — slot in use elsewhere: ${reason})`,
+          );
+          leave(this.guildId);
+          break;
+        }
         // ONLY `response_failed` — the type `_on_response_failed` sends — is a
         // turn that died with no other reporter. The other error types must not
         // reach the code below:
@@ -1096,6 +1122,41 @@ async function postToChannel(text) {
   }
 }
 
+/**
+ * LAST JOINER WINS: leave whatever call this process holds, on request from
+ * another identity that is taking the shared speech-to-speech slot.
+ *
+ * Mirrors `postToChannel` deliberately — same "no channel id in the payload"
+ * shape, because the caller (the shim, via this process's own chat-bridge
+ * token) knows WHO is taking over, never WHICH channel. A guild with no live
+ * session is success, not failure: nothing to yield is not an error, and the
+ * caller must not have to know in advance whether this identity is even in a
+ * call right now.
+ */
+async function yieldVoice(newIdentity) {
+  const live = [...sessions.values()].filter((s) => !s.closed);
+  if (live.length === 0) {
+    log.info('voice: yield requested, holding no call — nothing to do', { newIdentity });
+    return { yielded: false, reason: 'no-live-session' };
+  }
+  const left = [];
+  for (const session of live) {
+    const { guildId, channelId } = session;
+    const notice = newIdentity
+      ? `${newIdentity} is taking over voice here — stepping aside.`
+      : 'Another identity is taking over voice here — stepping aside.';
+    await session.channel?.send(notice).catch(() => {});
+    session.transcript?.writeText(
+      config.botName,
+      `(voice: yielded to ${newIdentity || 'another identity'})`,
+    );
+    leave(guildId);
+    left.push(channelId);
+    log.info('voice: yielded call to another identity', { newIdentity, guildId, channelId });
+  }
+  return { yielded: true, channels: left };
+}
+
 module.exports = {
   join,
   leave,
@@ -1109,6 +1170,7 @@ module.exports = {
   // makes "alone" unreachable if counted naively.
   humansIn,
   postToChannel,
+  yieldVoice,
   // Exported for unit tests to exercise Session.prototype.speak against a
   // fake ws (no real audio pipeline needed) — see test/voice.test.js.
   Session,

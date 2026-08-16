@@ -13,16 +13,20 @@ const { Session } = voice;
 // pipeline, unlike the rest of this module (see CLAUDE.md's "Verifying Voice
 // Changes"), so fake session objects are enough to exercise the three
 // branches the design calls out: no live session, exactly one, and two+.
-function fakeSession({ channelId = 'chan-1', closed = false, sendImpl } = {}) {
+function fakeSession({ channelId = 'chan-1', closed = false, sendImpl, guildId } = {}) {
   const sent = [];
   const transcriptWrites = [];
   return {
     channelId,
+    guildId,
     closed,
     channel: {
       send: sendImpl || (async (part) => sent.push(part)),
     },
     transcript: { writeText: (speaker, text) => transcriptWrites.push({ speaker, text }) },
+    // yieldVoice() (and leave()) call destroy() — a no-op is enough here since
+    // these fakes never own a real voice connection.
+    destroy: () => {},
     _sent: sent,
     _transcriptWrites: transcriptWrites,
   };
@@ -111,6 +115,35 @@ test('postToChannel reports send-failed when channel.send throws', async () => {
 
   assert.deepEqual(result, { posted: false, reason: 'send-failed' });
   assert.equal(session._transcriptWrites.length, 0, 'no transcript write on a failed send');
+});
+
+test('yieldVoice is a no-op success when this identity holds no call', async () => {
+  const result = await voice.yieldVoice('sc');
+  assert.deepEqual(result, { yielded: false, reason: 'no-live-session' });
+});
+
+test('yieldVoice leaves the live call and announces who took over', async () => {
+  const session = fakeSession({ channelId: 'chan-1', guildId: 'guild-1' });
+  voice.sessions.set('guild-1', session);
+  let destroyed = false;
+  session.destroy = () => (destroyed = true);
+
+  const result = await voice.yieldVoice('sc');
+
+  assert.equal(result.yielded, true);
+  assert.deepEqual(result.channels, ['chan-1']);
+  assert.equal(destroyed, true);
+  assert.equal(voice.sessions.has('guild-1'), false);
+  assert.equal(session._sent.length, 1);
+  assert.match(session._sent[0], /sc is taking over/);
+  assert.equal(session._transcriptWrites.length, 1);
+  assert.match(session._transcriptWrites[0].text, /yielded to sc/);
+});
+
+test('yieldVoice ignores a closed session, same as postToChannel', async () => {
+  voice.sessions.set('guild-1', fakeSession({ closed: true }));
+  const result = await voice.yieldVoice('sc');
+  assert.deepEqual(result, { yielded: false, reason: 'no-live-session' });
 });
 
 // liveSessionFor and Session.speak are the routing + injection halves of
@@ -731,6 +764,40 @@ test('a busy refusal does not cut off the answer already being spoken', async ()
   assert.equal(endAudioCalls, 0, 'playback must not be stopped');
   assert.equal(sent.length, 0, 'text.js already reports this one');
   assert.equal(fake._transcriptWrites.length, 0);
+});
+
+test('a slot-in-use error leaves voice instead of retrying forever', async () => {
+  const sent = [];
+  const guildId = 'guild-slot-in-use';
+  let destroyed = false;
+  voice.sessions.set(guildId, { destroy: () => (destroyed = true) });
+  const fake = fakeOnEventTarget({
+    guildId,
+    channel: { send: async (t) => sent.push(t) },
+  });
+
+  // speech-to-speech has exactly one session slot machine-wide — this is the
+  // error text it sends when another process already holds it. Left
+  // unhandled, connectS2S()'s close handler retries every 2s forever: a
+  // healthy-looking process that answers nothing.
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({
+      type: 'error',
+      error: {
+        type: 'server_error',
+        message: 'session slots are in use, disconnect an existing client',
+      },
+    }),
+  );
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(destroyed, true, 'the session must be left, not left retrying');
+  assert.equal(voice.sessions.has(guildId), false);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], /already in use/i);
+  assert.equal(fake._transcriptWrites.length, 1);
+  assert.match(fake._transcriptWrites[0].text, /slot in use elsewhere/);
 });
 
 // A Collection-like stand-in: `.filter` returning something with `.size` is the
