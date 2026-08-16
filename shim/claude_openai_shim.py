@@ -309,15 +309,21 @@ VOICE_KEY_PREFIX = "voice:"
 # CLAUDE_SCRIPT / MCP_CONFIG / ALLOWED_TOOLS constants directly and resolve
 # them per session key instead — a lookup, not a redesign.
 #
-# Keyed by guild id, because that is exactly what a voice session key already
-# carries (`voice:<guildId>`, see § *Session handling* above) and what
-# distinguishes one identity's call from another's. `identities:` in
-# config.yaml maps guildId -> overrides; any field left unset for a guild
-# falls back to this instance's own top-level setting, so a config with no
-# `identities:` at all resolves every guild to the same defaults it always
-# had — single-identity setups need no migration.
+# Keyed by IDENTITY name, not guild id: persona belongs to the identity (the
+# bot), while the guild is the other half of the key that keeps sessions
+# separate — see `identity_for()`. `identities:` in config.yaml maps identity
+# name -> overrides; any field left unset falls back to this instance's own
+# top-level setting, so a config with no `identities:` at all resolves every
+# key to the same defaults it always had — single-identity setups need no
+# migration.
+#
+# Guild-id-keyed entries (the `v0.16.0` shape) still work: a 2-segment key
+# (`voice:<guildId>`, no identity segment — the bot never set `IDENTITY`)
+# looks itself up in this SAME map by guildId, unchanged from before. The two
+# lookups do not collide in practice — identity names and Discord guild
+# snowflakes do not share a namespace — so one map serves both shapes.
 def _load_identities() -> dict[str, dict]:
-    """guildId -> {cwd, claude_script, mcp_config, allowed_tools} overrides.
+    """identityName-or-guildId -> {cwd, claude_script, mcp_config, allowed_tools}.
 
     Read straight off the parsed config file rather than through `setting()`:
     that helper resolves ONE scalar against env/file/default, and an identity
@@ -363,18 +369,33 @@ def identity_for(key: str) -> dict:
     conversation a turn belongs to rather than a process-wide constant every
     identity shared by accident.
 
-    Only voice keys (`voice:<guildId>`) carry a guild id to look up — a
-    text key (`thread:`/`dm:`/`channel:`) names a channel or user, not a
-    guild, so it always resolves to this instance's own defaults. Consolidating
-    identity resolution for text surfaces is a separate concern (they are
-    driven by per-instance Discord bot processes, not by session key), so it
-    is deliberately not attempted here.
+    Only voice keys (`voice:<guildId>` or `voice:<guildId>:<identity>`) carry
+    anything to look up — a text key (`thread:`/`dm:`/`channel:`) names a
+    channel or user, not a guild or identity, so it always resolves to this
+    instance's own defaults. Consolidating identity resolution for text
+    surfaces is a separate concern (they are driven by per-instance Discord
+    bot processes, not by session key), so it is deliberately not attempted
+    here.
+
+    Persona and session are different axes and the key format reflects it:
+    the guild segment keeps sessions apart (two identities in one guild get
+    two conversations), the optional identity segment is what picks persona
+    (one identity across two guilds gets one persona). A `voice:<guildId>`
+    key with no third segment means the bot never set `IDENTITY` — this
+    instance behaves exactly as `v0.16.0` did, resolving persona by guild id
+    for backward compatibility with that config shape.
     """
     defaults = {"cwd": CWD, "claude_script": CLAUDE_SCRIPT,
                 "mcp_config": MCP_CONFIG, "allowed_tools": ALLOWED_TOOLS}
     if not key.startswith(VOICE_KEY_PREFIX):
         return defaults
-    overrides = IDENTITIES.get(key[len(VOICE_KEY_PREFIX):])
+    rest = key[len(VOICE_KEY_PREFIX):]
+    guild_id, sep, identity = rest.partition(":")
+    # 3-segment key (`voice:<guildId>:<identity>`): persona is resolved by
+    # IDENTITY, never by guild — that is the whole point of the segment.
+    # 2-segment key (`voice:<guildId>`, no `IDENTITY` set on the bot): the
+    # v0.16.0 lookup, unchanged — resolve by guild id.
+    overrides = IDENTITIES.get(identity) if sep else IDENTITIES.get(guild_id)
     if not overrides:
         return defaults
     return {**defaults, **overrides}

@@ -38,6 +38,64 @@ test('a voice channel with no resolvable guild still yields a usable key', () =>
   assert.equal(key, DEFAULT_SESSION_KEY);
 });
 
+test('IDENTITY unset reproduces the v0.16.0 key exactly', () => {
+  // No behaviour change for an existing single-identity deployment.
+  delete process.env.IDENTITY;
+  delete require.cache[require.resolve('../src/config')];
+  delete require.cache[require.resolve('../src/llm')];
+  const { voiceKeyFor } = require('../src/llm');
+  assert.equal(voiceKeyFor('G1'), 'voice:G1');
+});
+
+test('IDENTITY set adds a third segment to the voice key', () => {
+  // THE AXIS FIX: persona (identity) and session (guild) are different
+  // things, so the key has to carry both once an identity is set.
+  process.env.IDENTITY = 'sc';
+  delete require.cache[require.resolve('../src/config')];
+  delete require.cache[require.resolve('../src/llm')];
+  const { voiceKeyFor } = require('../src/llm');
+  assert.equal(voiceKeyFor('G1'), 'voice:G1:sc');
+  delete process.env.IDENTITY;
+  delete require.cache[require.resolve('../src/config')];
+  delete require.cache[require.resolve('../src/llm')];
+});
+
+test('one identity across two guilds still separates sessions, sharing persona', () => {
+  process.env.IDENTITY = 'sc';
+  delete require.cache[require.resolve('../src/config')];
+  delete require.cache[require.resolve('../src/llm')];
+  const { voiceKeyFor } = require('../src/llm');
+  const inG1 = voiceKeyFor('G1');
+  const inG2 = voiceKeyFor('G2');
+  assert.notEqual(inG1, inG2, 'sessions must stay separate per guild');
+  assert.ok(
+    inG1.endsWith(':sc') && inG2.endsWith(':sc'),
+    'persona must be the same identity in both',
+  );
+  delete process.env.IDENTITY;
+  delete require.cache[require.resolve('../src/config')];
+  delete require.cache[require.resolve('../src/llm')];
+});
+
+test('two identities in the same guild produce different session keys', () => {
+  // THE LEAK THIS FIX EXISTS TO PREVENT: without the identity segment, two
+  // bots serving the same guild would collide on one `voice:<guildId>` key.
+  process.env.IDENTITY = 'personal';
+  delete require.cache[require.resolve('../src/config')];
+  delete require.cache[require.resolve('../src/llm')];
+  const asPersonal = require('../src/llm').voiceKeyFor('G1');
+
+  process.env.IDENTITY = 'sc';
+  delete require.cache[require.resolve('../src/config')];
+  delete require.cache[require.resolve('../src/llm')];
+  const asSc = require('../src/llm').voiceKeyFor('G1');
+
+  assert.notEqual(asPersonal, asSc);
+  delete process.env.IDENTITY;
+  delete require.cache[require.resolve('../src/config')];
+  delete require.cache[require.resolve('../src/llm')];
+});
+
 test('threads, channels and DMs each get their own conversation', () => {
   assert.equal(
     sessionKeyFor(channel({ id: 'H1', guild: {}, isThread: () => true }), 'U9'),

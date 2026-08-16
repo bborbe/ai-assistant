@@ -31,6 +31,15 @@ class IsVoiceTurn(unittest.TestCase):
         self.assertTrue(shim.is_voice_turn("", "voice:1118825106303631470"))
         self.assertTrue(shim.is_voice_turn("", "voice:512637223569719307"))
 
+    def test_identity_keyed_voice_key_is_still_spoken(self):
+        # The identity-routing fix adds a third segment
+        # (`voice:<guildId>:<identity>`). Classification keys on the PREFIX
+        # only, so this must stay armed exactly like the 2-segment key — a
+        # format change here is what caused the live incident this class
+        # documents, and a 3-segment key is the next format change.
+        self.assertTrue(shim.is_voice_turn("", "voice:1118825106303631470:personal"))
+        self.assertTrue(shim.is_voice_turn("", "voice:512637223569719307:sc"))
+
     def test_legacy_default_key_is_spoken(self):
         # speech-to-speech sends no header and, before per-guild keys, no key.
         self.assertTrue(shim.is_voice_turn("", shim.DEFAULT_KEY))
@@ -110,6 +119,7 @@ class IdentityForKey(unittest.TestCase):
         shim.IDENTITIES = {
             "111": {"cwd": "/tmp/guild-a", "claude_script": "/tmp/cc-a"},
             "222": {"cwd": "/tmp/guild-b"},   # only cwd overridden
+            "sc": {"cwd": "/tmp/sc", "claude_script": "/tmp/cc-sc"},
         }
 
     def tearDown(self):
@@ -121,9 +131,44 @@ class IdentityForKey(unittest.TestCase):
         self.assertEqual(resolved["claude_script"], shim.CLAUDE_SCRIPT)
 
     def test_a_configured_guild_gets_its_own_cwd_and_launcher(self):
+        # 2-segment key, no IDENTITY set on the bot — the v0.16.0 shape,
+        # resolved by guild id exactly as before.
         resolved = shim.identity_for("voice:111")
         self.assertEqual(resolved["cwd"], "/tmp/guild-a")
         self.assertEqual(resolved["claude_script"], "/tmp/cc-a")
+
+    def test_a_3_segment_key_resolves_by_identity_not_by_guild(self):
+        # THE AXIS FIX. `111`/`222` are configured by GUILD id and must be
+        # ignored for a 3-segment key even when the guild segment matches one
+        # of them — only the identity segment may resolve persona.
+        resolved = shim.identity_for("voice:111:sc")
+        self.assertEqual(resolved["cwd"], "/tmp/sc")
+        self.assertEqual(resolved["claude_script"], "/tmp/cc-sc")
+
+    def test_two_identities_in_one_guild_resolve_to_different_personas(self):
+        # THE LEAK THIS FIX EXISTS TO PREVENT: two bots serving the same
+        # guild, keyed only by guildId, could not both be configured — this
+        # is what a 3-segment key makes possible.
+        shim.IDENTITIES["boss"] = {"cwd": "/tmp/boss"}
+        same_guild_personal = shim.identity_for("voice:999:sc")
+        same_guild_boss = shim.identity_for("voice:999:boss")
+        self.assertEqual(same_guild_personal["cwd"], "/tmp/sc")
+        self.assertEqual(same_guild_boss["cwd"], "/tmp/boss")
+
+    def test_one_identity_across_two_guilds_gets_one_persona(self):
+        # The mirror case: sc-assistant serving two guilds must resolve the
+        # SAME persona in both, not fragment by guild.
+        first = shim.identity_for("voice:111:sc")
+        second = shim.identity_for("voice:222:sc")
+        self.assertEqual(first["cwd"], second["cwd"])
+        self.assertEqual(first["cwd"], "/tmp/sc")
+
+    def test_an_unconfigured_identity_falls_back_to_the_instance_default(self):
+        # A 3-segment key never falls through to the guild-keyed lookup —
+        # an unconfigured identity name must not accidentally pick up a
+        # guildId entry that happens to share the string.
+        resolved = shim.identity_for("voice:111:unconfigured")
+        self.assertEqual(resolved["cwd"], shim.CWD)
 
     def test_fields_left_unset_for_a_guild_still_fall_back_to_the_default(self):
         # Guild 222 overrides only cwd — claude_script/mcp_config/allowed_tools
