@@ -12,6 +12,7 @@ Run: python3 -m unittest discover -s test -p 'test_*.py'
 import pathlib
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "shim"))
 
@@ -130,7 +131,8 @@ class IdentityForKey(unittest.TestCase):
         shim.IDENTITIES = {
             "111": {"cwd": "/tmp/guild-a", "claude_script": "/tmp/cc-a"},
             "222": {"cwd": "/tmp/guild-b"},   # only cwd overridden
-            "sc": {"cwd": "/tmp/sc", "claude_script": "/tmp/cc-sc"},
+            "sc": {"cwd": "/tmp/sc", "claude_script": "/tmp/cc-sc",
+                   "chat_bridge_url": "http://127.0.0.1:8091/chat"},
         }
 
     def tearDown(self):
@@ -189,6 +191,26 @@ class IdentityForKey(unittest.TestCase):
         self.assertEqual(resolved["claude_script"], shim.CLAUDE_SCRIPT)
         self.assertEqual(resolved["mcp_config"], shim.MCP_CONFIG)
         self.assertEqual(resolved["allowed_tools"], shim.ALLOWED_TOOLS)
+
+    def test_an_identity_with_a_chat_bridge_url_override_resolves_to_it(self):
+        # THE BUG THIS FIELD FIXES: three bots share one shim behind one
+        # global CHAT_BRIDGE_URL, so every identity's bridged answer used to
+        # post to whichever bot owned the global default — the identity that
+        # actually spoke never saw its own reply land in the channel.
+        resolved = shim.identity_for("voice:111:sc")
+        self.assertEqual(resolved["chat_bridge_url"], "http://127.0.0.1:8091/chat")
+
+    def test_an_identity_with_no_chat_bridge_url_falls_back_to_the_global(self):
+        # Guild 111/222 configure cwd but no chat_bridge_url override — must
+        # fall back to the instance's global CHAT_BRIDGE_URL, not go missing.
+        resolved = shim.identity_for("voice:111")
+        self.assertEqual(resolved["chat_bridge_url"], shim.CHAT_BRIDGE_URL)
+
+    def test_no_identity_segment_uses_the_global_chat_bridge_url(self):
+        # A 2-segment key with no configured guild — single-identity install
+        # or a bot with no IDENTITY set — must behave exactly as before.
+        resolved = shim.identity_for("voice:999")
+        self.assertEqual(resolved["chat_bridge_url"], shim.CHAT_BRIDGE_URL)
 
     def test_text_surfaces_never_consult_the_guild_map(self):
         # thread:/dm:/channel: keys name a channel or user, never a guild —
@@ -266,6 +288,13 @@ class LoadIdentitiesFromConfig(unittest.TestCase):
         shim._CFG = {}
         self.assertEqual(shim._load_identities(), {})
 
+    def test_chat_bridge_url_is_carried_over_unexpanded(self):
+        # Not path-expanded like cwd/claude_script/mcp_config/allowed_tools —
+        # it is a URL, not a filesystem path.
+        shim._CFG = {"identities": {"sc": {"chat_bridge_url": "http://127.0.0.1:8091/chat"}}}
+        out = shim._load_identities()
+        self.assertEqual(out["sc"]["chat_bridge_url"], "http://127.0.0.1:8091/chat")
+
 
 class TranscriptDirPerKey(unittest.TestCase):
     """Which cwd's project transcripts a key resolves to.
@@ -291,6 +320,48 @@ class TranscriptDirPerKey(unittest.TestCase):
 
     def test_an_unconfigured_voice_key_matches_the_default(self):
         self.assertEqual(shim.transcript_dir("voice:999"), shim.transcript_dir(""))
+
+
+class ChatBridgePosting(unittest.TestCase):
+    """Which URL a bridged answer actually posts to.
+
+    THE BUG: CHAT_BRIDGE_URL used to be read as a single global, so every
+    identity's answer posted to whichever bot owned that default — the
+    identity that actually spoke never received its own text, and the bot
+    with no live voice session dropped it silently. `post_chat_message` must
+    resolve the target per key, the same way persona already does.
+    """
+
+    def setUp(self):
+        self._previous_identities = shim.IDENTITIES
+        self._previous_token = shim.CHAT_BRIDGE_TOKEN
+        shim.IDENTITIES = {"sc": {"chat_bridge_url": "http://127.0.0.1:8091/chat"}}
+        shim.CHAT_BRIDGE_TOKEN = "test-token"
+
+    def tearDown(self):
+        shim.IDENTITIES = self._previous_identities
+        shim.CHAT_BRIDGE_TOKEN = self._previous_token
+
+    def test_an_identity_with_a_chat_bridge_url_posts_there(self):
+        with mock.patch.object(shim.urllib.request, "urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = b""
+            shim.post_chat_message("hello", "voice:111:sc")
+        posted_request = urlopen.call_args[0][0]
+        self.assertEqual(posted_request.full_url, "http://127.0.0.1:8091/chat")
+
+    def test_an_identity_with_no_override_posts_to_the_global_default(self):
+        with mock.patch.object(shim.urllib.request, "urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = b""
+            shim.post_chat_message("hello", "voice:111:unconfigured")
+        posted_request = urlopen.call_args[0][0]
+        self.assertEqual(posted_request.full_url, shim.CHAT_BRIDGE_URL)
+
+    def test_no_identity_segment_posts_to_the_global_default(self):
+        with mock.patch.object(shim.urllib.request, "urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = b""
+            shim.post_chat_message("hello", "voice:999")
+        posted_request = urlopen.call_args[0][0]
+        self.assertEqual(posted_request.full_url, shim.CHAT_BRIDGE_URL)
 
 
 if __name__ == "__main__":
