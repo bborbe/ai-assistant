@@ -292,6 +292,94 @@ def take_typed_turn(key: str) -> bool:
 # the wake phrase. Keep the bot's `voiceKeyFor()` in step with it.
 VOICE_KEY_PREFIX = "voice:"
 
+# ── per-identity persona ───────────────────────────────────────────────────
+# Multiple Discord identities can share this ONE shim (and the one
+# `speech-to-speech` process every voice call goes through) without
+# answering with each other's persona, session store or vault.
+#
+# Why here, not a second shim: `speech-to-speech` wires its backend at
+# process STARTUP (`scripts/s2s-minimax`, trailing `"$@"` from `local.env`)
+# and never changes it again — so the single s2s always talks to ONE shim for
+# its whole life. A second identity's own shim never sees a spoken turn; only
+# consolidating to one shim that decides persona PER TURN fixes the routing,
+# not adding more shims for it to ignore.
+#
+# `ClaudeProcess` already takes `cwd` per spawn (`Popen(cmd, cwd=cwd, ...)`),
+# not process-global, so the fix is to stop reading the module-level CWD /
+# CLAUDE_SCRIPT / MCP_CONFIG / ALLOWED_TOOLS constants directly and resolve
+# them per session key instead — a lookup, not a redesign.
+#
+# Keyed by guild id, because that is exactly what a voice session key already
+# carries (`voice:<guildId>`, see § *Session handling* above) and what
+# distinguishes one identity's call from another's. `identities:` in
+# config.yaml maps guildId -> overrides; any field left unset for a guild
+# falls back to this instance's own top-level setting, so a config with no
+# `identities:` at all resolves every guild to the same defaults it always
+# had — single-identity setups need no migration.
+def _load_identities() -> dict[str, dict]:
+    """guildId -> {cwd, claude_script, mcp_config, allowed_tools} overrides.
+
+    Read straight off the parsed config file rather than through `setting()`:
+    that helper resolves ONE scalar against env/file/default, and an identity
+    is a small object, not a scalar. There is deliberately no per-field env
+    override here — a second identity's cwd is an operator-authored fact that
+    belongs in config.yaml next to the other identities, not a `SHIM_*` var
+    that would need one distinct name per guild to even be expressible.
+    """
+    raw = _CFG.get("identities") or {}
+    if not isinstance(raw, dict):
+        print(f"  config: identities must be a mapping, got {type(raw).__name__} — ignoring", flush=True)
+        return {}
+    out: dict[str, dict] = {}
+    for guild_id, cfg in raw.items():
+        if not isinstance(cfg, dict):
+            print(f"  config: identities.{guild_id} must be a mapping — ignoring", flush=True)
+            continue
+        entry: dict[str, str] = {}
+        if cfg.get("cwd"):
+            entry["cwd"] = _expand(str(cfg["cwd"]))
+        if cfg.get("claude_script"):
+            entry["claude_script"] = _expand(str(cfg["claude_script"]))
+        if cfg.get("mcp_config"):
+            entry["mcp_config"] = _expand(str(cfg["mcp_config"]))
+        if cfg.get("allowed_tools"):
+            # Expanded like every other path field above. An allowed-tools value
+            # can carry a `~`-rooted path, and passing the literal `~` through to
+            # --allowed-tools fails silently rather than erroring.
+            entry["allowed_tools"] = _expand(str(cfg["allowed_tools"]))
+        out[str(guild_id)] = entry
+    return out
+
+
+IDENTITIES = _load_identities()
+
+
+def identity_for(key: str) -> dict:
+    """Resolve {cwd, claude_script, mcp_config, allowed_tools} for a session key.
+
+    This is the routing fix itself: everything that used to read the
+    module-level CWD / CLAUDE_SCRIPT / MCP_CONFIG / ALLOWED_TOOLS constants
+    directly now calls this instead, so persona becomes a function of WHICH
+    conversation a turn belongs to rather than a process-wide constant every
+    identity shared by accident.
+
+    Only voice keys (`voice:<guildId>`) carry a guild id to look up — a
+    text key (`thread:`/`dm:`/`channel:`) names a channel or user, not a
+    guild, so it always resolves to this instance's own defaults. Consolidating
+    identity resolution for text surfaces is a separate concern (they are
+    driven by per-instance Discord bot processes, not by session key), so it
+    is deliberately not attempted here.
+    """
+    defaults = {"cwd": CWD, "claude_script": CLAUDE_SCRIPT,
+                "mcp_config": MCP_CONFIG, "allowed_tools": ALLOWED_TOOLS}
+    if not key.startswith(VOICE_KEY_PREFIX):
+        return defaults
+    overrides = IDENTITIES.get(key[len(VOICE_KEY_PREFIX):])
+    if not overrides:
+        return defaults
+    return {**defaults, **overrides}
+
+
 _VOICE_KEY = DEFAULT_KEY
 _VOICE_KEY_LOCK = Lock()
 
@@ -725,17 +813,23 @@ def mark_started(key: str) -> None:
             _save(data)
 
 
-def transcript_dir() -> Path:
+def transcript_dir(key: str = "") -> Path:
     """Where Claude Code keeps this working directory's session transcripts.
 
     The slug is the absolute path with every separator replaced by a dash — the
     same scheme `claude --resume` uses to find a session, which is why binding to
     an id from a DIFFERENT cwd would resolve to nothing.
+
+    `key` resolves the cwd through `identity_for()`, same as a live turn — a
+    second identity's transcripts live under ITS cwd, not this instance's
+    default one. Empty `key` (the default) keeps every existing caller working
+    unchanged against the instance's own default cwd.
     """
-    return Path.home() / ".claude/projects" / str(Path(CWD).resolve()).replace("/", "-")
+    cwd = identity_for(key)["cwd"] if key else CWD
+    return Path.home() / ".claude/projects" / str(Path(cwd).resolve()).replace("/", "-")
 
 
-def available_sessions(limit: int = 15) -> list[dict]:
+def available_sessions(key: str = "", limit: int = 15) -> list[dict]:
     """Resumable transcripts for this cwd, newest first, labelled by first prompt.
 
     A bare uuid is unusable as a choice — you cannot tell the 90-turn voice
@@ -743,7 +837,7 @@ def available_sessions(limit: int = 15) -> list[dict]:
     thing that distinguishes them.
     """
     out = []
-    for f in sorted(transcript_dir().glob("*.jsonl"),
+    for f in sorted(transcript_dir(key).glob("*.jsonl"),
                     key=lambda p: p.stat().st_mtime, reverse=True)[:limit]:
         label, turns = "", 0
         try:
@@ -780,8 +874,8 @@ def bind_session(key: str, sid: str) -> dict:
       lock — on one session file at once. Per-key locking is exactly what makes
       concurrent turns safe, and sharing an id defeats it.
     """
-    if not (transcript_dir() / f"{sid}.jsonl").exists():
-        return {"error": f"no transcript for {sid} in {transcript_dir()}"}
+    if not (transcript_dir(key) / f"{sid}.jsonl").exists():
+        return {"error": f"no transcript for {sid} in {transcript_dir(key)}"}
     with _sessions_lock:
         data = _load()
         for k, v in data.items():
@@ -1274,12 +1368,24 @@ class ClientGone(Exception):
 
 class ClaudeProcess:
     def __init__(self, key: str, session_id: str, resume: bool, system: str):
+        # Persona/cwd/launcher/tools are resolved PER KEY, not read off the
+        # module-level CWD/CLAUDE_SCRIPT/MCP_CONFIG/ALLOWED_TOOLS constants —
+        # see `identity_for()`. That is the actual routing fix: a second
+        # identity's voice key (`voice:<guildId>`) now spawns its own process
+        # against its own cwd, rather than every guild's spoken turns landing
+        # in this instance's one default persona.
+        identity = identity_for(key)
+        cwd = identity["cwd"]
+        claude_script = identity["claude_script"]
+        mcp_config = identity["mcp_config"]
+        allowed_tools = identity["allowed_tools"]
+
         # A launcher, when configured, OWNS the environment flags: model,
         # effort, router base URL, --add-dir set, MCP config. Restating them
         # here is how the bot's Claude silently drifted from the desk's —
         # different model, no --add-dir, so a session resumed through `switch`
         # lost capabilities its own history showed it once had.
-        cmd = ([CLAUDE_SCRIPT] if CLAUDE_SCRIPT else ["claude"]) + [
+        cmd = ([claude_script] if claude_script else ["claude"]) + [
                "-p",
                "--input-format", "stream-json", "--output-format", "stream-json",
                # Without this, only COMPLETE assistant events arrive, so there is
@@ -1291,19 +1397,20 @@ class ClaudeProcess:
         # Only assert the MCP set when nothing else is: a launcher passes its
         # own --mcp-config, and while the CLI tolerates the flag twice, which
         # copy wins is not something to depend on.
-        if not CLAUDE_SCRIPT:
-            cmd += ["--mcp-config", MCP_CONFIG, "--strict-mcp-config"]
+        if not claude_script:
+            cmd += ["--mcp-config", mcp_config, "--strict-mcp-config"]
         if CLAUDE_MODEL:
             cmd += ["--model", CLAUDE_MODEL]
         if not UNSAFE:
-            cmd += ["--allowed-tools", ALLOWED_TOOLS]
+            cmd += ["--allowed-tools", allowed_tools]
         cmd += ["--resume", session_id] if resume else ["--session-id", session_id]
         if system:
             cmd += ["--append-system-prompt", system]
 
-        self.key = key
-        self.session_id = session_id
-        self.last_used = time.time()
+        self._key = key
+        self._session_id = session_id
+        self._cwd = cwd
+        self._last_used = time.time()
 
         # stdout goes to a PTY, not a pipe. Claude Code block-buffers when it
         # is not on a terminal, so every event of a turn arrives at once at the
@@ -1312,17 +1419,21 @@ class ClaudeProcess:
         # with the answer at 7.8s. That early sentence is what TTS speaks while
         # the tools run, instead of dead air.
         self._pty_main, pty_child = pty.openpty()
-        self.proc = subprocess.Popen(
-            cmd, cwd=CWD, stdin=subprocess.PIPE, stdout=pty_child,
+        self._proc = subprocess.Popen(
+            cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=pty_child,
             stderr=subprocess.DEVNULL, text=True, bufsize=1,
         )
         os.close(pty_child)
         self._out = os.fdopen(self._pty_main, "rb", 0)
         self._buf = b""
-        print(f"  [{key}] spawned claude ({'resume' if resume else 'new'} {session_id[:8]})", flush=True)
+        # cwd logged unconditionally, not only when it differs from the
+        # default — the whole point of per-key persona is that this line is
+        # what proves a spoken turn was answered by the RIGHT identity, not
+        # inferred from the reply. See the task's first Success Criterion.
+        print(f"  [{key}] spawned claude ({'resume' if resume else 'new'} {session_id[:8]}) cwd={cwd}", flush=True)
 
     def alive(self) -> bool:
-        return self.proc.poll() is None
+        return self._proc.poll() is None
 
     def interrupt(self) -> None:
         """Abandon the in-flight turn without killing the session.
@@ -1334,12 +1445,12 @@ class ClaudeProcess:
         turn would be the lesser evil.
         """
         try:
-            self.proc.stdin.write(json.dumps({
+            self._proc.stdin.write(json.dumps({
                 "type": "control_request",
                 "request_id": str(uuid.uuid4()),
                 "request": {"subtype": "interrupt"},
             }) + "\n")
-            self.proc.stdin.flush()
+            self._proc.stdin.flush()
         except Exception:
             pass    # a turn we were abandoning anyway
 
@@ -1374,8 +1485,8 @@ class ClaudeProcess:
         """
         msg = {"type": "user",
                "message": {"role": "user", "content": [{"type": "text", "text": prompt}]}}
-        self.proc.stdin.write(json.dumps(msg) + "\n")
-        self.proc.stdin.flush()
+        self._proc.stdin.write(json.dumps(msg) + "\n")
+        self._proc.stdin.flush()
 
         seen: list[str] = []
         pending = ""       # partial text not yet handed to on_text
@@ -1571,7 +1682,7 @@ class ClaudeProcess:
             if gone and not interrupted:
                 interrupted = True
                 stop_timer()
-                print(f"  [{self.key}] listener gone — interrupting turn", flush=True)
+                print(f"  [{self._key}] listener gone — interrupting turn", flush=True)
                 self.interrupt()
 
             line = self._readline()
@@ -1620,7 +1731,7 @@ class ClaudeProcess:
                 # stopped without punctuation) would otherwise be swallowed.
                 stop_timer()
                 emit_sentences(flush=True)
-                self.last_used = time.time()
+                self._last_used = time.time()
                 final = str(event.get("result") or "").strip()
                 # `result` repeats the last assistant text; return what was
                 # already emitted so the caller does not say it twice.
@@ -1630,7 +1741,7 @@ class ClaudeProcess:
 
     def close(self):
         try:
-            self.proc.stdin.close()
+            self._proc.stdin.close()
         except Exception:
             pass
         try:
@@ -1638,7 +1749,7 @@ class ClaudeProcess:
         except Exception:
             pass
         try:
-            self.proc.terminate()
+            self._proc.terminate()
         except Exception:
             pass
 
@@ -1756,10 +1867,10 @@ class _StreamWriter:
     """
 
     def __init__(self, handler):
-        self.h = handler
-        self.id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
-        self.created = int(time.time())
-        self.started = False
+        self._h = handler
+        self._id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+        self._created = int(time.time())
+        self._started = False
         # The keepalive runs on its own thread; two writers interleaving would
         # split an SSE frame down the middle.
         self._wlock = Lock()
@@ -1775,38 +1886,38 @@ class _StreamWriter:
         Sent only once the response has started; before that there is nothing to
         keep alive.
         """
-        if self.started:
+        if self._started:
             self._raw({})
 
     def _send(self, delta: dict, finish=None):
-        if not self.started:
-            self.h.send_response(200)
-            self.h.send_header("Content-Type", "text/event-stream")
-            self.h.send_header("Cache-Control", "no-cache")
-            self.h.send_header("Connection", "close")
-            self.h.end_headers()
-            self.started = True
+        if not self._started:
+            self._h.send_response(200)
+            self._h.send_header("Content-Type", "text/event-stream")
+            self._h.send_header("Cache-Control", "no-cache")
+            self._h.send_header("Connection", "close")
+            self._h.end_headers()
+            self._started = True
             self._raw({"role": "assistant", "content": ""})
         self._raw(delta, finish)
 
     def _raw(self, delta: dict, finish=None):
-        chunk = {"id": self.id, "object": "chat.completion.chunk", "created": self.created,
+        chunk = {"id": self._id, "object": "chat.completion.chunk", "created": self._created,
                  "model": MODEL,
                  "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
         with self._wlock:
-            self.h.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
-            self.h.wfile.flush()
+            self._h.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+            self._h.wfile.flush()
 
     def chunk(self, text: str):
         if text:
             self._send({"content": text})
 
     def finish(self):
-        if not self.started:
+        if not self._started:
             self._send({"content": ""})
         self._raw({}, finish="stop")
-        self.h.wfile.write(b"data: [DONE]\n\n")
-        self.h.wfile.flush()
+        self._h.wfile.write(b"data: [DONE]\n\n")
+        self._h.wfile.flush()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1851,7 +1962,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"object": "list", "data": [
                 {"id": MODEL, "object": "model", "owned_by": "anthropic"}]})
         if path.endswith("/sessions/available"):
-            return self._json(200, {"available": available_sessions()})
+            return self._json(200, {"available": available_sessions(self._key())})
         if path.endswith("/sessions"):
             now = time.time()
             # `live` is the difference between an id that answers immediately and
@@ -2252,4 +2363,9 @@ if __name__ == "__main__":
     print(f"  cwd      {CWD}")
     print(f"  claude   {CLAUDE_SCRIPT or 'claude (bare — no launcher configured)'}")
     print(f"  config   {CONFIG_FILE if _CFG else str(CONFIG_FILE) + ' (absent, using env + defaults)'}")
+    if IDENTITIES:
+        for guild_id, overrides in sorted(IDENTITIES.items()):
+            print(f"  identity {guild_id} -> cwd={overrides.get('cwd', CWD)}")
+    else:
+        print("  identities  none configured — every voice key resolves to the default persona")
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
