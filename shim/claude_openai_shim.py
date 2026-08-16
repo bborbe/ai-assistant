@@ -1867,10 +1867,10 @@ class _StreamWriter:
     """
 
     def __init__(self, handler):
-        self.h = handler
-        self.id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
-        self.created = int(time.time())
-        self.started = False
+        self._h = handler
+        self._id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+        self._created = int(time.time())
+        self._started = False
         # The keepalive runs on its own thread; two writers interleaving would
         # split an SSE frame down the middle.
         self._wlock = Lock()
@@ -1886,38 +1886,38 @@ class _StreamWriter:
         Sent only once the response has started; before that there is nothing to
         keep alive.
         """
-        if self.started:
+        if self._started:
             self._raw({})
 
     def _send(self, delta: dict, finish=None):
-        if not self.started:
-            self.h.send_response(200)
-            self.h.send_header("Content-Type", "text/event-stream")
-            self.h.send_header("Cache-Control", "no-cache")
-            self.h.send_header("Connection", "close")
-            self.h.end_headers()
-            self.started = True
+        if not self._started:
+            self._h.send_response(200)
+            self._h.send_header("Content-Type", "text/event-stream")
+            self._h.send_header("Cache-Control", "no-cache")
+            self._h.send_header("Connection", "close")
+            self._h.end_headers()
+            self._started = True
             self._raw({"role": "assistant", "content": ""})
         self._raw(delta, finish)
 
     def _raw(self, delta: dict, finish=None):
-        chunk = {"id": self.id, "object": "chat.completion.chunk", "created": self.created,
+        chunk = {"id": self._id, "object": "chat.completion.chunk", "created": self._created,
                  "model": MODEL,
                  "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
         with self._wlock:
-            self.h.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
-            self.h.wfile.flush()
+            self._h.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+            self._h.wfile.flush()
 
     def chunk(self, text: str):
         if text:
             self._send({"content": text})
 
     def finish(self):
-        if not self.started:
+        if not self._started:
             self._send({"content": ""})
         self._raw({}, finish="stop")
-        self.h.wfile.write(b"data: [DONE]\n\n")
-        self.h.wfile.flush()
+        self._h.wfile.write(b"data: [DONE]\n\n")
+        self._h.wfile.flush()
 
 
 class Handler(BaseHTTPRequestHandler):

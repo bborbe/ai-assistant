@@ -1,5 +1,13 @@
 # Changelog
 
+All notable changes to this project will be documented in this file.
+
+Please choose versions by [Semantic Versioning](http://semver.org/).
+
+- MAJOR version when you make incompatible API changes,
+- MINOR version when you add functionality in a backwards-compatible manner, and
+- PATCH version when you make backwards-compatible bug fixes.
+
 ## Unreleased
 
 - feat: per-guild persona/cwd routing in the shim (`identities:` in `config.yaml`) — a voice turn's session key (`voice:<guildId>`) now resolves its own `cwd`/`claude_script`/`mcp_config`/`allowed_tools`, so multiple Discord identities can share the one shim `speech-to-speech` is wired to without a spoken turn ever answering with another identity's persona, session store or vault. Unconfigured guilds keep behaving exactly as before.
