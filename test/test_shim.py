@@ -9,6 +9,8 @@ notice — classification and key routing — not the HTTP or subprocess plumbin
 Run: python3 -m unittest discover -s test -p 'test_*.py'
 """
 
+import contextlib
+import io
 import pathlib
 import sys
 import unittest
@@ -256,6 +258,129 @@ class IdentityForKey(unittest.TestCase):
         self.assertEqual(resolved["claude_script"], shim.CLAUDE_SCRIPT)
 
 
+class DefaultFallbackWarning(unittest.TestCase):
+    """The one fallback in this shim that fails OPEN: an unresolved key gets
+    served by the top-level default persona — the most privileged one on the
+    instance. This is not the fallback changing; it is the fallback becoming
+    LOUD when it fires on an instance that actually configured `identities:`.
+    """
+
+    def setUp(self):
+        self._previous_identities = shim.IDENTITIES
+        self._previous_warned = shim._DEFAULT_FALLBACK_WARNED
+        self._previous_strict = shim.IDENTITIES_STRICT
+        shim._DEFAULT_FALLBACK_WARNED = set()
+        shim.IDENTITIES_STRICT = False
+
+    def tearDown(self):
+        shim.IDENTITIES = self._previous_identities
+        shim._DEFAULT_FALLBACK_WARNED = self._previous_warned
+        shim.IDENTITIES_STRICT = self._previous_strict
+
+    def test_warns_once_when_identities_configured_and_key_hits_default(self):
+        shim.IDENTITIES = {"sc": {"cwd": "/tmp/sc"}}
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            shim.identity_for("thread:H1")
+        self.assertIn("WARNING", buf.getvalue())
+        self.assertIn("thread:H1", buf.getvalue())
+
+    def test_no_warning_when_identities_is_absent_entirely(self):
+        # A fresh single-identity install has no `identities:` block at all —
+        # must keep resolving to the default silently, not flagged as a
+        # misconfiguration.
+        shim.IDENTITIES = {}
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            shim.identity_for("thread:H1")
+        self.assertEqual(buf.getvalue(), "")
+
+    def test_warning_is_not_repeated_for_the_same_key_and_reason(self):
+        shim.IDENTITIES = {"sc": {"cwd": "/tmp/sc"}}
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            shim.identity_for("thread:H1")
+            shim.identity_for("thread:H1")
+        self.assertEqual(buf.getvalue().count("WARNING"), 1)
+
+    def test_unknown_identity_and_no_identity_segment_warn_separately(self):
+        # Two distinct reasons on the SAME key must not dedupe against each
+        # other — the warn-once cache is keyed on (key, reason), not key alone.
+        shim.IDENTITIES = {"sc": {"cwd": "/tmp/sc"}}
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            shim.identity_for("thread:H1:nonexistent")
+            shim.identity_for("thread:H1")
+        self.assertEqual(buf.getvalue().count("WARNING"), 2)
+
+
+class IdentityStrictMode(unittest.TestCase):
+    """`identities.strict: true` — refuse an unresolved turn instead of
+    silently serving it with the most privileged persona on the instance.
+    """
+
+    def setUp(self):
+        self._previous_identities = shim.IDENTITIES
+        self._previous_strict = shim.IDENTITIES_STRICT
+        self._previous_warned = shim._DEFAULT_FALLBACK_WARNED
+        shim.IDENTITIES = {
+            "sc": {"cwd": "/tmp/sc"},
+            "111": {"cwd": "/tmp/guild-a"},   # guild-id-keyed, v0.16.0 shape
+        }
+        shim._DEFAULT_FALLBACK_WARNED = set()
+
+    def tearDown(self):
+        shim.IDENTITIES = self._previous_identities
+        shim.IDENTITIES_STRICT = self._previous_strict
+        shim._DEFAULT_FALLBACK_WARNED = self._previous_warned
+
+    def test_strict_refuses_an_unknown_identity(self):
+        shim.IDENTITIES_STRICT = True
+        with self.assertRaises(shim.IdentityRefused):
+            shim.identity_for("thread:H1:nonexistent", enforce=True)
+
+    def test_strict_refuses_a_no_identity_key(self):
+        shim.IDENTITIES_STRICT = True
+        with self.assertRaises(shim.IdentityRefused):
+            shim.identity_for("thread:H1", enforce=True)
+
+    def test_strict_allows_a_configured_identity(self):
+        shim.IDENTITIES_STRICT = True
+        resolved = shim.identity_for("thread:H1:sc", enforce=True)
+        self.assertEqual(resolved["cwd"], "/tmp/sc")
+
+    def test_strict_allows_a_2_segment_key_matching_a_guild_id_entry(self):
+        # A guild-id MATCH is "configured", not "missing" — the v0.16.0
+        # shape (no IDENTITY set, key resolved by guild id) must keep working
+        # under strict mode exactly like non-strict.
+        shim.IDENTITIES_STRICT = True
+        resolved = shim.identity_for("voice:111", enforce=True)
+        self.assertEqual(resolved["cwd"], "/tmp/guild-a")
+
+    def test_strict_off_preserves_todays_behaviour_exactly(self):
+        # enforce=True is passed (as the real request handler does), but with
+        # strict OFF nothing raises and the default persona is still served.
+        shim.IDENTITIES_STRICT = False
+        resolved = shim.identity_for("thread:H1:nonexistent", enforce=True)
+        self.assertEqual(resolved["cwd"], shim.CWD)
+        resolved = shim.identity_for("thread:H1", enforce=True)
+        self.assertEqual(resolved["cwd"], shim.CWD)
+
+    def test_non_enforcing_callers_never_raise_even_when_strict(self):
+        # Internal lookups (transcript_dir, chat-bridge target, session
+        # listing) must never raise — only the moment of serving an actual
+        # turn does. enforce defaults to False.
+        shim.IDENTITIES_STRICT = True
+        resolved = shim.identity_for("thread:H1:nonexistent")
+        self.assertEqual(resolved["cwd"], shim.CWD)
+
+    def test_strict_is_a_noop_when_identities_is_not_configured(self):
+        shim.IDENTITIES_STRICT = True
+        shim.IDENTITIES = {}
+        resolved = shim.identity_for("thread:H1", enforce=True)
+        self.assertEqual(resolved["cwd"], shim.CWD)
+
+
 class LoadIdentitiesFromConfig(unittest.TestCase):
     """Parsing the `identities:` block out of config.yaml's shape.
 
@@ -287,6 +412,16 @@ class LoadIdentitiesFromConfig(unittest.TestCase):
     def test_a_missing_identities_block_yields_no_overrides(self):
         shim._CFG = {}
         self.assertEqual(shim._load_identities(), {})
+
+    def test_the_strict_flag_is_not_parsed_as_an_identity_entry(self):
+        # `strict` lives in the SAME mapping as identity/guild-id entries
+        # (`identities.strict`), but it is a scalar control flag, not an
+        # identity — it must never surface in the resolved map nor trip the
+        # "must be a mapping" warning meant for a genuinely malformed entry.
+        shim._CFG = {"identities": {"strict": True, "sc": {"cwd": "/tmp/sc"}}}
+        out = shim._load_identities()
+        self.assertNotIn("strict", out)
+        self.assertEqual(out["sc"]["cwd"], "/tmp/sc")
 
     def test_chat_bridge_url_is_carried_over_unexpanded(self):
         # Not path-expanded like cwd/claude_script/mcp_config/allowed_tools —

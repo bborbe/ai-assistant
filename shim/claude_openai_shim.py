@@ -340,6 +340,11 @@ def _load_identities() -> dict[str, dict]:
         return {}
     out: dict[str, dict] = {}
     for guild_id, cfg in raw.items():
+        if guild_id == "strict":
+            # Reserved control flag (`identities.strict`), not an identity or
+            # guild-id entry — see IDENTITIES_STRICT below. Skipped here so it
+            # never falls into the "must be a mapping" warning below.
+            continue
         if not isinstance(cfg, dict):
             print(f"  config: identities.{guild_id} must be a mapping — ignoring", flush=True)
             continue
@@ -384,8 +389,75 @@ def _load_identities() -> dict[str, dict]:
 
 IDENTITIES = _load_identities()
 
+# Opt-in, default OFF. The implicit default persona (no `identities:` entry
+# matched) is the MOST PRIVILEGED one on this instance — top-level `cwd` is
+# the Personal vault and `claude_script` is `cc-personal`, whose --add-dir set
+# reaches every repo on the machine (see config.example.yaml). Every other
+# guard in this shim fails CLOSED (empty CHAT_BRIDGE_TOKEN refuses all posts,
+# a malformed identities entry warns and skips, a 404 from /voice/bind
+# degrades to one shared conversation); this is the one fallback that instead
+# hands out maximum access to whichever bot's key happened to miss. Strict
+# mode turns that specific gap fail-closed too, without touching any other
+# fallback in the file.
+#
+# Only takes effect when `identities:` is ALSO configured — a fresh
+# single-identity install has no `identities:` block at all and must keep
+# resolving to the default silently, which is the intended behaviour for
+# that shape, not a misconfiguration. See `_identity_fallback()`.
+IDENTITIES_STRICT = setting("SHIM_IDENTITIES_STRICT", "identities.strict", False)
 
-def identity_for(key: str) -> dict:
+
+class IdentityRefused(Exception):
+    """A turn's key resolved to the implicit default persona while
+    `identities.strict: true` is armed. Carries enough to log and answer with
+    a clean refusal rather than spawning a process under the wrong identity.
+    """
+
+    def __init__(self, key: str, reason: str):
+        self.key = key
+        self.reason = reason
+        super().__init__(f"identity refused for {key!r}: {reason}")
+
+
+# Warned once per (key, reason) rather than every turn, so a busy channel
+# whose bot never sets IDENTITY does not flood the log with the same fact
+# on every sentence.
+_DEFAULT_FALLBACK_WARNED: set[tuple[str, str]] = set()
+_DEFAULT_FALLBACK_LOCK = Lock()
+
+
+def _identity_fallback(key: str, reason: str, enforce: bool) -> dict:
+    """A turn matched no `identities:` entry — warn (once) and either serve
+    the default persona or, in strict mode, refuse.
+
+    Silent when `identities:` itself is empty: that is a fresh, single-
+    identity install behaving exactly as before, not a misconfiguration —
+    only warn/refuse once an operator has actually configured `identities:`
+    and a turn still lands on the default, which is what indicates a bot
+    whose IDENTITY is unset, misspelled, or missing from config.yaml.
+    """
+    if IDENTITIES:
+        with _DEFAULT_FALLBACK_LOCK:
+            first_time = (key, reason) not in _DEFAULT_FALLBACK_WARNED
+            if first_time:
+                _DEFAULT_FALLBACK_WARNED.add((key, reason))
+        if first_time:
+            print(
+                f"  WARNING [{key}] resolved to the DEFAULT persona ({reason}) — "
+                f"identities: is configured but this turn matched no entry. The "
+                f"default is the MOST PRIVILEGED persona on this instance "
+                f"(cwd={CWD}). If this bot should carry its own identity, set "
+                f"IDENTITY and add it under identities: in config.yaml.",
+                flush=True,
+            )
+        if enforce and IDENTITIES_STRICT:
+            raise IdentityRefused(key, reason)
+    return {"cwd": CWD, "claude_script": CLAUDE_SCRIPT,
+            "mcp_config": MCP_CONFIG, "allowed_tools": ALLOWED_TOOLS,
+            "chat_bridge_url": CHAT_BRIDGE_URL}
+
+
+def identity_for(key: str, *, enforce: bool = False) -> dict:
     """Resolve {cwd, claude_script, mcp_config, allowed_tools, chat_bridge_url}
     for a turn.
 
@@ -432,30 +504,63 @@ def identity_for(key: str) -> dict:
     the bot never set `IDENTITY` — this instance behaves exactly as
     `v0.16.0`/pre-identity did, resolving voice by guild id and text by
     instance default, for backward compatibility with that config shape.
+
+    `enforce=True` marks this call as serving an actual TURN, not an internal
+    lookup (transcript listing, chat-bridge target, etc.) — only at that
+    point does a default-persona resolution raise `IdentityRefused` when
+    `identities.strict: true` is armed. Internal callers pass the default
+    (`enforce=False`) so listing sessions or resolving a bridge URL never
+    raises; only the moment of actually answering an unconfigured identity
+    does, and only when strict mode is on. See `_identity_fallback()`.
     """
     defaults = {"cwd": CWD, "claude_script": CLAUDE_SCRIPT,
                 "mcp_config": MCP_CONFIG, "allowed_tools": ALLOWED_TOOLS,
                 "chat_bridge_url": CHAT_BRIDGE_URL}
     prefix, sep, rest = key.partition(":")
     if not sep:
-        return defaults
+        return _identity_fallback(key, "no identity segment (bare key)", enforce)
     first, sep2, identity = rest.partition(":")
     if sep2:
         # 3-segment key of ANY prefix — identity always lands in the last
         # segment, resolved by IDENTITY, never by guild/channel/user even
         # when that segment's value happens to match a configured one.
         overrides = IDENTITIES.get(identity)
+        if not overrides:
+            return _identity_fallback(
+                key, f"identity {identity!r} not in identities:", enforce)
     elif f"{prefix}:" == VOICE_KEY_PREFIX:
         # 2-segment `voice:<guildId>`, no `IDENTITY` set on the bot — the
-        # v0.16.0 lookup, unchanged: resolve by guild id.
+        # v0.16.0 lookup, unchanged: resolve by guild id. A MATCH here is
+        # "configured", not "missing" — strict mode must not refuse a bot
+        # that never adopted the identity segment but whose guild id is
+        # explicitly listed.
         overrides = IDENTITIES.get(first)
+        if not overrides:
+            return _identity_fallback(
+                key, "no identity segment and no guild-id match", enforce)
     else:
         # 2-segment text key (`thread:<id>`/`dm:<id>`/`channel:<id>`) — never
         # a guild, so never consults the guild-keyed map.
-        overrides = None
-    if not overrides:
-        return defaults
+        return _identity_fallback(key, "no identity segment", enforce)
     return {**defaults, **overrides}
+
+
+def _identity_label(key: str) -> str:
+    """Which identity NAME (or `"default"`) a key resolves to, for logging.
+
+    Mirrors `identity_for()`'s own resolution rules but returns the name
+    rather than the override dict — so the `spawned claude` log line can say
+    which persona served a turn without the reader inferring it from `cwd=`.
+    """
+    prefix, sep, rest = key.partition(":")
+    if not sep:
+        return "default"
+    first, sep2, identity = rest.partition(":")
+    if sep2:
+        return identity if IDENTITIES.get(identity) else "default"
+    if f"{prefix}:" == VOICE_KEY_PREFIX and IDENTITIES.get(first):
+        return first
+    return "default"
 
 
 _VOICE_KEY = DEFAULT_KEY
@@ -1521,7 +1626,8 @@ class ClaudeProcess:
         # default — the whole point of per-key persona is that this line is
         # what proves a spoken turn was answered by the RIGHT identity, not
         # inferred from the reply. See the task's first Success Criterion.
-        print(f"  [{key}] spawned claude ({'resume' if resume else 'new'} {session_id[:8]}) cwd={cwd}", flush=True)
+        print(f"  [{key}] spawned claude ({'resume' if resume else 'new'} {session_id[:8]}) "
+              f"cwd={cwd} identity={_identity_label(key)}", flush=True)
 
     def alive(self) -> bool:
         return self._proc.poll() is None
@@ -2139,6 +2245,22 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"error": {"message": "no user message"}})
 
         key = self._key()
+
+        # Strict identity mode: refuse a turn that would otherwise be served
+        # by the implicit default persona — the MOST PRIVILEGED one on this
+        # instance — rather than the identity its key actually named or
+        # failed to name. Checked before anything else in the turn (no
+        # process spawned, no session touched) so an unconfigured or
+        # misspelled IDENTITY fails loudly instead of quietly inheriting
+        # vault and workspace access. No-op unless `identities.strict: true`
+        # AND `identities:` is configured — see `_identity_fallback()`.
+        try:
+            identity_for(key, enforce=True)
+        except IdentityRefused as e:
+            print(f"-> REFUSED [{key}] {e.reason} (identities.strict)", flush=True)
+            return self._json(403, {"error": {
+                "message": f"identity refused: {e.reason}"}})
+
         # Consumed here, once, at the top of the turn it belongs to — so an
         # abandoned or superseded turn cannot leave the flag behind for an
         # unrelated later one.
