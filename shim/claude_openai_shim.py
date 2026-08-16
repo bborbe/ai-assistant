@@ -43,6 +43,7 @@ import subprocess
 import time
 import uuid
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import defaultdict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -358,7 +359,25 @@ def _load_identities() -> dict[str, dict]:
             # NOT path-expanded — this is a URL, not a filesystem path, and the
             # top-level CHAT_BRIDGE_URL constant it overrides is not expanded
             # either (see `setting()` above).
-            entry["chat_bridge_url"] = str(cfg["chat_bridge_url"])
+            #
+            # Validated at LOAD time, not at post time. An unusable value here
+            # fails exactly like the bug this field exists to fix: the answer is
+            # produced, the post goes nowhere, and nothing surfaces in Discord.
+            # `htp://` is a plausible typo that urlopen only rejects on the
+            # first spoken turn, which may be hours later. Warn and drop the
+            # override so the identity falls back to the working global rather
+            # than posting into a hole.
+            raw_url = str(cfg["chat_bridge_url"])
+            parsed = urllib.parse.urlparse(raw_url)
+            if parsed.scheme in ("http", "https") and parsed.netloc:
+                entry["chat_bridge_url"] = raw_url
+            else:
+                print(
+                    f"  config: identities.{guild_id}.chat_bridge_url is not an "
+                    f"http(s) URL ({raw_url!r}) — ignoring, falling back to the "
+                    f"default bridge target",
+                    flush=True,
+                )
         out[str(guild_id)] = entry
     return out
 

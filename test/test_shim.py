@@ -295,6 +295,22 @@ class LoadIdentitiesFromConfig(unittest.TestCase):
         out = shim._load_identities()
         self.assertEqual(out["sc"]["chat_bridge_url"], "http://127.0.0.1:8091/chat")
 
+    def test_https_chat_bridge_url_is_accepted(self):
+        shim._CFG = {"identities": {"sc": {"chat_bridge_url": "https://host.example/chat"}}}
+        out = shim._load_identities()
+        self.assertEqual(out["sc"]["chat_bridge_url"], "https://host.example/chat")
+
+    def test_a_malformed_chat_bridge_url_is_dropped_at_load_time(self):
+        # `htp://` is the realistic typo. Left unvalidated it loads fine and
+        # only fails inside urlopen on the first spoken turn — the same silent
+        # shape as the bug this field exists to fix. Dropping the override
+        # falls back to the working global rather than posting into a hole.
+        for bad in ("htp://127.0.0.1:8091/chat", "127.0.0.1:8091/chat", "http://", "ftp://h/x"):
+            with self.subTest(bad=bad):
+                shim._CFG = {"identities": {"sc": {"chat_bridge_url": bad}}}
+                out = shim._load_identities()
+                self.assertNotIn("chat_bridge_url", out["sc"])
+
 
 class TranscriptDirPerKey(unittest.TestCase):
     """Which cwd's project transcripts a key resolves to.
