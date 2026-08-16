@@ -343,7 +343,10 @@ def _load_identities() -> dict[str, dict]:
         if cfg.get("mcp_config"):
             entry["mcp_config"] = _expand(str(cfg["mcp_config"]))
         if cfg.get("allowed_tools"):
-            entry["allowed_tools"] = str(cfg["allowed_tools"])
+            # Expanded like every other path field above. An allowed-tools value
+            # can carry a `~`-rooted path, and passing the literal `~` through to
+            # --allowed-tools fails silently rather than erroring.
+            entry["allowed_tools"] = _expand(str(cfg["allowed_tools"]))
         out[str(guild_id)] = entry
     return out
 
@@ -1404,10 +1407,10 @@ class ClaudeProcess:
         if system:
             cmd += ["--append-system-prompt", system]
 
-        self.key = key
-        self.session_id = session_id
-        self.cwd = cwd
-        self.last_used = time.time()
+        self._key = key
+        self._session_id = session_id
+        self._cwd = cwd
+        self._last_used = time.time()
 
         # stdout goes to a PTY, not a pipe. Claude Code block-buffers when it
         # is not on a terminal, so every event of a turn arrives at once at the
@@ -1416,7 +1419,7 @@ class ClaudeProcess:
         # with the answer at 7.8s. That early sentence is what TTS speaks while
         # the tools run, instead of dead air.
         self._pty_main, pty_child = pty.openpty()
-        self.proc = subprocess.Popen(
+        self._proc = subprocess.Popen(
             cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=pty_child,
             stderr=subprocess.DEVNULL, text=True, bufsize=1,
         )
@@ -1430,7 +1433,7 @@ class ClaudeProcess:
         print(f"  [{key}] spawned claude ({'resume' if resume else 'new'} {session_id[:8]}) cwd={cwd}", flush=True)
 
     def alive(self) -> bool:
-        return self.proc.poll() is None
+        return self._proc.poll() is None
 
     def interrupt(self) -> None:
         """Abandon the in-flight turn without killing the session.
@@ -1442,12 +1445,12 @@ class ClaudeProcess:
         turn would be the lesser evil.
         """
         try:
-            self.proc.stdin.write(json.dumps({
+            self._proc.stdin.write(json.dumps({
                 "type": "control_request",
                 "request_id": str(uuid.uuid4()),
                 "request": {"subtype": "interrupt"},
             }) + "\n")
-            self.proc.stdin.flush()
+            self._proc.stdin.flush()
         except Exception:
             pass    # a turn we were abandoning anyway
 
@@ -1482,8 +1485,8 @@ class ClaudeProcess:
         """
         msg = {"type": "user",
                "message": {"role": "user", "content": [{"type": "text", "text": prompt}]}}
-        self.proc.stdin.write(json.dumps(msg) + "\n")
-        self.proc.stdin.flush()
+        self._proc.stdin.write(json.dumps(msg) + "\n")
+        self._proc.stdin.flush()
 
         seen: list[str] = []
         pending = ""       # partial text not yet handed to on_text
@@ -1679,7 +1682,7 @@ class ClaudeProcess:
             if gone and not interrupted:
                 interrupted = True
                 stop_timer()
-                print(f"  [{self.key}] listener gone — interrupting turn", flush=True)
+                print(f"  [{self._key}] listener gone — interrupting turn", flush=True)
                 self.interrupt()
 
             line = self._readline()
@@ -1728,7 +1731,7 @@ class ClaudeProcess:
                 # stopped without punctuation) would otherwise be swallowed.
                 stop_timer()
                 emit_sentences(flush=True)
-                self.last_used = time.time()
+                self._last_used = time.time()
                 final = str(event.get("result") or "").strip()
                 # `result` repeats the last assistant text; return what was
                 # already emitted so the caller does not say it twice.
@@ -1738,7 +1741,7 @@ class ClaudeProcess:
 
     def close(self):
         try:
-            self.proc.stdin.close()
+            self._proc.stdin.close()
         except Exception:
             pass
         try:
@@ -1746,7 +1749,7 @@ class ClaudeProcess:
         except Exception:
             pass
         try:
-            self.proc.terminate()
+            self._proc.terminate()
         except Exception:
             pass
 
