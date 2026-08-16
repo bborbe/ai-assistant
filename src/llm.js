@@ -215,6 +215,9 @@ const DEFAULT_SESSION_KEY = 'default';
  * one call at a time, and moving between channels in the same server is
  * continuing the same conversation.
  *
+ * When this process has `IDENTITY` set, the guild is not enough on its own —
+ * see `voiceKeyFor` for why the identity rides along in the key too.
+ *
  * Clearing a session is only safe because anything worth keeping is written to
  * the vault — see the shim's MEMORY_DIRECTIVE. The session is a cache; the
  * vault is the record.
@@ -226,9 +229,24 @@ function sessionKeyFor(channel, userId) {
   return `channel:${channel.id}`;
 }
 
-/** The conversation spoken turns in `guildId` belong to. */
+/**
+ * The conversation spoken turns in `guildId` belong to.
+ *
+ * Persona and session sit on DIFFERENT axes and this key has to carry both.
+ * Session (which conversation) is per (guild, identity) — two identities in
+ * one guild must not collide, and one identity across two guilds must not
+ * share history it should not have. Persona (which cwd/vault/launcher) is
+ * per identity alone, resolved by the shim from this same key.
+ *
+ * With `config.identity` unset this reproduces the pre-existing
+ * `voice:<guildId>` key exactly — a single-identity deployment (or any bot
+ * built before `IDENTITY` existed) needs no config change. Set, it becomes
+ * `voice:<guildId>:<identity>`, which is what lets the shim resolve persona
+ * by IDENTITY instead of by guild — see `identity_for()` in the shim.
+ */
 function voiceKeyFor(guildId) {
-  return guildId ? `voice:${guildId}` : DEFAULT_SESSION_KEY;
+  if (!guildId) return DEFAULT_SESSION_KEY;
+  return config.identity ? `voice:${guildId}:${config.identity}` : `voice:${guildId}`;
 }
 
 module.exports = {

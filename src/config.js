@@ -69,6 +69,18 @@ const config = {
 
   s2sUrl: process.env.S2S_URL || 'ws://127.0.0.1:8765/v1/realtime',
 
+  // Which Discord identity this process IS — not which guild it serves.
+  //
+  // Persona belongs to the identity, not the guild: one identity can serve
+  // several guilds and wants ONE persona across all of them, and two
+  // identities can share a guild and must NOT collide on the same voice
+  // session key. Unset (the default) reproduces `v0.16.0` exactly — the
+  // voice key stays `voice:<guildId>` and the shim resolves persona from the
+  // guild id, same as before this existed. Set it to a short name
+  // (`personal`, `sc`, `boss`) that also appears as a key under `identities:`
+  // in config.yaml.
+  identity: (process.env.IDENTITY || '').trim(),
+
   // Is this instance capable of voice at all?
   //
   // Default true, so an existing deployment behaves identically with nothing

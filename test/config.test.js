@@ -37,3 +37,18 @@ test('voice can be disabled by any of the usual falsey spellings', () => {
   }
   delete process.env.VOICE_ENABLED;
 });
+
+// Unset must reproduce v0.16.0 exactly — an existing single-identity
+// deployment upgrading onto this must see no behaviour change at all.
+test('identity is empty when IDENTITY is unset', () => {
+  delete process.env.IDENTITY;
+  delete require.cache[require.resolve('../src/config')];
+  assert.equal(require('../src/config').identity, '');
+});
+
+test('identity is read verbatim from IDENTITY, trimmed', () => {
+  process.env.IDENTITY = '  sc  ';
+  delete require.cache[require.resolve('../src/config')];
+  assert.equal(require('../src/config').identity, 'sc');
+  delete process.env.IDENTITY;
+});

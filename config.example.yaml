@@ -50,17 +50,28 @@ transcript_dir: ~/Documents/Obsidian/Personal/60 Periodic Notes/Transcripts
 # `cwd`/`claude_script`/`mcp_config`/`allowed_tools` above — i.e. this
 # instance's own default persona, not the guild's.
 #
-# Keyed by Discord GUILD id (a voice session key is `voice:<guildId>`, see
-# the Development Instructions page § *Session handling*), not by identity
-# name — the shim never sees a name, only the key the bot bound on join. Any
-# field left unset for a guild falls back to the top-level default above.
+# Keyed by IDENTITY NAME — set `IDENTITY=sc` (etc.) in that bot's
+# `local.env` and the voice key it binds becomes `voice:<guildId>:sc`, so
+# persona is a function of WHICH BOT is talking, not which guild. This is the
+# axis that matters: one identity serving several guilds wants ONE persona
+# across all of them, and two identities sharing a guild must NOT collide on
+# the same key. Any field left unset for an identity falls back to the
+# top-level default above.
 # identities:
-#   "123456789012345678":       # sc-assistant's guild
+#   sc:                          # matches sc-assistant's IDENTITY=sc
 #     cwd: ~/Documents/Obsidian/StarCitizen
 #     claude_script: ~/Documents/workspaces/scripts/cc-sc
-#   "234567890123456789":       # boss-assistant's guild
+#   boss:                        # matches boss-assistant's IDENTITY=boss
 #     cwd: ~/Documents/Obsidian/Boss
 #     claude_script: ~/Documents/workspaces/scripts/cc-boss
+#
+# Still accepted, for a bot that has no IDENTITY set: an entry keyed by
+# Discord GUILD id instead, exactly as `v0.16.0` shipped it — the shim falls
+# back to a guild-id lookup in this SAME map whenever the voice key it
+# receives has no identity segment (`voice:<guildId>`, not
+# `voice:<guildId>:<identity>`).
+#   "123456789012345678":       # a guild, for a bot with no IDENTITY set
+#     cwd: ~/Documents/Obsidian/StarCitizen
 
 # ── serving ────────────────────────────────────────────────────────────────
 host: 127.0.0.1
