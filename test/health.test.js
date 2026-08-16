@@ -142,3 +142,98 @@ test('POST /chat with a valid token and text calls voice.postToChannel and retur
     voice.postToChannel = beforePost;
   }
 });
+
+// POST /voice/yield — LAST JOINER WINS handover. Same auth mechanism as
+// /chat on purpose (see handleVoiceYieldPost) — one shared secret, not a
+// second scheme for a second bridge route.
+test('POST /voice/yield is 503 when no token is configured (fails closed)', async () => {
+  const before = config.chatBridgeToken;
+  config.chatBridgeToken = '';
+  try {
+    await withServer({}, async (base) => {
+      const res = await fetch(`${base}/voice/yield`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newIdentity: 'sc' }),
+      });
+      assert.equal(res.status, 503);
+    });
+  } finally {
+    config.chatBridgeToken = before;
+  }
+});
+
+test('POST /voice/yield is 401 with a missing or wrong bearer token', async () => {
+  const before = config.chatBridgeToken;
+  config.chatBridgeToken = 'secret';
+  try {
+    await withServer({}, async (base) => {
+      const noAuth = await fetch(`${base}/voice/yield`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newIdentity: 'sc' }),
+      });
+      assert.equal(noAuth.status, 401);
+
+      const wrongAuth = await fetch(`${base}/voice/yield`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer nope' },
+        body: JSON.stringify({ newIdentity: 'sc' }),
+      });
+      assert.equal(wrongAuth.status, 401);
+    });
+  } finally {
+    config.chatBridgeToken = before;
+  }
+});
+
+test('POST /voice/yield with a valid token calls voice.yieldVoice and returns its result', async () => {
+  const before = config.chatBridgeToken;
+  const beforeYield = voice.yieldVoice;
+  config.chatBridgeToken = 'secret';
+  let received = null;
+  voice.yieldVoice = async (newIdentity) => {
+    received = newIdentity;
+    return { yielded: true, channels: ['chan-1'] };
+  };
+  try {
+    await withServer({}, async (base) => {
+      const res = await fetch(`${base}/voice/yield`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer secret' },
+        body: JSON.stringify({ newIdentity: 'sc' }),
+      });
+      assert.equal(res.status, 200);
+      assert.deepEqual(await res.json(), { yielded: true, channels: ['chan-1'] });
+      assert.equal(received, 'sc');
+    });
+  } finally {
+    config.chatBridgeToken = before;
+    voice.yieldVoice = beforeYield;
+  }
+});
+
+test('POST /voice/yield with no body still succeeds — a bot holding no call is a no-op', async () => {
+  const before = config.chatBridgeToken;
+  const beforeYield = voice.yieldVoice;
+  config.chatBridgeToken = 'secret';
+  let received = 'unset';
+  voice.yieldVoice = async (newIdentity) => {
+    received = newIdentity;
+    return { yielded: false, reason: 'no-live-session' };
+  };
+  try {
+    await withServer({}, async (base) => {
+      const res = await fetch(`${base}/voice/yield`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer secret' },
+      });
+      assert.equal(res.status, 200);
+      assert.deepEqual(await res.json(), { yielded: false, reason: 'no-live-session' });
+      assert.equal(received, undefined);
+    });
+  } finally {
+    config.chatBridgeToken = before;
+    voice.yieldVoice = beforeYield;
+  }
+});
