@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.17.1
 
 - fix: bridged voice replies posted to a single global `CHAT_BRIDGE_URL`, so with three identities sharing one shim (personal, sc, boss) every identity's spoken answer posted to whichever bot owned that global default — the identity that actually spoke never received its own text, and the bot with no live voice session dropped it silently (`chat bridge: no live voice session, dropping`). Adds `chat_bridge_url` to each entry in `identities:`, resolved per turn through `identity_for()` the same way persona already is; unconfigured identities fall back to the existing global default unchanged.
 
