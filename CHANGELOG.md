@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.18.0
 
 - feat: identity fallback is now visible and, optionally, refusable. An unresolved session key (no identity segment, or an identity absent from `identities:`) has always fallen back to the top-level default persona — the MOST PRIVILEGED one on the instance (Personal vault cwd, `cc-personal`'s `--add-dir` over every repo under `~/Documents/workspaces`), and that fallback fired silently. It now logs a `WARNING` (once per key/reason) whenever `identities:` is configured and a turn still lands on the default, and the `spawned claude` log line now names the resolved `identity=` alongside `cwd=`. New opt-in `identities.strict: true` (`SHIM_IDENTITIES_STRICT`, default off) refuses such a turn outright (HTTP 403, no process spawned) instead of serving it with the default persona; a fresh single-identity install with no `identities:` block keeps behaving exactly as before either way.
 
