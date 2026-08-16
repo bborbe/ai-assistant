@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.16.1
 
 - fix: voice session/persona routing keyed by the wrong axis — `identity_for(key)` resolved persona from the GUILD id, so two identities sharing a guild collided on one `voice:<guildId>` session and one identity serving several guilds fragmented into several personas. `IDENTITY` (bot env) now names the identity; when set, the bound key becomes `voice:<guildId>:<identity>` and the shim resolves persona from the identity segment, keeping the guild segment only to keep sessions apart. Unset reproduces `v0.16.0` exactly; a `v0.16.0` guild-id-keyed `identities:` config still resolves for any bot that has no `IDENTITY` set.
 
