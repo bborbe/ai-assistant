@@ -3,6 +3,26 @@
 const config = require('./config');
 
 /**
+ * The identity header for every request this process makes to the shim, or
+ * `{}` when `IDENTITY` is unset.
+ *
+ * Voice cannot carry this — `speech-to-speech` owns the HTTP call for a
+ * spoken turn and sets no headers of its own, which is why persona for voice
+ * still rides in the session key (`voiceKeyFor`) instead. Every OTHER
+ * request this process makes — chat, bind, reset, the typed/solo hints —
+ * comes straight from this bot process and CAN carry a header, so it does,
+ * uniformly, rather than only on the one path that needed it first. One
+ * mechanism per surface, not one path patched and the rest left inconsistent.
+ *
+ * Unset (`config.identity === ''`) omits the header entirely — a
+ * single-identity deployment reaches the shim exactly as it did before this
+ * existed.
+ */
+function identityHeaders() {
+  return config.identity ? { 'X-Identity': config.identity } : {};
+}
+
+/**
  * Minimal OpenAI chat-completions client.
  *
  * Deliberately assumes NOTHING about server statefulness: it sends the full
@@ -26,6 +46,7 @@ async function chat(messages, { sessionKey, signal } = {}) {
       // SPOKEN session, so the key can no longer tell the shim which kind of
       // output this turn wants — only the transport knows, and this is it.
       'X-Output-Mode': 'text',
+      ...identityHeaders(),
     },
     body: JSON.stringify({ model: config.model, messages, stream: false }),
     signal,
@@ -63,6 +84,7 @@ async function markTypedTurn(sessionKey, typed = true) {
         Authorization: `Bearer ${config.apiKey}`,
         ...(sessionKey ? { 'X-Session-Key': sessionKey } : {}),
         'X-Turn-Typed': typed ? 'true' : 'false',
+        ...identityHeaders(),
       },
     });
     return res.ok;
@@ -90,6 +112,7 @@ async function bindVoiceKey(sessionKey) {
       headers: {
         Authorization: `Bearer ${config.apiKey}`,
         'X-Session-Key': sessionKey,
+        ...identityHeaders(),
       },
     });
     if (res.ok) return { ok: true };
@@ -127,6 +150,7 @@ async function setVoiceSolo(solo) {
       headers: {
         Authorization: `Bearer ${config.apiKey}`,
         'X-Voice-Solo': solo ? 'true' : 'false',
+        ...identityHeaders(),
       },
     });
     if (res.ok) return { ok: true };
@@ -141,7 +165,11 @@ async function setVoiceSolo(solo) {
 async function resetSession(sessionKey) {
   const res = await fetch(`${config.baseUrl}/sessions/reset`, {
     method: 'POST',
-    headers: { 'X-Session-Key': sessionKey, Authorization: `Bearer ${config.apiKey}` },
+    headers: {
+      'X-Session-Key': sessionKey,
+      Authorization: `Bearer ${config.apiKey}`,
+      ...identityHeaders(),
+    },
   });
   if (!res.ok) throw new Error(`endpoint ${res.status} — does it support sessions?`);
   return res.json();
@@ -155,6 +183,7 @@ async function bindSession(sessionKey, id) {
       'Content-Type': 'application/json',
       'X-Session-Key': sessionKey,
       Authorization: `Bearer ${config.apiKey}`,
+      ...identityHeaders(),
     },
     body: JSON.stringify({ id }),
   });
@@ -166,7 +195,7 @@ async function bindSession(sessionKey, id) {
 /** Transcripts on disk that a conversation could be switched to. */
 async function availableSessions() {
   const res = await fetch(`${config.baseUrl}/sessions/available`, {
-    headers: { Authorization: `Bearer ${config.apiKey}` },
+    headers: { Authorization: `Bearer ${config.apiKey}`, ...identityHeaders() },
   });
   if (!res.ok) throw new Error(`endpoint ${res.status} — does it support sessions?`);
   return res.json();
@@ -174,7 +203,7 @@ async function availableSessions() {
 
 async function listSessions() {
   const res = await fetch(`${config.baseUrl}/sessions`, {
-    headers: { Authorization: `Bearer ${config.apiKey}` },
+    headers: { Authorization: `Bearer ${config.apiKey}`, ...identityHeaders() },
   });
   if (!res.ok) throw new Error(`endpoint ${res.status} — does it support sessions?`);
   return res.json();

@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: `X-Identity` request header carries persona for text turns — `identity_for()` in the shim resolves persona as header → 3-segment voice key → 2-segment guild key → instance default, with the header taking priority whenever both are present. Voice keeps routing persona through the session key (`speech-to-speech` owns that HTTP call and cannot set headers), but text surfaces (thread/DM/channel keys) previously carried no identity at all, so every identity's text turns answered out of the shim's one default persona. The bot now sends `X-Identity` on every request when `IDENTITY` is set; unset behaves exactly as before.
+
 ## v0.16.1
 
 - fix: voice session/persona routing keyed by the wrong axis — `identity_for(key)` resolved persona from the GUILD id, so two identities sharing a guild collided on one `voice:<guildId>` session and one identity serving several guilds fragmented into several personas. `IDENTITY` (bot env) now names the identity; when set, the bound key becomes `voice:<guildId>:<identity>` and the shim resolves persona from the identity segment, keeping the guild segment only to keep sessions apart. Unset reproduces `v0.16.0` exactly; a `v0.16.0` guild-id-keyed `identities:` config still resolves for any bot that has no `IDENTITY` set.

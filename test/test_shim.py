@@ -190,6 +190,32 @@ class IdentityForKey(unittest.TestCase):
     def test_legacy_default_key_resolves_to_the_instance_default(self):
         self.assertEqual(shim.identity_for(shim.DEFAULT_KEY)["cwd"], shim.CWD)
 
+    def test_header_identity_on_a_text_key_resolves_that_identity(self):
+        # THE GAP THIS PR CLOSES: a text key (`thread:`/`dm:`/`channel:`)
+        # carries no identity on its own — this is the only mechanism that
+        # can route it to anything other than the instance default.
+        resolved = shim.identity_for("thread:H1", header_identity="sc")
+        self.assertEqual(resolved["cwd"], "/tmp/sc")
+        self.assertEqual(resolved["claude_script"], "/tmp/cc-sc")
+
+    def test_no_header_on_a_text_key_falls_back_to_the_instance_default(self):
+        resolved = shim.identity_for("thread:H1", header_identity="")
+        self.assertEqual(resolved["cwd"], shim.CWD)
+
+    def test_header_wins_over_a_3_segment_voice_key(self):
+        # Voice's key-embedded identity and the header can both be present
+        # (e.g. a misconfigured client, or a future caller experimenting) —
+        # the header must win so exactly one mechanism governs resolution
+        # whenever both are present, rather than the two silently disagreeing.
+        shim.IDENTITIES["boss"] = {"cwd": "/tmp/boss"}
+        resolved = shim.identity_for("voice:111:sc", header_identity="boss")
+        self.assertEqual(resolved["cwd"], "/tmp/boss")
+
+    def test_unknown_header_identity_falls_back_to_default_not_a_crash(self):
+        resolved = shim.identity_for("thread:H1", header_identity="nonexistent")
+        self.assertEqual(resolved["cwd"], shim.CWD)
+        self.assertEqual(resolved["claude_script"], shim.CLAUDE_SCRIPT)
+
 
 class LoadIdentitiesFromConfig(unittest.TestCase):
     """Parsing the `identities:` block out of config.yaml's shape.

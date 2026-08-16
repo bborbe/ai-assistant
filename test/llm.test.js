@@ -149,6 +149,63 @@ test('two transcript lines written in the same millisecond both survive', () => 
   for (const f of files) assert.match(f, /^\d+-.+-\d+\.txt$/);
 });
 
+test('chat() sends X-Identity when IDENTITY is set', async () => {
+  // THE GAP THIS PR CLOSES: text turns carried no identity at all before
+  // this, so every identity's text answered out of the shim's one default
+  // persona. This header is what a text-surface process CAN send that
+  // speech-to-speech cannot.
+  process.env.IDENTITY = 'sc';
+  delete require.cache[require.resolve('../src/config')];
+  delete require.cache[require.resolve('../src/llm')];
+  const { chat } = require('../src/llm');
+
+  const realFetch = global.fetch;
+  let seenHeaders;
+  try {
+    global.fetch = async (url, opts) => {
+      seenHeaders = opts.headers;
+      return {
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: 'hi' } }] }),
+      };
+    };
+    await chat([{ role: 'user', content: 'hello' }]);
+    assert.equal(seenHeaders['X-Identity'], 'sc');
+  } finally {
+    global.fetch = realFetch;
+    delete process.env.IDENTITY;
+    delete require.cache[require.resolve('../src/config')];
+    delete require.cache[require.resolve('../src/llm')];
+  }
+});
+
+test('chat() omits X-Identity when IDENTITY is unset', async () => {
+  delete process.env.IDENTITY;
+  delete require.cache[require.resolve('../src/config')];
+  delete require.cache[require.resolve('../src/llm')];
+  const { chat } = require('../src/llm');
+
+  const realFetch = global.fetch;
+  let seenHeaders;
+  try {
+    global.fetch = async (url, opts) => {
+      seenHeaders = opts.headers;
+      return {
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: 'hi' } }] }),
+      };
+    };
+    await chat([{ role: 'user', content: 'hello' }]);
+    assert.equal(
+      'X-Identity' in seenHeaders,
+      false,
+      'a single-identity deployment must be unchanged',
+    );
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
 test('bindVoiceKey distinguishes unsupported from broken', async () => {
   // The bot may not depend on which backend sits behind OPENAI_BASE_URL, so a
   // stateless endpoint with no /voice/bind must degrade to one shared voice
