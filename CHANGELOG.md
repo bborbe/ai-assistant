@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.19.3
 
 - fix: `zai_matrix.py` ran its entire network benchmark at import time. The
   execution body sat at module level with no `main()` / `__main__` guard, so
