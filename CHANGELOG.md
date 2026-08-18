@@ -8,6 +8,15 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: `zai_matrix.py` ran its entire network benchmark at import time. The
+  execution body sat at module level with no `main()` / `__main__` guard, so
+  any `import zai_matrix` (or a smoke test importing all four scripts)
+  triggered a full surface × thinking-mode matrix against z.ai — hanging the
+  import. Wrapped the body in `def main()` behind the standard guard, matching
+  the other three scripts. Caught by the import smoke test this release adds.
+
 ## v0.19.2
 
 - fix: the shim's wake-gate solo state is now keyed by voice session, not a process-wide global. A previous call ending with `solo=True` no longer leaks into the next call (e.g. a team channel that joined right after a private one) — `is_solo(<unknown key>)` returns False (gate armed), the safe direction. `/v1/voice/solo` now requires `X-Session-Key`; a missing one is a 400. The bot's `syncSolo()` always POSTs on join and on every arrival or departure, including when `channel.members` is unreadable at `/join` time (the actual race that triggered the 2026-08-18 Brogrammers false-trigger), so the bot and shim agree on the armed state from the very first turn of a new call.
