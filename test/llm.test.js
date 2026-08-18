@@ -237,3 +237,53 @@ test('bindVoiceKey distinguishes unsupported from broken', async () => {
     global.fetch = realFetch;
   }
 });
+
+test('setVoiceSolo carries the voice session key as X-Session-Key', async () => {
+  // The shim's solo state is keyed by the same identifier bindVoiceKey keys
+  // a session with. Without this header the shim would have to either reject
+  // the POST (the route requires a key since the 2026-08-18 cross-call leak)
+  // or fall back to a default key — which is exactly what the old global did.
+  // The fix lives or dies on this header being present on every call.
+  const { setVoiceSolo } = require('../src/llm');
+  const realFetch = global.fetch;
+  let captured;
+  try {
+    global.fetch = async (_url, init) => {
+      captured = init;
+      return { ok: true, status: 200 };
+    };
+    await setVoiceSolo(true, 'voice:G1:personal');
+    assert.equal(captured.method, 'POST');
+    assert.equal(captured.headers['X-Voice-Solo'], 'true');
+    assert.equal(captured.headers['X-Session-Key'], 'voice:G1:personal');
+    await setVoiceSolo(false, 'voice:G1:personal');
+    assert.equal(captured.headers['X-Voice-Solo'], 'false');
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
+test('setVoiceSolo distinguishes unsupported from broken', async () => {
+  // Same contract as bindVoiceKey: an endpoint without /voice/solo (any
+  // stateless backend) must degrade gracefully, NOT block the join. A real
+  // error has to stay distinguishable so the caller can choose between
+  // "no route here" and "the route is broken".
+  const { setVoiceSolo } = require('../src/llm');
+  const realFetch = global.fetch;
+  try {
+    global.fetch = async () => ({ ok: false, status: 404 });
+    assert.deepEqual(await setVoiceSolo(true, 'voice:G1'), { ok: false, unsupported: true });
+
+    global.fetch = async () => ({ ok: false, status: 500 });
+    assert.deepEqual(await setVoiceSolo(true, 'voice:G1'), { ok: false, error: 'endpoint 500' });
+
+    global.fetch = async () => {
+      throw new Error('connect ECONNREFUSED');
+    };
+    const down = await setVoiceSolo(true, 'voice:G1');
+    assert.equal(down.retryable, true);
+    assert.match(down.error, /ECONNREFUSED/);
+  } finally {
+    global.fetch = realFetch;
+  }
+});

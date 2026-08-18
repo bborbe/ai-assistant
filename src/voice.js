@@ -1077,24 +1077,33 @@ function humansIn(channel) {
 }
 
 /**
- * Recompute whether the operator is alone and tell the endpoint when it changed.
+ * Recompute whether the operator is alone and tell the endpoint what we know.
  *
- * Only posts on a CHANGE. The state is sticky on both sides, so re-sending it
- * per voice event would be a request per mute, per camera toggle, per join
- * anywhere in the guild — and the log line is worth reading precisely because it
- * appears when the room actually changed.
+ * ALWAYS POSTs, even when the channel is unreadable (`humans === null`) or the
+ * new value matches `session.solo`. Pre-fix this skipped both cases, and that
+ * let the previous call's solo state leak into the shim — a private call
+ * ending with solo=True was still True when the next call (often a team
+ * channel) joined, and the wake gate answered whatever that call's first
+ * utterance said (the 2026-08-18 Brogrammers incident). Per-key state on the
+ * shim makes the cross-call leak impossible; always posting here is the
+ * belt-and-braces half, so the bot and the shim agree on the armed state on
+ * entry to a new call, never relying on a previous call's residue.
  */
 async function syncSolo(session, channel) {
   const humans = humansIn(channel);
-  if (humans === null) return;
+  const unreadable = humans === null;
+  // `unreadable` is treated as NOT solo, so the gate arms. The shim's per-key
+  // lookup already defaults unknown keys to False, so even a missed POST would
+  // fail closed; the POST here just makes sure the shim has a record of THIS
+  // key being not-solo rather than relying on the default.
   const solo = humans === 1;
-  if (solo === session.solo) return;
-  session.solo = solo;
-  const res = await llm.setVoiceSolo(solo);
+  const res = await llm.setVoiceSolo(solo, session.voiceKey);
   if (res.unsupported) {
     // The gate stays armed on an endpoint that never heard of the route, so
     // this is a note about capability, not a failure.
-    log.info('voice: endpoint has no /voice/solo — wake phrase always required');
+    log.info('voice: endpoint has no /voice/solo — wake phrase always required', {
+      voiceKey: session.voiceKey,
+    });
     session.solo = false;
     return;
   }
@@ -1104,16 +1113,29 @@ async function syncSolo(session, channel) {
     // got the message is doing — rather than answering unaddressed speech.
     log.warn('voice: could not sync solo state, wake phrase stays required', {
       error: res.error,
+      voiceKey: session.voiceKey,
     });
     session.solo = false;
     return;
   }
-  log.info(
-    `voice: ${solo ? 'alone — wake phrase not required' : 'not alone — wake phrase required'}`,
-    {
-      humans,
-    },
-  );
+  if (unreadable) {
+    // Channel.members wasn't readable at this moment (typical on /join, before
+    // discord.js populates the cache). The POST still happened; the shim's
+    // per-key state is correctly armed, the bot is logging the asymmetry.
+    log.info('voice: channel unreadable on syncSolo — gate explicitly armed', {
+      voiceKey: session.voiceKey,
+    });
+  }
+  if (solo !== session.solo) {
+    session.solo = solo;
+    log.info(
+      `voice: ${solo ? 'alone — wake phrase not required' : 'not alone — wake phrase required'}`,
+      {
+        humans,
+        voiceKey: session.voiceKey,
+      },
+    );
+  }
 }
 
 function transcriptFor(guildId, channelId) {
@@ -1214,6 +1236,7 @@ module.exports = {
   transcriptFor,
   liveSessionFor,
   noteVoiceState,
+  syncSolo,
   // Exported for unit tests: "who is in the room" is the whole input to the
   // wake-gate decision, and the bot-is-a-member case is exactly the one that
   // makes "alone" unreachable if counted naively.
