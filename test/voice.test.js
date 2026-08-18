@@ -40,19 +40,27 @@ function fakeSession({ channelId = 'chan-1', closed = false, sendImpl, guildId }
 // can be asserted.
 const llm = require('../src/llm');
 const realMarkTypedTurn = llm.markTypedTurn;
+const realSetVoiceSolo = llm.setVoiceSolo;
 let typedTurnCalls = [];
+let voiceSoloCalls = [];
 
 test.beforeEach(() => {
   voice.sessions.clear();
   typedTurnCalls = [];
+  voiceSoloCalls = [];
   llm.markTypedTurn = async (key, typed = true) => {
     typedTurnCalls.push({ key, typed });
     return true;
+  };
+  llm.setVoiceSolo = async (solo, key) => {
+    voiceSoloCalls.push({ solo, key });
+    return { ok: true };
   };
 });
 
 test.after(() => {
   llm.markTypedTurn = realMarkTypedTurn;
+  llm.setVoiceSolo = realSetVoiceSolo;
 });
 
 // speak() awaits the typed-turn hint BEFORE touching the socket, so the two
@@ -1012,3 +1020,72 @@ test('a failed typed turn retracts the hint on the same key it set', async () =>
     { key: 'voice:guild-9', typed: false },
   ]);
 });
+
+test('syncSolo POSTs even when the channel is unreadable, arming the gate', async () => {
+  // THE 2026-08-18 FIX. Pre-fix this early-returned without POSTing when
+  // humans===null (channel.members not readable at slash-command time), so the
+  // shim kept whatever stale value a previous call had set. The Brogrammers
+  // join inherited a private session's solo=True and answered unaddressed
+  // speech. Post-fix the POST happens regardless, the shim's per-key entry
+  // is explicitly set to not-solo, and the bot's local flag arms too.
+  const fakeSession = { voiceKey: 'voice:G1', solo: false };
+  await voice.syncSolo(fakeSession, { members: {} });
+  assert.deepEqual(voiceSoloCalls, [{ solo: false, key: 'voice:G1' }]);
+  assert.equal(fakeSession.solo, false, 'unreadable channel keeps the gate armed');
+});
+
+test('syncSolo carries the session key on the POST', async () => {
+  // The shim keys solo state by the same identifier bindVoiceKey uses. If the
+  // POST drops the key, the shim rejects with 400 — the test above covered
+  // the bot-side obligation to always POST; this covers the value it carries.
+  const fakeSession = { voiceKey: 'voice:G1:personal', solo: false };
+  await voice.syncSolo(fakeSession, makeChannel({ humans: 2 }));
+  assert.deepEqual(voiceSoloCalls, [{ solo: false, key: 'voice:G1:personal' }]);
+});
+
+test('syncSolo POSTs even when the new value matches session.solo', async () => {
+  // Belt-and-braces against the cross-call leak. The old code skipped the
+  // POST when nothing changed; today the POST always runs because a missed
+  // POST is exactly the failure mode this whole change exists to prevent.
+  // Two consecutive calls with the same value produce two POSTs.
+  const fakeSession = { voiceKey: 'voice:G2', solo: false };
+  await voice.syncSolo(fakeSession, makeChannel({ humans: 2 }));
+  await voice.syncSolo(fakeSession, makeChannel({ humans: 2 }));
+  assert.equal(voiceSoloCalls.length, 2, 'unconditional POST every syncSolo');
+  assert.ok(voiceSoloCalls.every((c) => c.key === 'voice:G2' && c.solo === false));
+});
+
+test('syncSolo flips session.solo on a real change', async () => {
+  const fakeSession = { voiceKey: 'voice:G3', solo: false };
+  await voice.syncSolo(fakeSession, makeChannel({ humans: 1 }));
+  assert.equal(fakeSession.solo, true, 'alone flips local flag to true on POST success');
+  await voice.syncSolo(fakeSession, makeChannel({ humans: 2 }));
+  assert.equal(fakeSession.solo, false, 'second human re-arms the gate');
+  assert.deepEqual(
+    voiceSoloCalls.map((c) => c.solo),
+    [true, false],
+  );
+});
+
+test('syncSolo keeps session.solo armed when the POST fails', async () => {
+  // The shim's per-key state did not get updated on a failed POST, so the bot
+  // must mirror that — fail closed, never fail open. Same direction as a
+  // 404 from /voice/solo: the gate stays armed until proven otherwise.
+  const realStub = llm.setVoiceSolo;
+  llm.setVoiceSolo = async () => ({ ok: false, error: 'endpoint 500' });
+  try {
+    const fakeSession = { voiceKey: 'voice:G4', solo: false };
+    await voice.syncSolo(fakeSession, makeChannel({ humans: 1 }));
+    assert.equal(fakeSession.solo, false, 'a failed POST keeps the gate armed');
+  } finally {
+    llm.setVoiceSolo = realStub;
+  }
+});
+
+function makeChannel({ humans, bots = 0 }) {
+  const users = [
+    ...Array.from({ length: humans }, () => ({ user: { bot: false } })),
+    ...Array.from({ length: bots }, () => ({ user: { bot: true } })),
+  ];
+  return { members: fakeMembers(users) };
+}

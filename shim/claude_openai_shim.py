@@ -640,21 +640,29 @@ def bind_voice_key(key: str) -> str:
 # never told stays exactly as it was — gate armed — so a shim that predates this
 # route, a bot that fails to post, and a backend that 404s the path all degrade
 # to the safe behaviour rather than to an assistant that answers everything.
-_SOLO = False
+# Per-key solo state, keyed by the same shape `bind_voice_key` uses
+# (`voice:<guildId>` or `voice:<guildId>:<identity>`). The global that lived
+# here until v0.20.0 leaked across calls — a private session ending with
+# solo=True was still True when the next call (often a team channel) joined,
+# and the wake gate answered whatever the next call's first turn said. With
+# one entry per key, state cannot bleed across calls: an unknown key defaults
+# to False (gate armed), which is the load-bearing direction.
+_SOLO_BY_KEY: dict[str, bool] = {}
 _SOLO_LOCK = Lock()
 
 
-def set_solo(solo: bool) -> bool:
-    """Record whether the operator is alone. Returns the previous value."""
-    global _SOLO
+def set_solo(key: str, solo: bool) -> bool:
+    """Set the solo flag for a voice key. Returns the previous value."""
     with _SOLO_LOCK:
-        previous, _SOLO = _SOLO, bool(solo)
+        previous = _SOLO_BY_KEY.get(key, False)
+        _SOLO_BY_KEY[key] = bool(solo)
     return previous
 
 
-def is_solo() -> bool:
+def is_solo(key: str) -> bool:
+    """Look up solo state by voice key. Unknown keys return False (gate armed)."""
     with _SOLO_LOCK:
-        return _SOLO
+        return _SOLO_BY_KEY.get(key, False)
 
 
 def voice_key() -> str:
@@ -2309,10 +2317,20 @@ class Handler(BaseHTTPRequestHandler):
         # /voice/bind above, for the same reason: speech-to-speech owns the HTTP
         # call and can attach no headers of its own.
         if self.path.rstrip("/").endswith("/voice/solo"):
+            key = self.headers.get("X-Session-Key", "").strip()
+            if not key:
+                # The bot always sends the key, mirroring /voice/bind and
+                # /turns/typed — a missing one is a client bug, not something
+                # to silently fold into a default key (which is what the old
+                # global did, and the cause of the 2026-08-18 cross-call leak).
+                return self._json(400, {"error": {"message": "missing X-Session-Key"}})
             solo = self.headers.get("X-Voice-Solo", "").strip().strip("\"'").lower()
-            previous = set_solo(solo in ("1", "true", "yes", "on"))
-            print(f"-> SOLO [{is_solo()}] (was {previous})", flush=True)
-            return self._json(200, {"solo": is_solo(), "previous": previous})
+            previous = set_solo(key, solo in ("1", "true", "yes", "on"))
+            print(f"-> SOLO [{key}={is_solo(key)}] (was {previous})", flush=True)
+            return self._json(
+                200,
+                {"solo": is_solo(key), "previous": previous, "key": key},
+            )
 
         if self.path.rstrip("/").endswith("/turns/typed"):
             key = self._key()
@@ -2411,7 +2429,7 @@ class Handler(BaseHTTPRequestHandler):
         # interrupt, and the cost of a miss (say it again) is unchanged. This
         # reverses only WHEN the gate is armed — how it matches is untouched.
         if voice and not typed_turn:
-            solo = is_solo()
+            solo = is_solo(key)
             if not solo and not is_addressed(prompt):
                 print(f"-> QUIET [{key}] not addressed: {prompt[:60]!r}", flush=True)
                 if req.get("stream"):

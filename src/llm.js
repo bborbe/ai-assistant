@@ -116,17 +116,24 @@ async function bindVoiceKey(sessionKey) {
  * turn. The bot is the only side that can see who is in the voice channel; the
  * shim is the only side that runs the wake gate.
  *
+ * `sessionKey` names which conversation this solo state belongs to — the
+ * same key `bindVoiceKey` uses (`voice:<guildId>` or `voice:<guildId>:<identity>`).
+ * The shim keys solo state by it, so a private call's `solo=True` cannot leak
+ * into a team channel that joined later (the 2026-08-18 Brogrammers incident
+ * before per-key state existed).
+ *
  * Failure degrades toward the gate staying armed, which is the direction that
  * cannot surprise anyone: an unreached endpoint keeps demanding the wake phrase
  * rather than answering every sentence in a room it can no longer see.
  */
-async function setVoiceSolo(solo) {
+async function setVoiceSolo(solo, sessionKey) {
   try {
     const res = await fetch(`${config.baseUrl}/voice/solo`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${config.apiKey}`,
         'X-Voice-Solo': solo ? 'true' : 'false',
+        'X-Session-Key': sessionKey,
       },
     });
     if (res.ok) return { ok: true };
