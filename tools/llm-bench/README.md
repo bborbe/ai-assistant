@@ -6,7 +6,7 @@ see `shim/claude_openai_shim.py`). Not wired into CI, not imported by the bot.
 > **This is a parked copy, not the intended home.** These scripts belong in
 > `bborbe/coding`'s `bench/` as a second fixture under its runner contract — that
 > repo already models configuration identity as `(rules+commands, model, effort,
-> mode)` with a results ledger and scoring layer. They live here because they were
+mode)` with a results ledger and scoring layer. They live here because they were
 > written for this repo's model choice and would otherwise have been lost.
 
 ## Why a separate benchmark exists
