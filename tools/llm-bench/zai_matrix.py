@@ -49,17 +49,24 @@ def oai(model,nothink):
                 if tf is None: tf=now
     return tf,tl,tn,hn
 
-f=lambda x:"%5.2f"%x if x is not None else "  -  "
-print("%-12s %-9s %-6s %8s %8s %7s %8s  %s"%("model","surface","think","txt1st","txtlast","txtN","reasonN","verdict"))
-print("-"*86)
-for m in ["glm-5.2","glm-4.6","glm-5-turbo"]:
-    for sname,fn in (("anthropic",anth),("openai",oai)):
-        for nt in (False,True):
-            try: tf,tl,tn,hn=fn(m,nt)
-            except Exception as e:
-                print("%-12s %-9s %-6s ERR %s"%(m,sname,"off" if nt else "on",str(e)[:40])); continue
-            if tn==0: v="NO TEXT"
-            elif tl is not None and tf is not None and (tl-tf)>0.3: v="streams"
-            else: v="BURST"
-            print("%-12s %-9s %-6s %8s %8s %7d %8d  %s"%(
-                m,sname,"off" if nt else "on",f(tf),f(tl),tn,hn,v))
+
+
+def main():
+    f=lambda x:"%5.2f"%x if x is not None else "  -  "
+    print("%-12s %-9s %-6s %8s %8s %7s %8s  %s"%("model","surface","think","txt1st","txtlast","txtN","reasonN","verdict"))
+    print("-"*86)
+    for m in ["glm-5.2","glm-4.6","glm-5-turbo"]:
+        for sname,fn in (("anthropic",anth),("openai",oai)):
+            for nt in (False,True):
+                try: tf,tl,tn,hn=fn(m,nt)
+                except Exception as e:
+                    print("%-12s %-9s %-6s ERR %s"%(m,sname,"off" if nt else "on",str(e)[:40])); continue
+                if tn==0: v="NO TEXT"
+                elif tl is not None and tf is not None and (tl-tf)>0.3: v="streams"
+                else: v="BURST"
+                print("%-12s %-9s %-6s %8s %8s %7d %8d  %s"%(
+                    m,sname,"off" if nt else "on",f(tf),f(tl),tn,hn,v))
+
+
+if __name__ == "__main__":
+    main()
