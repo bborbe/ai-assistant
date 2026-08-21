@@ -630,6 +630,25 @@ class SoloGate(unittest.TestCase):
         shim.set_solo(self.KEY, True)
         self.assertEqual(shim.strip_wake_phrase("what's my next task"), "what's my next task")
 
+    def test_always_wake_defaults_off(self):
+        # VOICE_ALWAYS_WAKE mirrors the bot's voiceAlwaysWake; with nothing set
+        # the gate must behave exactly as before (solo can still disarm it).
+        self.assertFalse(shim.ALWAYS_WAKE)
+
+    def test_always_wake_overrides_solo_at_the_gate(self):
+        # The gate expression the request handler uses: a stale per-key solo
+        # state cannot disarm the gate on an instance that opted out. This pins
+        # the combination the handler evaluates — the full request path is
+        # verified live in a real call, per the repo's voice-verification rule.
+        shim.set_solo(self.KEY, True)
+        self.assertTrue(shim.is_solo(self.KEY))
+        prev = shim.ALWAYS_WAKE
+        shim.ALWAYS_WAKE = True
+        try:
+            self.assertFalse(shim.is_solo(self.KEY) and not shim.ALWAYS_WAKE)
+        finally:
+            shim.ALWAYS_WAKE = prev
+
     def test_unknown_key_defaults_to_gate_armed(self):
         # THE 2026-08-18 FIX. Before per-key state, a fresh key inherited whatever
         # the previous call had set — a private session's True bled into the

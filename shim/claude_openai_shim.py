@@ -1241,6 +1241,12 @@ def is_filler(text: str) -> bool:
 # matches nothing anyone says. Same family as the `$HOME` and secret-in-argv
 # traps this repo has already been bitten by twice.
 WAKE_PHRASES = setting("SHIM_WAKE_PHRASES", "voice.wake_phrases", "hey bot,hey bought,hey but,hi bot").strip("\"'")
+# Force the wake phrase even in a solo call. Default off — mirrors the bot's
+# `voiceAlwaysWake` (src/config.js `flag()`); both processes read the flag so a
+# stale per-key solo=True from before the flag was set cannot disarm the gate.
+# The bot also stops posting solo=True, but this is the structural half: an
+# instance with VOICE_ALWAYS_WAKE=1 treats every room as not-solo, period.
+ALWAYS_WAKE = setting("VOICE_ALWAYS_WAKE", "voice.always_wake", False)
 # Anchored to the start of a SENTENCE, not just the start of the utterance.
 #
 # speech-to-speech accumulates a turn across progressive finals, so one
@@ -2429,7 +2435,7 @@ class Handler(BaseHTTPRequestHandler):
         # interrupt, and the cost of a miss (say it again) is unchanged. This
         # reverses only WHEN the gate is armed — how it matches is untouched.
         if voice and not typed_turn:
-            solo = is_solo(key)
+            solo = is_solo(key) and not ALWAYS_WAKE
             if not solo and not is_addressed(prompt):
                 print(f"-> QUIET [{key}] not addressed: {prompt[:60]!r}", flush=True)
                 if req.get("stream"):

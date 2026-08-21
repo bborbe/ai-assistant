@@ -1067,6 +1067,22 @@ test('syncSolo flips session.solo on a real change', async () => {
   );
 });
 
+test('syncSolo stays armed when VOICE_ALWAYS_WAKE forces it', async () => {
+  // An instance that opted out must never tell the shim it is solo, even when
+  // exactly one human is in the channel. Same direction as the unreadable
+  // channel: the gate stays armed, so unaddressed speech is not answered.
+  const prev = config.voiceAlwaysWake;
+  config.voiceAlwaysWake = true;
+  try {
+    const fakeSession = { voiceKey: 'voice:G4', solo: false };
+    await voice.syncSolo(fakeSession, makeChannel({ humans: 1 }));
+    assert.equal(fakeSession.solo, false, 'flag forces the armed state locally');
+    assert.deepEqual(voiceSoloCalls, [{ solo: false, key: 'voice:G4' }]);
+  } finally {
+    config.voiceAlwaysWake = prev;
+  }
+});
+
 test('syncSolo keeps session.solo armed when the POST fails', async () => {
   // The shim's per-key state did not get updated on a failed POST, so the bot
   // must mirror that — fail closed, never fail open. Same direction as a
