@@ -96,6 +96,15 @@ const config = {
   // speech-to-speech locally and says nothing about what the bot advertises.
   voiceEnabled: flag(process.env.VOICE_ENABLED, true),
 
+  // Default off, so an instance behaves exactly as before. Set VOICE_ALWAYS_WAKE=1
+  // to force the wake phrase even in a solo call — the Star Citizen Assistant
+  // instance on the Liga server uses it so a one-on-one call never auto-answers.
+  // Independent of VOICE_ENABLED: voice stays fully on, only the solo auto-answer
+  // is switched off. Read by BOTH processes (bot here, shim via its own
+  // setting()), because both evaluate the wake rule — a drift shows up as
+  // typing dots with no answer behind them.
+  voiceAlwaysWake: flag(process.env.VOICE_ALWAYS_WAKE, false),
+
   // Sender-level allowlist, applied to BOTH surfaces. Empty = nobody, on
   // purpose: this bot can reach a Claude Code session with vault and repo
   // access, so failing closed is the only safe default.

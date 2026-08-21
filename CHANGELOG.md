@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: new `VOICE_ALWAYS_WAKE` env flag forces the wake phrase even in a solo call — an instance that sets it never auto-answers unaddressed voice, while every instance without it keeps the current behavior (solo calls answer unprompted). Read by both processes: the bot stops POSTing `solo=True` to `/v1/voice/solo`, and the shim's gate treats every room as not-solo when the flag is set, so a stale per-key solo state cannot disarm it. Default off; the Star Citizen Assistant instance uses it on the Liga server.
+
 ## v0.19.3
 
 - fix: `zai_matrix.py` ran its entire network benchmark at import time. The

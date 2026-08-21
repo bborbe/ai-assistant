@@ -38,6 +38,23 @@ test('voice can be disabled by any of the usual falsey spellings', () => {
   delete process.env.VOICE_ENABLED;
 });
 
+// VOICE_ALWAYS_WAKE defaults OFF: existing instances must behave identically
+// with nothing set (solo calls keep answering unprompted).
+test('voiceAlwaysWake defaults off when unset', () => {
+  delete process.env.VOICE_ALWAYS_WAKE;
+  delete require.cache[require.resolve('../src/config')];
+  assert.equal(require('../src/config').voiceAlwaysWake, false);
+});
+
+test('voiceAlwaysWake accepts the usual truthy spellings', () => {
+  for (const raw of ['1', 'true', 'yes', 'on', 'TRUE', '"1"']) {
+    process.env.VOICE_ALWAYS_WAKE = raw;
+    delete require.cache[require.resolve('../src/config')];
+    assert.equal(require('../src/config').voiceAlwaysWake, true, `VOICE_ALWAYS_WAKE=${raw}`);
+  }
+  delete process.env.VOICE_ALWAYS_WAKE;
+});
+
 // Unset must reproduce v0.16.0 exactly — an existing single-identity
 // deployment upgrading onto this must see no behaviour change at all.
 test('identity is empty when IDENTITY is unset', () => {

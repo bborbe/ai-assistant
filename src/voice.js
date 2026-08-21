@@ -1096,7 +1096,11 @@ async function syncSolo(session, channel) {
   // lookup already defaults unknown keys to False, so even a missed POST would
   // fail closed; the POST here just makes sure the shim has a record of THIS
   // key being not-solo rather than relying on the default.
-  const solo = humans === 1;
+  // VOICE_ALWAYS_WAKE forces the armed state: solo auto-answer is the personal
+  // instance's convenience, and an instance that opts out must tell the shim
+  // (and its own local mirror) that the room is never solo — the shim enforces
+  // the same flag independently, so a stale per-key True cannot disarm it.
+  const solo = humans === 1 && !config.voiceAlwaysWake;
   const res = await llm.setVoiceSolo(solo, session.voiceKey);
   if (res.unsupported) {
     // The gate stays armed on an endpoint that never heard of the route, so
@@ -1129,7 +1133,9 @@ async function syncSolo(session, channel) {
   if (solo !== session.solo) {
     session.solo = solo;
     log.info(
-      `voice: ${solo ? 'alone — wake phrase not required' : 'not alone — wake phrase required'}`,
+      config.voiceAlwaysWake
+        ? 'voice: wake phrase forced (VOICE_ALWAYS_WAKE)'
+        : `voice: ${solo ? 'alone — wake phrase not required' : 'not alone — wake phrase required'}`,
       {
         humans,
         voiceKey: session.voiceKey,
