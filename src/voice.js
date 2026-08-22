@@ -5,6 +5,7 @@ const {
   EndBehaviorType,
   entersState,
   VoiceConnectionStatus,
+  VoiceConnectionDisconnectReason,
   createAudioPlayer,
   createAudioResource,
   StreamType,
@@ -345,7 +346,13 @@ class Session {
     this.ws = ws;
     ws.on('open', () => {
       log.info('  voice: s2s connected');
-      this.onSlotFreed();
+      // No onSlotFreed() here: WS open precedes BOTH server outcomes. The
+      // router claims the pipeline slot AFTER accept and either sends
+      // `session.created` (slot acquired) or `session_limit_reached` + close
+      // (slot busy). Claiming a completed handover on open is how a rejected
+      // reconnect logged "handover completed" and then took the rejection —
+      // the 2026-08-22 secondary defect. The honest signal is the server's
+      // `session.created`, handled in onEvent().
       // Deliberately a PARTIAL session.update: speech-to-speech deep-merges
       // incoming fields (handlers/session.py:28), so sending only this one
       // leaves the launcher's VAD tuning — thresholds, silence durations —
@@ -566,8 +573,10 @@ class Session {
    * the previous holder to leave, and it finished before our deadline. Stays
    * silent in the channel by design — a normal handover must read as silent
    * from the user's point of view, or every ordinary switch spams the
-   * channel with a notice nobody needed. Split out from connectS2S()'s
-   * 'open' handler so it can be exercised directly, the same way onEvent is.
+   * channel with a notice nobody needed. Called from onEvent() on the
+   * server's `session.created`, which only arrives once the slot is actually
+   * acquired — never from connectS2S()'s WS 'open', which precedes both the
+   * acceptance and the `session_limit_reached` rejection.
    */
   onSlotFreed() {
     if (!this.slotWaitStartedAt) return;
@@ -594,6 +603,15 @@ class Session {
       playing: Boolean(this.audio),
     });
     switch (e.type) {
+      // The router's actual acceptance of the session — sent only after it has
+      // claimed the pipeline slot. This is the honest "slot acquired" signal:
+      // on WS open the server may still reject with `session_limit_reached`
+      // (which sends no session.created), so claiming a completed handover
+      // belongs here, where a rejection can never have preceded it.
+      case 'session.created':
+        this.onSlotFreed();
+        log.info('  voice: s2s session accepted', { sessionId: e.session?.id });
+        break;
       // Mirrors the server's own st.in_response gate (response.py) — set on
       // EVERY response.created, not just ones speak() triggered, because a
       // mic-driven VAD turn puts the connection in the same busy state and
@@ -914,7 +932,24 @@ async function join(channel) {
     selfDeaf: false, // MUST be false — the default deafens the bot and it hears nothing
     selfMute: false,
   });
-  conn.on('stateChange', (o, n) => log.info(`  voice: ${o.status} -> ${n.status}`));
+  conn.on('stateChange', (o, n) => {
+    log.info(`  voice: ${o.status} -> ${n.status}`);
+    // The server removed the bot from voice (kicked, or its channel was
+    // deleted) — it is now in no call, but the session and the s2s slot it
+    // holds survive until someone runs /leave. Release it here, like /leave
+    // would. Gated on EndpointRemoved (the null VOICE_SERVER_UPDATE endpoint,
+    // the "you are out of voice" signal) so a transient WS close the
+    // connection recovers from never tears down a healthy call; `sessions.has`
+    // guards the join window before the session is registered.
+    if (
+      n.status === VoiceConnectionStatus.Disconnected &&
+      n.reason === VoiceConnectionDisconnectReason.EndpointRemoved &&
+      sessions.has(channel.guild.id)
+    ) {
+      log.info('voice: removed from voice, releasing session', { reason: n.reason });
+      leave(channel.guild.id);
+    }
+  });
   await entersState(conn, VoiceConnectionStatus.Ready, 30000);
 
   // Claim voice for THIS guild's conversation before the socket exists, so the
@@ -1050,11 +1085,30 @@ function noteVoiceState(oldState, newState) {
   const channel = (is ? newState : oldState).guild?.channels?.cache?.get(here);
   void syncSolo(session, channel);
 
-  if (!session.transcript) return;
-
   const member = newState.member ?? oldState.member;
   const userId = member?.id ?? newState.id ?? oldState.id;
   const name = member?.displayName ?? member?.user?.username ?? userId;
+
+  // The call is over when the last human leaves the channel. The bot stays in
+  // the channel (Discord still shows it connected) but serves nobody, and its
+  // s2s session keeps holding the shared pipeline slot — the exact shape of
+  // the 2026-08-22 outage, where an idle bot starved an active one for 3+
+  // hours. Release the session (and with it the slot) on an empty channel,
+  // before the transcript guard so it holds for calls with transcription off
+  // too. Only a readable channel with zero humans triggers this; an unreadable
+  // one leaves the session where it is. The departing member's line is still
+  // written first — the session is torn down moments later, so this is its
+  // last chance to record the call ending.
+  if (!is && humansIn(channel) === 0) {
+    if (userId && name) session.names.set(userId, name);
+    session.transcript?.writeText(name, '(left the channel)');
+    log.info('voice: left', { user: name });
+    log.info('voice: last human left, releasing session', { guildId, channel: here });
+    leave(guildId);
+    return;
+  }
+
+  if (!session.transcript) return;
   if (userId && name) session.names.set(userId, name);
 
   session.transcript.writeText(name, is ? '(joined the channel)' : '(left the channel)');

@@ -886,6 +886,122 @@ test('onSlotFreed is a no-op when nothing was being waited on', () => {
   assert.equal(fake.slotWaitStartedAt, null);
 });
 
+test('the handover is claimed on session.created, the server acceptance, not WS open', () => {
+  // WS open precedes BOTH outcomes — the router may still reject with
+  // session_limit_reached, which sends no session.created. So the "handover
+  // completed" claim (onSlotFreed) belongs to session.created, and a wait
+  // state set by a prior rejection must be cleared there, not in the open
+  // handler. This is the honesty fix for the 2026-08-22 secondary defect.
+  const fake = fakeOnEventTarget({
+    slotWaitStartedAt: Date.now() - 4000,
+    onSlotFreed: Session.prototype.onSlotFreed,
+  });
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({ type: 'session.created', session: { id: 'sess-1' } }),
+  );
+  assert.equal(fake.slotWaitStartedAt, null, 'acceptance clears the wait state');
+});
+
+test('session.created is a no-op when nothing was being waited on', () => {
+  const fake = fakeOnEventTarget({
+    slotWaitStartedAt: null,
+    onSlotFreed: Session.prototype.onSlotFreed,
+  });
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({ type: 'session.created', session: { id: 'sess-2' } }),
+  );
+  assert.equal(fake.slotWaitStartedAt, null, 'already-clear state stays clear');
+});
+
+// A minimal session the noteVoiceState release path needs: channelId for the
+// "here" anchor, a destroy() that records, and (optionally) a transcript whose
+// writes are captured. voiceStateUpdate-shaped objects carry the same `guild`
+// with a channel cache resolving to `channel`.
+function voiceStatePair({ channel, member = { id: 'u1', displayName: 'Uno' } }) {
+  const guild = { id: 'guild-nvs', channels: { cache: { get: () => channel } } };
+  return {
+    old: { guildId: guild.id, guild, channelId: 'chan-A', member },
+    next: { guildId: guild.id, guild, channelId: null, member },
+  };
+}
+
+test('noteVoiceState releases the session when the last human leaves', () => {
+  const guildId = 'guild-nvs';
+  const channel = { members: fakeMembers([]) };
+  let destroyed = false;
+  const writes = [];
+  voice.sessions.set(guildId, {
+    channelId: 'chan-A',
+    names: new Map(),
+    transcript: { writeText: (speaker, text) => writes.push({ speaker, text }) },
+    destroy: () => (destroyed = true),
+  });
+  const { old, next } = voiceStatePair({ channel });
+  voice.noteVoiceState(old, next);
+
+  assert.equal(destroyed, true, 'the session must be torn down with the call');
+  assert.equal(voice.sessions.has(guildId), false, 'and dropped from the map');
+  assert.deepEqual(
+    writes,
+    [{ speaker: 'Uno', text: '(left the channel)' }],
+    'the departing member is still written before the transcript is torn down',
+  );
+});
+
+test('noteVoiceState releases an empty channel even with transcription off', () => {
+  const guildId = 'guild-nvs';
+  const channel = { members: fakeMembers([]) };
+  let destroyed = false;
+  // No `transcript` — transcription is off; the release must not depend on it.
+  voice.sessions.set(guildId, {
+    channelId: 'chan-A',
+    names: new Map(),
+    destroy: () => (destroyed = true),
+  });
+  const { old, next } = voiceStatePair({ channel });
+  voice.noteVoiceState(old, next);
+
+  assert.equal(destroyed, true, 'release holds for calls with transcription off');
+  assert.equal(voice.sessions.has(guildId), false);
+});
+
+test('noteVoiceState keeps the session while other humans remain', () => {
+  const guildId = 'guild-nvs';
+  const channel = { members: fakeMembers([{ user: { bot: false } }]) };
+  let destroyed = false;
+  voice.sessions.set(guildId, {
+    channelId: 'chan-A',
+    names: new Map(),
+    transcript: { writeText: () => {} },
+    destroy: () => (destroyed = true),
+  });
+  const { old, next } = voiceStatePair({ channel });
+  voice.noteVoiceState(old, next);
+
+  assert.equal(destroyed, false, 'a departing member is not the last human');
+  assert.equal(voice.sessions.has(guildId), true);
+});
+
+test('noteVoiceState does not release on an arrival', () => {
+  const guildId = 'guild-nvs';
+  const channel = { members: fakeMembers([{ user: { bot: false } }]) };
+  let destroyed = false;
+  voice.sessions.set(guildId, {
+    channelId: 'chan-A',
+    names: new Map(),
+    transcript: { writeText: () => {} },
+    destroy: () => (destroyed = true),
+  });
+  // Arrival: oldState is not in the channel, newState joins it.
+  const { old, next } = voiceStatePair({ channel });
+  voice.noteVoiceState({ ...next, channelId: null }, { ...old, channelId: 'chan-A' });
+
+  assert.equal(destroyed, false, 'someone joining never empties the channel');
+  assert.equal(voice.sessions.has(guildId), true);
+});
+
 test('a non-slot s2s error still follows its existing path unchanged', async () => {
   const sent = [];
   const guildId = 'guild-non-slot-error';
