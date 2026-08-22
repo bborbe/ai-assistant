@@ -915,10 +915,26 @@ test('session.created is a no-op when nothing was being waited on', () => {
   assert.equal(fake.slotWaitStartedAt, null, 'already-clear state stays clear');
 });
 
-// A minimal session the noteVoiceState release path needs: channelId for the
-// "here" anchor, a destroy() that records, and (optionally) a transcript whose
-// writes are captured. voiceStateUpdate-shaped objects carry the same `guild`
-// with a channel cache resolving to `channel`.
+// A minimal session the noteVoiceState idle-release path needs: channelId for
+// the "here" anchor, `channel` for the fire-time humansIn re-check, the real
+// schedule/cancel methods, a destroy() that records, and (optionally) a
+// transcript whose writes are captured. voiceStateUpdate-shaped objects carry
+// the same `guild` with a channel cache resolving to `channel`.
+function fakeNvsSession({ channel, transcript, guildId = 'guild-nvs' }) {
+  return {
+    guildId,
+    channelId: 'chan-A',
+    channel,
+    closed: false,
+    idleReleaseTimer: null,
+    scheduleIdleRelease: Session.prototype.scheduleIdleRelease,
+    cancelIdleRelease: Session.prototype.cancelIdleRelease,
+    names: new Map(),
+    ...(transcript ? { transcript } : {}),
+    destroy: () => {},
+  };
+}
+
 function voiceStatePair({ channel, member = { id: 'u1', displayName: 'Uno' } }) {
   const guild = { id: 'guild-nvs', channels: { cache: { get: () => channel } } };
   return {
@@ -927,79 +943,116 @@ function voiceStatePair({ channel, member = { id: 'u1', displayName: 'Uno' } }) 
   };
 }
 
-test('noteVoiceState releases the session when the last human leaves', () => {
+test('noteVoiceState schedules (not takes) the idle release when the last human leaves', () => {
   const guildId = 'guild-nvs';
   const channel = { members: fakeMembers([]) };
-  let destroyed = false;
   const writes = [];
-  voice.sessions.set(guildId, {
-    channelId: 'chan-A',
-    names: new Map(),
+  const session = fakeNvsSession({
+    channel,
     transcript: { writeText: (speaker, text) => writes.push({ speaker, text }) },
-    destroy: () => (destroyed = true),
   });
+  voice.sessions.set(guildId, session);
   const { old, next } = voiceStatePair({ channel });
   voice.noteVoiceState(old, next);
 
-  assert.equal(destroyed, true, 'the session must be torn down with the call');
-  assert.equal(voice.sessions.has(guildId), false, 'and dropped from the map');
+  assert.ok(
+    session.idleReleaseTimer,
+    'a brief absence must not tear the session down — a grace timer is armed instead',
+  );
+  assert.equal(voice.sessions.has(guildId), true, 'session stays in the map during the grace');
   assert.deepEqual(
     writes,
     [{ speaker: 'Uno', text: '(left the channel)' }],
-    'the departing member is still written before the transcript is torn down',
+    'the departing member is still written while the session exists',
   );
 });
 
-test('noteVoiceState releases an empty channel even with transcription off', () => {
+test('noteVoiceState schedules the idle release with transcription off too', () => {
   const guildId = 'guild-nvs';
   const channel = { members: fakeMembers([]) };
-  let destroyed = false;
-  // No `transcript` — transcription is off; the release must not depend on it.
-  voice.sessions.set(guildId, {
-    channelId: 'chan-A',
-    names: new Map(),
-    destroy: () => (destroyed = true),
-  });
+  const session = fakeNvsSession({ channel }); // no transcript — transcription off
+  voice.sessions.set(guildId, session);
   const { old, next } = voiceStatePair({ channel });
   voice.noteVoiceState(old, next);
 
-  assert.equal(destroyed, true, 'release holds for calls with transcription off');
+  assert.ok(session.idleReleaseTimer, 'grace must hold for calls with transcription off');
+  assert.equal(voice.sessions.has(guildId), true);
+});
+
+test('the idle grace timer releases the session when it fires and the channel is still empty', async () => {
+  const guildId = 'guild-nvs';
+  const channel = { members: fakeMembers([]) };
+  let destroyed = false;
+  const session = fakeNvsSession({ channel });
+  session.destroy = () => (destroyed = true);
+  voice.sessions.set(guildId, session);
+
+  const original = config.voiceIdleReleaseMs;
+  config.voiceIdleReleaseMs = 20;
+  try {
+    const { old, next } = voiceStatePair({ channel });
+    voice.noteVoiceState(old, next);
+    assert.ok(session.idleReleaseTimer, 'timer armed on empty');
+    await new Promise((r) => setTimeout(r, 60));
+  } finally {
+    config.voiceIdleReleaseMs = original;
+  }
+
+  assert.equal(destroyed, true, 'release fires after the grace window');
   assert.equal(voice.sessions.has(guildId), false);
+});
+
+test('a rejoining human cancels the scheduled idle release', async () => {
+  const guildId = 'guild-nvs';
+  const emptyChannel = { members: fakeMembers([]) };
+  const filledChannel = { members: fakeMembers([{ user: { bot: false } }]) };
+  let destroyed = false;
+  const session = fakeNvsSession({ channel: emptyChannel });
+  session.destroy = () => (destroyed = true);
+  voice.sessions.set(guildId, session);
+
+  const original = config.voiceIdleReleaseMs;
+  config.voiceIdleReleaseMs = 20;
+  try {
+    const { old, next } = voiceStatePair({ channel: emptyChannel });
+    voice.noteVoiceState(old, next); // last human leaves -> armed
+    assert.ok(session.idleReleaseTimer, 'timer armed on empty');
+    // Someone rejoins before the grace elapses.
+    const pair2 = voiceStatePair({ channel: filledChannel });
+    voice.noteVoiceState({ ...pair2.next, channelId: null }, { ...pair2.old, channelId: 'chan-A' });
+    assert.equal(session.idleReleaseTimer, null, 'rejoin cancels the timer');
+    await new Promise((r) => setTimeout(r, 60));
+  } finally {
+    config.voiceIdleReleaseMs = original;
+  }
+
+  assert.equal(destroyed, false, 'the session survives once someone is back');
+  assert.equal(voice.sessions.has(guildId), true);
 });
 
 test('noteVoiceState keeps the session while other humans remain', () => {
   const guildId = 'guild-nvs';
   const channel = { members: fakeMembers([{ user: { bot: false } }]) };
-  let destroyed = false;
-  voice.sessions.set(guildId, {
-    channelId: 'chan-A',
-    names: new Map(),
-    transcript: { writeText: () => {} },
-    destroy: () => (destroyed = true),
-  });
+  const session = fakeNvsSession({ channel });
+  voice.sessions.set(guildId, session);
   const { old, next } = voiceStatePair({ channel });
   voice.noteVoiceState(old, next);
 
-  assert.equal(destroyed, false, 'a departing member is not the last human');
+  assert.equal(session.idleReleaseTimer, null, 'a departing member is not the last human');
   assert.equal(voice.sessions.has(guildId), true);
 });
 
-test('noteVoiceState does not release on an arrival', () => {
+test('cancelIdleRelease clears a pending grace timer (what destroy calls)', () => {
   const guildId = 'guild-nvs';
-  const channel = { members: fakeMembers([{ user: { bot: false } }]) };
-  let destroyed = false;
-  voice.sessions.set(guildId, {
-    channelId: 'chan-A',
-    names: new Map(),
-    transcript: { writeText: () => {} },
-    destroy: () => (destroyed = true),
-  });
-  // Arrival: oldState is not in the channel, newState joins it.
+  const channel = { members: fakeMembers([]) };
+  const session = fakeNvsSession({ channel });
+  voice.sessions.set(guildId, session);
   const { old, next } = voiceStatePair({ channel });
-  voice.noteVoiceState({ ...next, channelId: null }, { ...old, channelId: 'chan-A' });
+  voice.noteVoiceState(old, next);
+  assert.ok(session.idleReleaseTimer, 'armed by the empty departure');
 
-  assert.equal(destroyed, false, 'someone joining never empties the channel');
-  assert.equal(voice.sessions.has(guildId), true);
+  session.cancelIdleRelease();
+  assert.equal(session.idleReleaseTimer, null, 'cleared');
 });
 
 test('a non-slot s2s error still follows its existing path unchanged', async () => {

@@ -203,6 +203,12 @@ const config = {
   // — the infinite-retry bug this deadline's sibling behaviour fixed must not
   // come back, so this is a deadline, never unset.
   voiceSlotRetryDeadlineMs: parseInt(process.env.VOICE_SLOT_RETRY_DEADLINE_MS || '10000', 10),
+  // How long an empty voice channel keeps the session (and its s2s slot) after
+  // the last human leaves, before the bot leaves too. A brief absence must not
+  // cost the conversation; a squatter must not hold the slot forever. The
+  // handover bypasses this entirely — a joining bot evicts an idle holder
+  // immediately via the shim's yield, never waiting out the grace window.
+  voiceIdleReleaseMs: parseInt(process.env.VOICE_IDLE_RELEASE_MS || '3600000', 10),
 
   build: {
     version: process.env.BUILD_GIT_VERSION || 'dev',
