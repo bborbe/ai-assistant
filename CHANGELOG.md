@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.20.1
 
 - fix: release the speech-to-speech pipeline slot when a call ends — the bot now leaves (and tears down its session) when the last human departs the voice channel, and when the server removes it from voice (kicked, channel deleted), so an idle bot no longer squats the single slot and starves an active identity. The handover "completed" claim now fires on the server's `session.created` acceptance instead of on WebSocket open, so a `session_limit_reached` rejection surfaces as a failure rather than being masked by a false success log.
 
