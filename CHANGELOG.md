@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: release the speech-to-speech pipeline slot when a call ends — the bot now leaves (and tears down its session) when the last human departs the voice channel, and when the server removes it from voice (kicked, channel deleted), so an idle bot no longer squats the single slot and starves an active identity. The handover "completed" claim now fires on the server's `session.created` acceptance instead of on WebSocket open, so a `session_limit_reached` rejection surfaces as a failure rather than being masked by a false success log.
+
 ## v0.20.0
 
 - feat: new `VOICE_ALWAYS_WAKE` env flag forces the wake phrase even in a solo call — an instance that sets it never auto-answers unaddressed voice, while every instance without it keeps the current behavior (solo calls answer unprompted). Read by both processes: the bot stops POSTing `solo=True` to `/v1/voice/solo`, and the shim's gate treats every room as not-solo when the flag is set, so a stale per-key solo state cannot disarm it. Default off; the Star Citizen Assistant instance uses it on the Liga server.
