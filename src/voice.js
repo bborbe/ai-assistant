@@ -139,6 +139,12 @@ class Session {
     this.closed = false;
     this.ws = null;
     this.retry = null; // at most one outstanding reconnect
+    // Armed when the last human leaves the channel, cleared on a rejoin or
+    // teardown. Fires `voiceIdleReleaseMs` later — if the channel is STILL
+    // empty, the session (and its s2s slot) is released. The handover bypasses
+    // this: a joining bot evicts an idle holder immediately via the shim's
+    // yield, never waiting out the grace window.
+    this.idleReleaseTimer = null;
     // Set on the FIRST "slot already in use" refusal, cleared on a
     // successful (re)connect. Bounds how long the 'error' handler below
     // waits out a possible handover before giving up loudly — see
@@ -895,11 +901,41 @@ class Session {
     this.speaking = false;
   }
 
+  /**
+   * Release the session after the idle grace window, if the channel is STILL
+   * empty. Called from noteVoiceState when the last human leaves; the timer is
+   * cleared by cancelIdleRelease() on any rejoin or teardown. The re-check
+   * at fire time is defensive — a channel that became unreadable (null) or
+   * repopulated without a voiceStateUpdate reaching us must keep the session.
+   */
+  scheduleIdleRelease() {
+    if (this.idleReleaseTimer) return; // already armed
+    this.idleReleaseTimer = setTimeout(() => {
+      this.idleReleaseTimer = null;
+      if (this.closed || humansIn(this.channel) !== 0) return;
+      log.info('voice: idle grace expired, releasing session', {
+        guildId: this.guildId,
+        channel: this.channelId,
+        waitedMs: config.voiceIdleReleaseMs,
+      });
+      leave(this.guildId);
+    }, config.voiceIdleReleaseMs);
+    this.idleReleaseTimer.unref?.();
+  }
+
+  cancelIdleRelease() {
+    if (this.idleReleaseTimer) {
+      clearTimeout(this.idleReleaseTimer);
+      this.idleReleaseTimer = null;
+    }
+  }
+
   destroy() {
     // Flush in-flight utterances before tearing down, or the last thing anyone
     // said is silently lost.
     for (const t of this.flushTimers.values()) clearTimeout(t);
     this.flushTimers.clear();
+    this.cancelIdleRelease();
     if (this.retry) {
       clearTimeout(this.retry);
       this.retry = null;
@@ -1089,23 +1125,32 @@ function noteVoiceState(oldState, newState) {
   const userId = member?.id ?? newState.id ?? oldState.id;
   const name = member?.displayName ?? member?.user?.username ?? userId;
 
-  // The call is over when the last human leaves the channel. The bot stays in
-  // the channel (Discord still shows it connected) but serves nobody, and its
-  // s2s session keeps holding the shared pipeline slot — the exact shape of
-  // the 2026-08-22 outage, where an idle bot starved an active one for 3+
-  // hours. Release the session (and with it the slot) on an empty channel,
-  // before the transcript guard so it holds for calls with transcription off
-  // too. Only a readable channel with zero humans triggers this; an unreadable
-  // one leaves the session where it is. The departing member's line is still
-  // written first — the session is torn down moments later, so this is its
-  // last chance to record the call ending.
-  if (!is && humansIn(channel) === 0) {
+  // The call is over when the last human leaves the channel — but not at once.
+  // The session (and its s2s slot) survives a brief absence for
+  // `voiceIdleReleaseMs` (default 1h) so stepping away does not cost the
+  // conversation, then releases if the channel is still empty — the exact
+  // shape of the 2026-08-22 outage, where an idle bot starved an active one
+  // for 3+ hours. A joining bot does NOT wait this out: the handover (shim
+  // yield) evicts an idle holder immediately. Runs before the transcript guard
+  // so it holds for calls with transcription off too; an unreadable channel
+  // (humansIn null) leaves the session where it is. The departing member's
+  // line is written first, while the session still exists.
+  if (humansIn(channel) === 0 && !is) {
     if (userId && name) session.names.set(userId, name);
     session.transcript?.writeText(name, '(left the channel)');
     log.info('voice: left', { user: name });
-    log.info('voice: last human left, releasing session', { guildId, channel: here });
-    leave(guildId);
+    session.scheduleIdleRelease();
+    log.info('voice: channel empty, scheduling idle release', {
+      guildId,
+      channel: here,
+      graceMs: config.voiceIdleReleaseMs,
+    });
     return;
+  }
+  // Someone rejoined (or a new human arrived) — the idle release is moot.
+  if (is) {
+    session.cancelIdleRelease();
+    log.debug('voice: arrival, cancelling idle release', { guildId, channel: here });
   }
 
   if (!session.transcript) return;
