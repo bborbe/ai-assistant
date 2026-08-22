@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.20.2
 
 - fix: empty voice channels now release the s2s slot after a configurable idle grace (`VOICE_IDLE_RELEASE_MS`, default 1h) instead of immediately — a brief absence keeps the session and its conversation, while a squatter still releases once the window passes. A joining bot never waits this out: the handover evicts an idle holder immediately via the shim's yield, so the new bot still gets the slot at once.
 
