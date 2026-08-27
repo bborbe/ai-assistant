@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.21.0
 
 - feat: containerise the Claude Code shim — the Dockerfile now carries `python3` + the `claude` CLI and copies `shim/`; the shim deploys as a second Deployment (`discord-assistant-shim`) behind a real `claude-shim` Service, reaching the backend through the in-cluster claude-code-router (`ANTHROPIC_BASE_URL` + router `x-api-key`, no provider credential in the pod). Bot manifest: `VOICE_ENABLED=0` text-only baseline, dead `speech-to-speech:8765` wiring dropped.
 
