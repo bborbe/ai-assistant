@@ -24,6 +24,18 @@ WORKDIR /app
 COPY --from=builder /app/node_modules /app/node_modules
 COPY package.json ./
 COPY src/ ./src/
+COPY shim/ ./shim/
+
+# The shim is a Python process (shim/claude_openai_shim.py); node:22-slim has
+# no python3. It shells out to the `claude` CLI, which reaches the backend via
+# the in-cluster claude-code-router (ANTHROPIC_BASE_URL set by the Deployment),
+# so the image carries both runtimes and the CLI. One image, two entrypoints:
+# the bot Deployment runs ENTRYPOINT below, the shim Deployment overrides the
+# command to `python3 -u shim/claude_openai_shim.py`.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 \
+ && rm -rf /var/lib/apt/lists/* \
+ && npm install -g @anthropic-ai/claude-code
 
 ENV NODE_ENV=production
 ENV BUILD_GIT_VERSION=${BUILD_GIT_VERSION}

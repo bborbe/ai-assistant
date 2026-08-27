@@ -33,8 +33,13 @@ spec:
                 secretKeyRef: { name: discord-assistant, key: ALLOWED_USER_IDS }
             - name: OPENAI_BASE_URL
               value: http://claude-shim:8080/v1
-            - name: S2S_URL
-              value: ws://speech-to-speech:8765/v1/realtime
+            # Text-only baseline in the cluster: no GPU on any node, speech
+            # stays on the laptop. VOICE_ENABLED=0 omits join/leave from the
+            # guild command list (see src/slash-commands.js). The dynamic voice
+            # back-connect (laptop reachable -> voice available) is a later
+            # subtask of Deploy Discord Assistant to Kubernetes.
+            - name: VOICE_ENABLED
+              value: '0'
             - name: LOG_LEVEL
               value: info
           # Liveness must not depend on Discord: an outage there should drain,
