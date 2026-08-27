@@ -18,12 +18,17 @@ Rather than a bare placeholder, here is the honest state — so the next person 
 
 **Never applied.** No `discord-assistant` exists in any cluster.
 
-**Not built:**
+**Built (2026-08-27):**
 
-- The Dockerfile copies `src/` only — `shim/claude_openai_shim.py` is not containerised
-- The Deployment references two Services that do not exist: `claude-shim:8080` and `speech-to-speech:8765`
+- The Dockerfile now copies `shim/` alongside `src/`, and installs `python3` + the `claude` CLI — one image carries both runtimes. The bot Deployment runs the default `ENTRYPOINT` (`node src/index.js`); the shim Deployment overrides the command to `python3 -u shim/claude_openai_shim.py`.
+- Two Deployments sharing that image: `discord-assistant` (bot) + `discord-assistant-shim`, with a real `claude-shim` Service on 8080 — the bot's `OPENAI_BASE_URL` points at it.
+- The shim reaches the backend through the **in-cluster claude-code-router** (`ANTHROPIC_BASE_URL=http://claude-code-router-dev:8788`), with a router `x-api-key` (from `allowedApiKeys`) as `ANTHROPIC_API_KEY` — no provider credential in the pod.
+- Text-only baseline: `VOICE_ENABLED=0` on the bot (voice stays on the laptop; no GPU on any node). The dead `speech-to-speech:8765` Service wiring is dropped.
 
-So the bot leg is roughly done and the other two legs are at zero.
+**Not built yet:**
+
+- The `vault` volume is an `emptyDir` placeholder — provisioning (NFS / hostPath / PVC) is the deploy owner's job, per the Deploy Discord Assistant to Kubernetes task.
+- The dynamic voice back-connect (laptop reachable → `/join` works; unreachable → graceful "text only" reply) is a later subtask of that same task.
 
 ## Three unknowns, in the order they gate the work
 

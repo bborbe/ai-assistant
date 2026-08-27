@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: discord-assistant-shim
+  namespace: default
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: discord-assistant-shim
+  template:
+    metadata:
+      labels:
+        app: discord-assistant-shim
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: shim
+          # Same image as the bot — this container overrides the ENTRYPOINT.
+          image: docker.io/bborbe/discord-assistant:master
+          imagePullPolicy: Always
+          command: ['python3', '-u', 'shim/claude_openai_shim.py']
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # Listen on the pod IP, not loopback — the bot reaches this via the
+            # claude-shim Service from a different pod.
+            - name: SHIM_HOST
+              value: 0.0.0.0
+            - name: SHIM_PORT
+              value: '8080'
+            # Which model this endpoint advertises to OpenAI clients.
+            - name: SHIM_MODEL
+              value: claude-code
+            # The shim shells out to the `claude` CLI, which reaches the backend
+            # through the in-cluster router. No provider credential in the pod:
+            # ANTHROPIC_API_KEY is a router x-api-key from the router's
+            # allowedApiKeys registry, not any provider/company key.
+            - name: ANTHROPIC_BASE_URL
+              value: http://claude-code-router-dev:8788
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef: { name: discord-assistant, key: ROUTER_API_KEY }
+            # Where the server-side assistant works. Decision 2026-08-27:
+            # vault + workspaces, same filesystem the laptop instance reaches.
+            - name: SHIM_CWD
+              value: /vault
+            - name: SHIM_SESSIONS_FILE
+              value: /home/node/.claude/shim-sessions.json
+            - name: LOG_LEVEL
+              value: info
+          volumeMounts:
+            # Writable home for the shim: claude CLI session state + shim-sessions.json.
+            - name: shim-home
+              mountPath: /home/node
+            # The filesystem the assistant reaches (vault + workspaces).
+            # Provisioned by the deploy owner (NFS / hostPath / PVC) — see
+            # Deploy Discord Assistant to Kubernetes task for the decided shape.
+            - name: vault
+              mountPath: /vault
+          livenessProbe:
+            httpGet: { path: /v1/models, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /v1/models, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 2
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 1Gi }
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ['ALL'] }
+      volumes:
+        - name: shim-home
+          emptyDir: {}
+        - name: vault
+          emptyDir: {}
