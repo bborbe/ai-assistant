@@ -710,7 +710,8 @@ _FACTUAL = re.compile(r"""(
     | \b(status(es)?|tasks?|notes?|files?|vaults?|repos?|repositor(y|ies)
         |deploys?|logs?|transcripts?|objectives?|goals?|commits?
         |branch(es)?|tests?|errors?|meetings?|calendars?|plans?
-        |sessions?|projects?|tickets?|issues?|prs?|reviews?)\b
+        |sessions?|projects?|tickets?|issues?|prs?|reviews?
+        |skills?|runbooks?|slash\s+commands?)\b
     # INFRASTRUCTURE, added 2026-08-14 after a live fabrication. The list above
     # covers the user's WORK — tasks, notes, repos — because that is what the
     # assistant was originally asked about. It does not cover the user's own
@@ -732,6 +733,14 @@ _FACTUAL = re.compile(r"""(
         |pods?|services?|apis?|configs?|configuration(s)?|settings?
         |subscriptions?|accounts?|keys?|tokens?|costs?|latency|throughput
         |containers?|images?|builds?|releases?|versions?)\b
+    # TRAVEL, added 2026-08-29 after the bus-ride transcript. "I want to take
+    # the bus from Taunustein-Neuhof to Wiesbaden" is a plain statement — no
+    # interrogative, no possessive, no noun above — so it fell to the front
+    # tier, whose refusal ("I do not have the capability to ask Lord Gurk") was
+    # not recognized and the request never reached Claude. Travel is the user's
+    # real world; the front model can't know a timetable.
+    | \b(bus(es)?|trains?|trams?|routes?|timetables?|schedules?|departures?
+        |connections?|stations?|platforms?|rmv|fahrplan|anreise)\b
     | \b(my|our)\b
 )""", re.I | re.X)
 
@@ -766,14 +775,22 @@ FRONT_SYSTEM = (
     "Answer ONLY from the conversation itself. You have NO access to the user's "
     "notes, tasks, files, code, systems, calendar or history, and no memory of "
     "their work.\n"
-    f"If answering would need any of that, reply with EXACTLY this and nothing "
-    f"else:\n{FRONT_REFUSAL}\n"
-    "This is not a failure and needs no apology or explanation — something else "
-    "answers those, instantly, and the user never sees this exchange. Refusing "
-    "costs a second; guessing puts an invented fact in the assistant's mouth. "
-    "When unsure, refuse.\n"
-    "Never say 'I'd have to ask', 'shall I check' or 'I don't have access' — "
-    "return the refusal instead.\n"
+    f"When you cannot answer from the conversation, reply with EXACTLY this "
+    f"single JSON object and NOTHING else — no words, no explanation, no "
+    f"apology, no alternative sentence:\n{FRONT_REFUSAL}\n"
+    "A separate system behind you answers every request you refuse, instantly, "
+    "so your refusal is never shown to the user — it is an internal signal, not "
+    "a reply. Saying 'I can't', 'I don't have access' or 'I cannot do that' in "
+    "words is a BUG: it is spoken aloud and the user hears a denial instead of "
+    "an answer. Refusing costs a second; guessing puts an invented fact in the "
+    "assistant's mouth. When unsure, refuse.\n"
+    "Examples — User: can you check my open tasks? Assistant: "
+    f"{FRONT_REFUSAL}\n"
+    "User: find the next bus from Neuhof to Wiesbaden Assistant: "
+    f"{FRONT_REFUSAL}\n"
+    "User: write a skill for that Assistant: "
+    f"{FRONT_REFUSAL}\n"
+    "User: how are you? Assistant: I'm doing great, thanks.\n"
     "Greetings, thanks, 'can you hear me' and small talk you CAN answer.\n"
     "You are ONE assistant throughout. Never name or speculate about which model "
     "or system is answering, and never describe the parts you are made of."
@@ -832,7 +849,17 @@ _HEDGE = re.compile(r"""(
     | \b(do\s+not|don'?t)\s+have\s+(any\s+)?(access|context|information|visibility|details|record)
     | \bno\s+(access|context|information|visibility|record)\s+(to|of|about)\b
     | \bi\s+(do\s+not|don'?t)\s+know\s+(what|which|when|where|who|about)\b
-    | \bi\s+can'?t\s+(see|tell|access|find|check|look)\b
+    | \bi\s+(can'?t|cannot|can\s+not)\s+(see|tell|access|find|check|look|provide|write|create|update|ask|give|fetch|retrieve|search|pull|get|list)\b
+    # CAPABILITY refusals, added 2026-08-29 after the bus-ride transcript.
+    # "I do not have the capability to ask Lord Gurk" and "I cannot write or
+    # update a runbook or create a skill or slash command" matched none of the
+    # patterns above: `can'?t` does not cover "cannot", "capability" was an
+    # unknown noun, and "write/create/update" were never on the verb list. Each
+    # was spoken verbatim and the request never reached Claude. Any admission
+    # of incapability is the same signal as the JSON — defer. Same asymmetry:
+    # these can only push turns TOWARD Claude.
+    | \bi\s+(do\s+not|don'?t|can'?t|cannot)\s+have\s+the\s+(capability|ability|capacity)\b
+    | \bi\s+(am\s+not|was\s+not)\s+(able|equipped|capable)\b
     | \b(not|isn'?t)\s+(sure|clear)\s+what\s+you'?re?\s+(referring|talking)\b
 )""", re.I | re.X)
 
