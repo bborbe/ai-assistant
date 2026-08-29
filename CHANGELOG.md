@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: front-tier capability refusals now defer to Claude instead of being spoken verbatim. `_HEDGE` recognizes "cannot" and capability-style prose ("I do not have the capability to …", "I cannot (write|create|update|provide|…)"), `_FACTUAL` gained a travel cluster (bus/train/route/timetable/…) plus skills/runbooks/slash-commands so plain-statement asks bypass the front tier, and `FRONT_SYSTEM` carries few-shot refusal examples telling the model a separate system answers what it refuses. Root cause: 2026-08-28 bus-ride transcript showed "I do not have the capability to ask Lord Gurk" and "I cannot write or update a runbook or create a skill or slash command" swallowed by the front tier — `_HEDGE` covered only `can'?t` and access/context phrasings, so the denial was spoken and the request never reached Claude.
+
 ## v0.21.0
 
 - feat: containerise the Claude Code shim — the Dockerfile now carries `python3` + the `claude` CLI and copies `shim/`; the shim deploys as a second Deployment (`discord-assistant-shim`) behind a real `claude-shim` Service, reaching the backend through the in-cluster claude-code-router (`ANTHROPIC_BASE_URL` + router `x-api-key`, no provider credential in the pod). Bot manifest: `VOICE_ENABLED=0` text-only baseline, dead `speech-to-speech:8765` wiring dropped.

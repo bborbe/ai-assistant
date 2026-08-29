@@ -722,6 +722,24 @@ class LooksFactual(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertTrue(shim.looks_factual(text))
 
+    def test_travel_and_skills_force_a_consult(self):
+        # Verbatim from the 2026-08-28 bus-ride transcript. Plain statements
+        # with no interrogative, no `my`/`our` and no previously-known noun —
+        # the front tier answered each with a spoken "I can't" and the request
+        # never reached Claude. Travel and skills are the user's real world;
+        # the front model can't know a timetable or write a runbook.
+        for text in (
+            "I want to take the bus from Taunustein Neuhof to Wiesbaden now.",
+            "Maybe use the semantic search and look for bus travel guidelines "
+            "that we already have documented in Obsidian.",
+            "im in the bus . write the skill now",
+            "update runbook with howto find connections from neuoh mittle",
+            "find the next train from Neuhof Mitte",
+            "what time does the bus to Wiesbaden leave",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(shim.looks_factual(text))
+
     def test_small_talk_is_not_dragged_into_a_consult(self):
         # looks_factual returns early for anything the chitchat whitelist
         # matched, so widening the noun list must not cost a greeting its
@@ -730,3 +748,47 @@ class LooksFactual(unittest.TestCase):
                      "can you hear me", "bye"):
             with self.subTest(text=text):
                 self.assertFalse(shim.looks_factual(text))
+
+
+class HedgeConsult(unittest.TestCase):
+    """A prose "I can't" from the front model is a consult, not an answer.
+
+    The refusal contract says the front model returns {"cannot_answer": true}
+    when it can't answer, but it often emits a capability-style prose refusal
+    instead. Where _HEDGE fails to recognise it, the denial is spoken verbatim
+    and the request never reaches Claude. Each of these is a verbatim front
+    reply from the 2026-08-28 bus-ride transcript (or a close variant), and
+    each must now be treated as the deferral it is.
+    """
+
+    def test_the_2026_08_28_capability_refusals_are_consults(self):
+        for reply in (
+            "I do not have the capability to ask Lord Gurk.",
+            "I cannot write or update a runbook or create a skill or slash command.",
+            "I cannot provide real-time transportation schedules or route information.",
+            "I cannot create a skill or a slash command.",
+            "I do not have the capability to ask Claude Code.",
+            "I don't have the ability to do that.",
+            "I am not able to look that up.",
+        ):
+            with self.subTest(reply=reply):
+                self.assertTrue(shim._HEDGE.search(reply))
+
+    def test_cannot_is_recognized_not_just_cant(self):
+        # \bcan'?t\b matches "can't" only; "cannot" needs its own branch. This
+        # was the literal gap — every transcript refusal said "cannot" or
+        # "do not have the capability", and none matched.
+        self.assertTrue(shim._HEDGE.search("I cannot check the current time."))
+
+    def test_a_real_answer_is_not_a_hedge(self):
+        # The other direction: a genuine front-tier answer must never be
+        # reclassified as a consult. The bus-line tables the front model is
+        # NOT allowed to give are exactly the shape that must not match.
+        for reply in (
+            "The next bus to Wiesbaden leaves Neuhof Mitte at 15:01.",
+            "I'm doing great, thanks.",
+            "The details are in the chat.",
+            "Your open task is the Armin Meyer one-to-one prep.",
+        ):
+            with self.subTest(reply=reply):
+                self.assertFalse(shim._HEDGE.search(reply))
