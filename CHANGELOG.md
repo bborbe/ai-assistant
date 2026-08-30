@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.23.0
 
 - feat: `/sessions` now lists every conversation active in the last two days (not just the newest eight), labels each entry with its session name when one is set (falling back to the first prompt), and caps the list by Discord's 2000-char message limit instead of a hard count. The shim's `/sessions/available` raises its transcript limit to 200 and filters by the same two-day window.
 
