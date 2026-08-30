@@ -1069,17 +1069,30 @@ def transcript_dir(key: str = "") -> Path:
     return Path.home() / ".claude/projects" / str(Path(cwd).resolve()).replace("/", "-")
 
 
-def available_sessions(key: str = "", limit: int = 15) -> list[dict]:
-    """Resumable transcripts for this cwd, newest first, labelled by first prompt.
+def available_sessions(key: str = "", limit: int = 200,
+                       max_age_minutes: int = 2 * 24 * 60) -> list[dict]:
+    """Resumable transcripts for this cwd, newest first, labelled by session
+    name when set, else by first prompt.
 
     A bare uuid is unusable as a choice — you cannot tell the 90-turn voice
-    conversation from a one-turn probe. The first user message is the cheapest
-    thing that distinguishes them.
+    conversation from a one-turn probe. A session name (a `custom-title`
+    record, written by /rename) beats the first user message whenever the
+    operator took the trouble to set one.
+
+    The age window is the real filter — anything older than `max_age_minutes`
+    (default two days) has gone cold and clutters a switch list; the limit is
+    only a safety valve now that the client drops sessions past its char
+    budget rather than hard-capping the count.
     """
     out = []
+    cutoff = time.time() - max_age_minutes * 60
     for f in sorted(transcript_dir(key).glob("*.jsonl"),
-                    key=lambda p: p.stat().st_mtime, reverse=True)[:limit]:
-        label, turns = "", 0
+                    key=lambda p: p.stat().st_mtime, reverse=True):
+        if f.stat().st_mtime < cutoff:
+            break
+        if len(out) >= limit:
+            break
+        name, label, turns = "", "", 0
         try:
             with f.open() as fh:
                 for line in fh:
@@ -1087,6 +1100,8 @@ def available_sessions(key: str = "", limit: int = 15) -> list[dict]:
                         d = json.loads(line)
                     except ValueError:
                         continue
+                    if d.get("type") == "custom-title" and d.get("customTitle"):
+                        name = name or str(d["customTitle"])
                     if d.get("type") != "user":
                         continue
                     c = d.get("message", {}).get("content")
@@ -1097,7 +1112,7 @@ def available_sessions(key: str = "", limit: int = 15) -> list[dict]:
                         label = label or " ".join(c.split())[:60]
         except OSError:
             continue
-        out.append({"id": f.stem, "label": label, "turns": turns,
+        out.append({"id": f.stem, "label": name or label, "turns": turns,
                     "age_minutes": round((time.time() - f.stat().st_mtime) / 60, 1)})
     return out
 
