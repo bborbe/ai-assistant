@@ -60,14 +60,21 @@ async function sessionsList(hereKey) {
     const { available = [] } = await availableSessions();
     if (available.length) {
       out.push('', '**Switch to** — `switch <id>`');
-      for (const a of available.slice(0, 8)) {
+      // Every session the shim returns (active in the last two days, newest
+      // first) fits until a line would blow Discord's message limit — the
+      // shim window is the real filter, the char budget the only cap.
+      let size = out.join('\n').length;
+      for (const a of available) {
         const label = a.label ? ` — "${a.label}"` : '';
         // Marked rather than hidden: switching to a taken id is refused, so
         // offering it unannotated invites a failure. Seeing WHERE a session
         // already lives is also the answer to "which one is the voice one".
         const taken = boundTo.get(a.id);
         const note = taken ? ` — **already \`${taken}\`**` : '';
-        out.push(`• \`${a.id}\`${label} — ${a.turns} turn(s), ${age(a.age_minutes)} ago${note}`);
+        const line = `• \`${a.id}\`${label} — ${a.turns} turn(s), ${age(a.age_minutes)} ago${note}`;
+        if (size + line.length + 1 > DISCORD_LIMIT) break;
+        out.push(line);
+        size += line.length + 1;
       }
     }
   } catch {

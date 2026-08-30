@@ -12,8 +12,11 @@ Run: python3 -m unittest discover -s test -p 'test_*.py'
 import contextlib
 import io
 import json
+import os
 import pathlib
 import sys
+import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -472,6 +475,61 @@ class TranscriptDirPerKey(unittest.TestCase):
 
     def test_an_unconfigured_voice_key_matches_the_default(self):
         self.assertEqual(shim.transcript_dir("voice:999"), shim.transcript_dir(""))
+
+
+class AvailableSessions(unittest.TestCase):
+    """What the `/sessions/available` listing offers — age window, label.
+
+    Covers the two behaviors that distinguish the listing from a bare uuid
+    dump: the two-day activity window that keeps cold sessions out of the
+    switch list, and the `custom-title` (sessionName) label that beats the
+    first user message whenever the operator set one.
+    """
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self._patch = mock.patch.object(shim, "transcript_dir",
+                                        return_value=pathlib.Path(self._dir.name))
+        self._patch.start()
+
+    def tearDown(self):
+        self._patch.stop()
+        self._dir.cleanup()
+
+    def _write_transcript(self, sid, age_minutes, records):
+        """Write a transcript file with an mtime `age_minutes` in the past."""
+        p = pathlib.Path(self._dir.name) / f"{sid}.jsonl"
+        p.write_text("".join(json.dumps(r) + "\n" for r in records))
+        old = time.time() - age_minutes * 60
+        os.utime(p, (old, old))
+        return p
+
+    def test_a_session_older_than_the_window_is_excluded(self):
+        self._write_transcript("old", 3 * 24 * 60, [
+            {"type": "user", "message": {"content": "long ago"}},
+        ])
+        self._write_transcript("new", 60, [
+            {"type": "user", "message": {"content": "just now"}},
+        ])
+        ids = [a["id"] for a in shim.available_sessions()]
+        self.assertIn("new", ids)
+        self.assertNotIn("old", ids)
+
+    def test_custom_title_wins_over_the_first_user_message(self):
+        self._write_transcript("named", 60, [
+            {"type": "custom-title", "customTitle": "My Named Session",
+             "sessionId": "named"},
+            {"type": "user", "message": {"content": "some prompt that started it"}},
+        ])
+        [entry] = shim.available_sessions()
+        self.assertEqual(entry["label"], "My Named Session")
+
+    def test_first_user_message_is_the_fallback_without_a_custom_title(self):
+        self._write_transcript("unnamed", 60, [
+            {"type": "user", "message": {"content": "the opening question"}},
+        ])
+        [entry] = shim.available_sessions()
+        self.assertEqual(entry["label"], "the opening question")
 
 
 class ChatBridgePosting(unittest.TestCase):
