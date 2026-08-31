@@ -52,6 +52,7 @@ client.once('clientReady', async () => {
     // a missing setting, which is the wrong thing to go looking for.
     s2s: config.voiceEnabled ? config.s2sUrl : 'not used (VOICE_ENABLED=false)',
     allowed: config.allowedUserIds.length,
+    admins: config.adminUserIds.length,
     version: config.build.version,
     chatBridge: Boolean(config.chatBridgeToken),
   });
@@ -66,9 +67,17 @@ client.once('clientReady', async () => {
   // Guild-scoped registration applies immediately; global takes ~an hour.
   const rest = new REST().setToken(config.discordToken);
   for (const guild of client.guilds.cache.values()) {
+    // A guild left out of SLASH_COMMAND_GUILD_IDS is PUT an empty list, not
+    // skipped: Discord keeps a guild's previous command list until it is
+    // overwritten, so skipping would leave yesterday's commands advertised
+    // forever. Writing [] is what actually retracts them.
+    const wanted = config.registersSlashCommands(guild.id) ? commands : [];
     try {
-      await rest.put(Routes.applicationGuildCommands(client.user.id, guild.id), { body: commands });
-      log.info('commands registered', { guild: guild.name });
+      await rest.put(Routes.applicationGuildCommands(client.user.id, guild.id), { body: wanted });
+      log.info(wanted.length ? 'commands registered' : 'commands withheld', {
+        guild: guild.name,
+        count: wanted.length,
+      });
     } catch (e) {
       log.error('command registration failed', { guild: guild.name, error: e.message });
     }
@@ -111,6 +120,24 @@ client.on('interactionCreate', async (i) => {
   if (!config.isAllowed(i.user.id)) {
     log.warn('slash command dropped', { command: i.commandName, user: i.user.tag, id: i.user.id });
     return i.reply({ content: 'Not authorised.', flags: MessageFlags.Ephemeral });
+  }
+
+  // Defence in depth. Every command here is admin-tier and carries
+  // setDefaultMemberPermissions, so Discord already hides them from ordinary
+  // members — but hiding is a client affordance, not authorisation. A member who
+  // holds ManageGuild without being in ADMIN_USER_IDS still sees and can invoke
+  // them, and so can anyone whose guild has an Integrations override. This is
+  // the check that actually decides.
+  if (!config.isAdmin(i.user.id)) {
+    log.warn('slash command refused — not an admin', {
+      command: i.commandName,
+      user: i.user.tag,
+      id: i.user.id,
+    });
+    return i.reply({
+      content: 'That command is admin-only. You can still talk to me by mentioning me.',
+      flags: MessageFlags.Ephemeral,
+    });
   }
 
   if (i.commandName === 'status') {
