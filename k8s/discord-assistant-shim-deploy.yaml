@@ -17,8 +17,6 @@ spec:
         sc.assistant: 'true'
     spec:
       serviceAccountName: sc-assistant
-      imagePullSecrets:
-        - name: docker
       # node user (uid 1000) must write the local-path vault PVC.
       securityContext:
         fsGroup: 1000
@@ -26,7 +24,7 @@ spec:
       initContainers:
         # Clone the vault repo into /vault on first start (empty PVC).
         - name: vault-clone
-          image: '{{"DOCKER_REGISTRY" | env}}/discord-assistant:{{"BRANCH" | env}}'
+          image: '{{"DOCKER_REGISTRY" | env}}/bborbe/discord-assistant:{{"BRANCH" | env}}'
           command: ['sh', '-c']
           args:
             - |
@@ -46,7 +44,7 @@ spec:
       containers:
         # obsidian-git equivalent: pull Mac changes, commit + push pod writes.
         - name: vault-sync
-          image: '{{"DOCKER_REGISTRY" | env}}/discord-assistant:{{"BRANCH" | env}}'
+          image: '{{"DOCKER_REGISTRY" | env}}/bborbe/discord-assistant:{{"BRANCH" | env}}'
           command: ['sh', '/vault-scripts/vault-sync.sh']
           volumeMounts:
             - { name: vault, mountPath: /vault }
@@ -59,7 +57,7 @@ spec:
             capabilities: { drop: ['ALL'] }
         - name: shim
           # Same image as the bot — this container overrides the ENTRYPOINT.
-          image: '{{"DOCKER_REGISTRY" | env}}/discord-assistant:{{"BRANCH" | env}}'
+          image: '{{"DOCKER_REGISTRY" | env}}/bborbe/discord-assistant:{{"BRANCH" | env}}'
           imagePullPolicy: Always
           command: ['python3', '-u', 'shim/claude_openai_shim.py']
           ports:

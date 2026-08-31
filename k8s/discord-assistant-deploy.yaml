@@ -18,12 +18,10 @@ spec:
         sc.assistant: 'true'
     spec:
       serviceAccountName: sc-assistant
-      imagePullSecrets:
-        - name: docker
       terminationGracePeriodSeconds: 30
       containers:
         - name: bot
-          image: '{{"DOCKER_REGISTRY" | env}}/discord-assistant:{{"BRANCH" | env}}'
+          image: '{{"DOCKER_REGISTRY" | env}}/bborbe/discord-assistant:{{"BRANCH" | env}}'
           imagePullPolicy: Always
           ports:
             - name: http
