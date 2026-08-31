@@ -21,7 +21,11 @@ data:
       sc:
         cwd: /vault
         mcp_config: /home/node/mcp-empty.json
-        allowed_tools: Read,Edit,Write,Glob,Grep,Bash(vault-cli:*),Bash(date:*),Bash(shasum:*),Bash(ls:*),Bash(gh api:*),Bash(gh pr view:*),Bash(git ls-remote:*)
+        # No Bash(vault-cli:*): vault-cli is NOT installed in the image
+        # (verified in-pod 2026-08-31), so granting it only widens the
+        # allowlist for a binary that cannot run. Re-add together with the
+        # install if the pod ever needs vault CRUD.
+        allowed_tools: Read,Edit,Write,Glob,Grep,Bash(date:*),Bash(shasum:*),Bash(ls:*),Bash(gh api:*),Bash(gh pr view:*),Bash(git ls-remote:*)
   mcp-empty.json: |
     {"mcpServers": {}}
   vault-sync.sh: |

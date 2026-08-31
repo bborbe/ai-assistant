@@ -33,9 +33,11 @@ spec:
     # the commonly-documented Cloudflare/Discord ranges, not a fetched snapshot.
     # The egress probe (curl to a denied destination) and a real bot gateway
     # connection are the ground truth. If Discord rotates out of these ranges,
-    # fall back to an in-namespace egress-proxy with a domain allowlist (see
-    # agent/specs/in-progress/048-agent-egress-proxy.md) and point the policy
-    # at it instead of ipBlocks.
+    # fall back to an in-namespace egress-proxy with a domain allowlist and
+    # point the policy at it instead of ipBlocks. Remediation path is specified
+    # in bborbe/agent `specs/in-progress/048-agent-egress-proxy.md` (tinyproxy
+    # Deployment + ConfigMap domain allowlist; NetworkPolicy then allows only
+    # the proxy pod, since L3/L4 rules cannot express a domain).
     - to:
         - ipBlock: { cidr: 162.159.0.0/16 }
         - ipBlock: { cidr: 104.16.0.0/13 }
