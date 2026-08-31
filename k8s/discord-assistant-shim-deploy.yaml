@@ -17,9 +17,12 @@ spec:
         sc.assistant: 'true'
     spec:
       serviceAccountName: sc-assistant
-      # node user (uid 1000) must write the local-path vault PVC.
+      # node user (uid 1000) must write the local-path vault PVC; image USER is
+      # non-numeric (node) so runAsNonRoot needs an explicit numeric runAsUser.
       securityContext:
         fsGroup: 1000
+        runAsUser: 1000
+        runAsGroup: 1000
       terminationGracePeriodSeconds: 30
       initContainers:
         # Clone the vault repo into /vault on first start (empty PVC).

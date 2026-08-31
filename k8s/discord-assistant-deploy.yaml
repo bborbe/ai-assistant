@@ -18,6 +18,11 @@ spec:
         sc.assistant: 'true'
     spec:
       serviceAccountName: sc-assistant
+      # Image USER is non-numeric (node) — runAsNonRoot can't verify it without
+      # an explicit numeric runAsUser. node's uid/gid is 1000.
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
       terminationGracePeriodSeconds: 30
       containers:
         - name: bot
