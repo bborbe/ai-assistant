@@ -39,3 +39,28 @@ test('disabling voice removes only the voice commands', () => {
     assert.ok(disabled.includes(n), `${n} must survive with voice disabled`);
   }
 });
+
+// Discord hides a command from anyone lacking this permission. Asserted on
+// EVERY command rather than a sampled one: the whole slash surface is session
+// and voice control, and a single command shipped without the field is
+// silently visible to every member of the guild.
+test('every command carries the admin permission gate', () => {
+  const { ADMIN_PERMISSION } = require('../src/slash-commands');
+  for (const voiceEnabled of [true, false]) {
+    for (const c of buildCommands({ voiceEnabled })) {
+      assert.equal(
+        c.default_member_permissions,
+        String(ADMIN_PERMISSION),
+        `${c.name} must be permission-gated (voiceEnabled=${voiceEnabled})`,
+      );
+    }
+  }
+});
+
+// ManageGuild, not ManageMessages: moderators commonly hold the latter, and
+// every command here reaches a Claude Code session with vault and repo access.
+test('the gate is ManageGuild', () => {
+  const { PermissionFlagsBits } = require('discord.js');
+  const { ADMIN_PERMISSION } = require('../src/slash-commands');
+  assert.equal(ADMIN_PERMISSION, PermissionFlagsBits.ManageGuild);
+});

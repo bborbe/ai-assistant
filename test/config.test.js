@@ -69,3 +69,55 @@ test('identity is read verbatim from IDENTITY, trimmed', () => {
   assert.equal(require('../src/config').identity, 'sc');
   delete process.env.IDENTITY;
 });
+
+// The admin tier is a SUBSET of the allowlist, and both fail closed. The two
+// directions matter independently: an empty ADMIN_USER_IDS must not mean
+// "everyone is an admin" (the failure that hands session control to a guest),
+// and being allowed must not imply being an admin (the failure that makes the
+// second tier decorative).
+test('unset ADMIN_USER_IDS inherits the allowlist', () => {
+  delete process.env.ADMIN_USER_IDS;
+  process.env.ALLOWED_USER_IDS = '111,222';
+  delete require.cache[require.resolve('../src/config')];
+  const config = require('../src/config');
+  assert.ok(config.isAdmin('111'), 'an upgrading deployment keeps its slash commands');
+  assert.ok(config.isAdmin('222'));
+  assert.equal(config.isAdmin('999'), false, 'still bounded by the allowlist');
+});
+
+test('empty ADMIN_USER_IDS means no admins', () => {
+  process.env.ALLOWED_USER_IDS = '111,222';
+  process.env.ADMIN_USER_IDS = '';
+  delete require.cache[require.resolve('../src/config')];
+  const config = require('../src/config');
+  assert.equal(config.isAdmin('111'), false, 'explicitly empty is not "inherit"');
+  assert.ok(config.isAllowed('111'), 'the mention surface is untouched');
+});
+
+test('admin tier is independent of the allowlist', () => {
+  process.env.ALLOWED_USER_IDS = ' 111, 222 ';
+  process.env.ADMIN_USER_IDS = ' 111 ';
+  delete require.cache[require.resolve('../src/config')];
+  const config = require('../src/config');
+  assert.ok(config.isAllowed('111') && config.isAdmin('111'), 'admin is also allowed');
+  assert.ok(config.isAllowed('222'), '222 keeps the mention surface');
+  assert.equal(config.isAdmin('222'), false, 'allowed must not imply admin');
+});
+
+// Empty = every guild, because that is the behaviour every existing install
+// has today; a release that started withholding commands from an unconfigured
+// deployment would look exactly like the bot breaking.
+test('slash commands register everywhere when no guild list is set', () => {
+  delete process.env.SLASH_COMMAND_GUILD_IDS;
+  delete require.cache[require.resolve('../src/config')];
+  const config = require('../src/config');
+  assert.ok(config.registersSlashCommands('any-guild'));
+});
+
+test('slash commands register only in listed guilds', () => {
+  process.env.SLASH_COMMAND_GUILD_IDS = ' 555, 666 ';
+  delete require.cache[require.resolve('../src/config')];
+  const config = require('../src/config');
+  assert.ok(config.registersSlashCommands('555'));
+  assert.equal(config.registersSlashCommands('777'), false, 'unlisted guild gets no commands');
+});

@@ -110,6 +110,36 @@ const config = {
   // access, so failing closed is the only safe default.
   allowedUserIds: list(process.env.ALLOWED_USER_IDS),
 
+  // Admin tier, a SUBSET of the allowlist. Gates the slash-command surface
+  // (session and voice control) while `allowedUserIds` keeps gating the text /
+  // @mention surface that everyone allowed is meant to use. Fails closed for
+  // the same reason `allowedUserIds` does: empty means NO admins, never all.
+  //
+  // Discord's own visibility gate is permission-based, not id-based — there is
+  // no "show this command to these user ids" in the API — so the ids here
+  // cannot hide a command by themselves. They are the defence-in-depth half:
+  // `setDefaultMemberPermissions` hides the command in the client,
+  // `isAdmin` refuses it on the wire if someone reaches it anyway.
+  // UNSET inherits the allowlist, so every existing deployment keeps working
+  // exactly as it did — this release would otherwise take slash commands away
+  // from every instance that never heard of ADMIN_USER_IDS. Set it explicitly
+  // to opt into the tighter tier; set it EMPTY to mean no admins at all.
+  adminUserIds:
+    process.env.ADMIN_USER_IDS === undefined
+      ? list(process.env.ALLOWED_USER_IDS)
+      : list(process.env.ADMIN_USER_IDS),
+
+  // Which guilds get slash commands registered at all. Empty = every guild the
+  // bot is in (the historical behaviour, and right for a single-guild install).
+  //
+  // Exists because permission-gated visibility cuts both ways: on a guild where
+  // the operator is an ordinary member, a command gated on ManageGuild is hidden
+  // from THEM too, so gating alone cannot produce "admins only" there. Naming no
+  // guild is then the honest surface — the same reasoning as VOICE_ENABLED=0
+  // omitting join/leave rather than registering them to refuse. The @mention
+  // surface is unaffected; it is not a slash command.
+  slashCommandGuildIds: list(process.env.SLASH_COMMAND_GUILD_IDS),
+
   // How many prior messages a text thread resends. The endpoint may be
   // stateless (MiniMax uses this) or stateful (the shim discards it) — we
   // send it either way and let the server decide.
@@ -218,6 +248,14 @@ const config = {
 };
 
 config.isAllowed = (userId) => config.allowedUserIds.includes(userId);
+
+// Admin tier. Deliberately NOT implied by isAllowed: every admin is allowed,
+// but being allowed says nothing about being an admin.
+config.isAdmin = (userId) => config.adminUserIds.includes(userId);
+
+// Should this guild advertise slash commands? Empty list = yes, everywhere.
+config.registersSlashCommands = (guildId) =>
+  !config.slashCommandGuildIds.length || config.slashCommandGuildIds.includes(guildId);
 
 /**
  * Does this utterance open with a wake phrase? Mirrors the endpoint's rule —

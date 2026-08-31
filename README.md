@@ -54,15 +54,17 @@ DM the bot to use text. `/join` from a voice channel to use voice, `/leave` to s
 
 To put Claude Code behind it instead of a hosted model, run `make shim` and point `OPENAI_BASE_URL` at it.
 
-| Env                | Default                           | Meaning                                                                               |
-| ------------------ | --------------------------------- | ------------------------------------------------------------------------------------- |
-| `DISCORD_TOKEN`    | —                                 | Bot token (required)                                                                  |
-| `ALLOWED_USER_IDS` | —                                 | Comma-separated Discord user IDs. **Empty means nobody** — it fails closed on purpose |
-| `OPENAI_BASE_URL`  | `http://127.0.0.1:8080/v1`        | The swappable endpoint                                                                |
-| `OPENAI_MODEL`     | `claude-code`                     | Model name passed through                                                             |
-| `S2S_URL`          | `ws://127.0.0.1:8765/v1/realtime` | speech-to-speech realtime socket                                                      |
-| `HEALTH_PORT`      | `8080`                            | `/healthz`, `/readiness`, `/version`                                                  |
-| `HISTORY_LIMIT`    | `20`                              | Prior messages resent per text turn                                                   |
+| Env                       | Default                           | Meaning                                                                                                                   |
+| ------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `DISCORD_TOKEN`           | —                                 | Bot token (required)                                                                                                      |
+| `ALLOWED_USER_IDS`        | —                                 | Comma-separated Discord user IDs. **Empty means nobody** — it fails closed on purpose                                     |
+| `ADMIN_USER_IDS`          | —                                 | Comma-separated Discord user IDs allowed to use slash commands. A subset of the allowlist; **empty means no admins**      |
+| `SLASH_COMMAND_GUILD_IDS` | —                                 | Guilds that get slash commands registered. **Empty means every guild**; listed guilds only, others are sent an empty list |
+| `OPENAI_BASE_URL`         | `http://127.0.0.1:8080/v1`        | The swappable endpoint                                                                                                    |
+| `OPENAI_MODEL`            | `claude-code`                     | Model name passed through                                                                                                 |
+| `S2S_URL`                 | `ws://127.0.0.1:8765/v1/realtime` | speech-to-speech realtime socket                                                                                          |
+| `HEALTH_PORT`             | `8080`                            | `/healthz`, `/readiness`, `/version`                                                                                      |
+| `HISTORY_LIMIT`           | `20`                              | Prior messages resent per text turn                                                                                       |
 
 See `local.env.example` for the full set.
 

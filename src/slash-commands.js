@@ -1,6 +1,6 @@
 'use strict';
 
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
 
 /**
  * The slash commands this instance advertises.
@@ -24,6 +24,22 @@ const { SlashCommandBuilder } = require('discord.js');
  */
 const VOICE_DISABLED_REPLY =
   'Voice is disabled on this instance — it runs text-only, so there is no voice channel to join.';
+
+/**
+ * The permission a member needs before Discord will SHOW them these commands.
+ *
+ * ManageGuild rather than ManageMessages: moderators routinely hold the latter,
+ * and every command here drives a Claude Code session with vault and repository
+ * access — a moderator is not an operator. Guild owners bypass permission checks
+ * entirely, so the owner always sees them without holding anything explicitly.
+ *
+ * Note what this is NOT: Discord's gate is permission-based, so it cannot
+ * express "these user ids". A member holding ManageGuild sees the commands
+ * whether or not they are in ADMIN_USER_IDS — which is why index.js still
+ * checks config.isAdmin before acting. Hiding is a UX affordance; the id check
+ * is the actual authorisation.
+ */
+const ADMIN_PERMISSION = PermissionFlagsBits.ManageGuild;
 
 function buildCommands({ voiceEnabled }) {
   const commands = [];
@@ -59,7 +75,10 @@ function buildCommands({ voiceEnabled }) {
       ),
   );
 
-  return commands.map((c) => c.toJSON());
+  // Applied to every command, not a subset: the whole slash surface is session
+  // and voice control, and there is no command here an ordinary user should
+  // reach. The mention surface is what they get, and it is not built here.
+  return commands.map((c) => c.setDefaultMemberPermissions(ADMIN_PERMISSION).toJSON());
 }
 
-module.exports = { buildCommands, VOICE_DISABLED_REPLY };
+module.exports = { buildCommands, VOICE_DISABLED_REPLY, ADMIN_PERMISSION };
