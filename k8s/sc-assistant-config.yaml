@@ -20,7 +20,7 @@ data:
     identities:
       sc:
         cwd: /vault
-        mcp_config: /home/node/.claude/mcp-empty.json
+        mcp_config: /home/node/mcp-empty.json
         allowed_tools: Read,Edit,Write,Glob,Grep,Bash(vault-cli:*),Bash(date:*),Bash(shasum:*),Bash(ls:*),Bash(gh api:*),Bash(gh pr view:*),Bash(git ls-remote:*)
   mcp-empty.json: |
     {}

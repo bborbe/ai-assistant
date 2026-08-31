@@ -109,8 +109,11 @@ spec:
               mountPath: /home/node/.config/discord-assistant/config.yaml
               subPath: config.yaml
               readOnly: true
+            # NOTE: mounted at the emptyDir root, NOT inside /home/node/.claude —
+            # a subPath mount there auto-creates the dir as root-owned and the
+            # shim (uid 1000) cannot write shim-sessions.json into it.
             - name: sc-assistant-config
-              mountPath: /home/node/.claude/mcp-empty.json
+              mountPath: /home/node/mcp-empty.json
               subPath: mcp-empty.json
               readOnly: true
           livenessProbe:
