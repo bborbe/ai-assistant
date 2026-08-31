@@ -19,6 +19,9 @@ spec:
       serviceAccountName: sc-assistant
       imagePullSecrets:
         - name: docker-quant
+      # node user (uid 1000) must write the local-path vault PVC.
+      securityContext:
+        fsGroup: 1000
       terminationGracePeriodSeconds: 30
       initContainers:
         # Clone the vault repo into /vault on first start (empty PVC).
@@ -148,4 +151,7 @@ spec:
             items:
               - key: VAULT_GIT_KEY
                 path: vault_deploy_key
-            defaultMode: 0600
+            # 0444: secret files are root-owned, but the vault-clone / vault-sync
+            # containers run as the non-root node user (uid 1000). Pod-local key;
+            # the pod is already isolated by the NetworkPolicy.
+            defaultMode: 0444
