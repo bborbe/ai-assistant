@@ -39,7 +39,6 @@ spec:
           volumeMounts:
             - { name: vault, mountPath: /vault }
             - { name: ssh-deploy-key, mountPath: /home/node/.ssh, readOnly: true }
-          volumeMounts:
             - { name: tmp, mountPath: /tmp }
           securityContext:
             runAsNonRoot: true
@@ -55,7 +54,6 @@ spec:
             - { name: vault, mountPath: /vault }
             - { name: ssh-deploy-key, mountPath: /home/node/.ssh, readOnly: true }
             - { name: vault-scripts, mountPath: /vault-scripts, readOnly: true }
-          volumeMounts:
             - { name: tmp, mountPath: /tmp }
           securityContext:
             runAsNonRoot: true
@@ -120,6 +118,9 @@ spec:
               mountPath: /home/node/mcp-empty.json
               subPath: mcp-empty.json
               readOnly: true
+            # claude CLI scratch (EROFS without a writable /tmp).
+            - name: tmp
+              mountPath: /tmp
           livenessProbe:
             httpGet: { path: /v1/models, port: http }
             initialDelaySeconds: 10
@@ -133,8 +134,6 @@ spec:
           resources:
             requests: { cpu: 100m, memory: 256Mi }
             limits: { memory: 1Gi }
-          volumeMounts:
-            - { name: tmp, mountPath: /tmp }
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
