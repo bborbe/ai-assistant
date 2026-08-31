@@ -33,7 +33,7 @@ COPY shim/ ./shim/
 # the bot Deployment runs ENTRYPOINT below, the shim Deployment overrides the
 # command to `python3 -u shim/claude_openai_shim.py`.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 \
+ && apt-get install -y --no-install-recommends python3 git \
  && rm -rf /var/lib/apt/lists/* \
  && npm install -g @anthropic-ai/claude-code
 

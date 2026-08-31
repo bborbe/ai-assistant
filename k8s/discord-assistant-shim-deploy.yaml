@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: discord-assistant-shim
-  namespace: default
+  namespace: '{{"NAMESPACE" | env}}'
 spec:
   replicas: 1
   strategy:
@@ -14,12 +14,49 @@ spec:
     metadata:
       labels:
         app: discord-assistant-shim
+        sc.assistant: 'true'
     spec:
+      serviceAccountName: sc-assistant
+      imagePullSecrets:
+        - name: docker-quant
       terminationGracePeriodSeconds: 30
+      initContainers:
+        # Clone the vault repo into /vault on first start (empty PVC).
+        - name: vault-clone
+          image: '{{"DOCKER_REGISTRY" | env}}/discord-assistant:{{"BRANCH" | env}}'
+          command: ['sh', '-c']
+          args:
+            - |
+              set -eu
+              export GIT_SSH_COMMAND="ssh -i /home/node/.ssh/vault_deploy_key -o StrictHostKeyChecking=accept-new"
+              if [ ! -d /vault/.git ]; then
+                git clone git@github.com:bborbe/obsidian-starcitzen.git /vault
+              fi
+          volumeMounts:
+            - { name: vault, mountPath: /vault }
+            - { name: ssh-deploy-key, mountPath: /home/node/.ssh, readOnly: true }
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ['ALL'] }
       containers:
+        # obsidian-git equivalent: pull Mac changes, commit + push pod writes.
+        - name: vault-sync
+          image: '{{"DOCKER_REGISTRY" | env}}/discord-assistant:{{"BRANCH" | env}}'
+          command: ['sh', '/vault-scripts/vault-sync.sh']
+          volumeMounts:
+            - { name: vault, mountPath: /vault }
+            - { name: ssh-deploy-key, mountPath: /home/node/.ssh, readOnly: true }
+            - { name: vault-scripts, mountPath: /vault-scripts, readOnly: true }
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ['ALL'] }
         - name: shim
           # Same image as the bot — this container overrides the ENTRYPOINT.
-          image: docker.io/bborbe/discord-assistant:master
+          image: '{{"DOCKER_REGISTRY" | env}}/discord-assistant:{{"BRANCH" | env}}'
           imagePullPolicy: Always
           command: ['python3', '-u', 'shim/claude_openai_shim.py']
           ports:
@@ -36,31 +73,42 @@ spec:
             - name: SHIM_MODEL
               value: claude-code
             # The shim shells out to the `claude` CLI, which reaches the backend
-            # through the in-cluster router. No provider credential in the pod:
-            # ANTHROPIC_API_KEY is a router x-api-key from the router's
-            # allowedApiKeys registry, not any provider/company key.
+            # through the in-cluster router (ROUTER_HOST resolves per env, e.g.
+            # http://claude-code-router-dev.dev.svc.cluster.local:8788). No
+            # provider credential in the pod: ANTHROPIC_API_KEY is a router
+            # x-api-key, not any provider/company key.
             - name: ANTHROPIC_BASE_URL
-              value: http://claude-code-router-dev:8788
+              value: '{{"ROUTER_HOST" | env}}'
             - name: ANTHROPIC_API_KEY
               valueFrom:
                 secretKeyRef: { name: discord-assistant, key: ROUTER_API_KEY }
-            # Where the server-side assistant works. Decision 2026-08-27:
-            # vault + workspaces, same filesystem the laptop instance reaches.
+            # The filesystem the assistant reaches: the SC vault only.
             - name: SHIM_CWD
               value: /vault
             - name: SHIM_SESSIONS_FILE
               value: /home/node/.claude/shim-sessions.json
+            # Identity config: identities.sc -> cwd /vault, tight allowed-tools,
+            # empty MCP set (see sc-assistant-config.yaml).
+            - name: DISCORD_ASSISTANT_CONFIG
+              value: /home/node/.config/discord-assistant/config.yaml
             - name: LOG_LEVEL
               value: info
           volumeMounts:
             # Writable home for the shim: claude CLI session state + shim-sessions.json.
             - name: shim-home
               mountPath: /home/node
-            # The filesystem the assistant reaches (vault + workspaces).
-            # Provisioned by the deploy owner (NFS / hostPath / PVC) — see
-            # Deploy Discord Assistant to Kubernetes task for the decided shape.
+            # The SC vault (git clone of bborbe/obsidian-starcitzen).
             - name: vault
               mountPath: /vault
+            # Identity config + empty MCP file (subPath files into shim-home).
+            - name: sc-assistant-config
+              mountPath: /home/node/.config/discord-assistant/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            - name: sc-assistant-config
+              mountPath: /home/node/.claude/mcp-empty.json
+              subPath: mcp-empty.json
+              readOnly: true
           livenessProbe:
             httpGet: { path: /v1/models, port: http }
             initialDelaySeconds: 10
@@ -83,4 +131,21 @@ spec:
         - name: shim-home
           emptyDir: {}
         - name: vault
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: sc-vault
+        - name: sc-assistant-config
+          configMap:
+            name: sc-assistant-config
+        - name: vault-scripts
+          configMap:
+            name: sc-assistant-config
+            items:
+              - key: vault-sync.sh
+                path: vault-sync.sh
+        - name: ssh-deploy-key
+          secret:
+            secretName: discord-assistant
+            items:
+              - key: VAULT_GIT_KEY
+                path: vault_deploy_key
+            defaultMode: 0600

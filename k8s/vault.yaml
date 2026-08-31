@@ -1,0 +1,16 @@
+# Writable copy of the StarCitizen Obsidian vault (bborbe/obsidian-starcitzen)
+# mounted at /vault. The assistant reads/writes here; a vault-sync sidecar
+# (see shim deploy) commits + pushes so changes land back in the repo and reach
+# the Mac's Obsidian on its next pull.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sc-vault
+  namespace: star-citizen
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: local-path

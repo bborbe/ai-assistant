@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: discord-assistant
-  namespace: default
+  namespace: '{{"NAMESPACE" | env}}'
 spec:
   # A Discord bot identity permits ONE gateway connection — never scale this up.
   replicas: 1
@@ -15,11 +15,15 @@ spec:
     metadata:
       labels:
         app: discord-assistant
+        sc.assistant: 'true'
     spec:
+      serviceAccountName: sc-assistant
+      imagePullSecrets:
+        - name: docker-quant
       terminationGracePeriodSeconds: 30
       containers:
         - name: bot
-          image: docker.io/bborbe/discord-assistant:master
+          image: '{{"DOCKER_REGISTRY" | env}}/discord-assistant:{{"BRANCH" | env}}'
           imagePullPolicy: Always
           ports:
             - name: http
@@ -31,13 +35,16 @@ spec:
             - name: ALLOWED_USER_IDS
               valueFrom:
                 secretKeyRef: { name: discord-assistant, key: ALLOWED_USER_IDS }
+            - name: ADMIN_USER_IDS
+              valueFrom:
+                secretKeyRef: { name: discord-assistant, key: ADMIN_USER_IDS }
+            - name: IDENTITY
+              value: sc
             - name: OPENAI_BASE_URL
               value: http://claude-shim:8080/v1
             # Text-only baseline in the cluster: no GPU on any node, speech
             # stays on the laptop. VOICE_ENABLED=0 omits join/leave from the
-            # guild command list (see src/slash-commands.js). The dynamic voice
-            # back-connect (laptop reachable -> voice available) is a later
-            # subtask of Deploy Discord Assistant to Kubernetes.
+            # guild command list (see src/slash-commands.js).
             - name: VOICE_ENABLED
               value: '0'
             - name: LOG_LEVEL

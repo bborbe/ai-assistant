@@ -1,0 +1,64 @@
+# Firewall rules for the Star Citizen assistant (bot + shim).
+#
+# Default-deny in BOTH directions. Allowed egress: DNS, the Discord gateway/API,
+# anything inside the star-citizen namespace, and ONE sanctioned cross-namespace
+# path to the shared Claude router (model access). Allowed ingress: same
+# namespace (bot <-> shim) plus kubelet health probes from the node CIDR.
+#
+# Applies to both pods via the shared label sc.assistant="true" (set on the bot
+# and shim pod templates — one identity, one policy).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sc-assistant
+  namespace: star-citizen
+spec:
+  podSelector:
+    matchLabels:
+      sc.assistant: 'true'
+  policyTypes: [Egress, Ingress]
+  egress:
+    # DNS (CoreDNS in kube-system)
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # Discord gateway + API (HTTPS).
+    #
+    # ⚠️ VERIFY AT APPLY TIME: Discord's published IP list rotates and these are
+    # the commonly-documented Cloudflare/Discord ranges, not a fetched snapshot.
+    # The egress probe (curl to a denied destination) and a real bot gateway
+    # connection are the ground truth. If Discord rotates out of these ranges,
+    # fall back to an in-namespace egress-proxy with a domain allowlist (see
+    # agent/specs/in-progress/048-agent-egress-proxy.md) and point the policy
+    # at it instead of ipBlocks.
+    - to:
+        - ipBlock: { cidr: 162.159.0.0/16 }
+        - ipBlock: { cidr: 104.16.0.0/13 }
+        - ipBlock: { cidr: 172.64.0.0/13 }
+        - ipBlock: { cidr: 138.199.0.0/16 }
+      ports:
+        - { protocol: TCP, port: 443 }
+    # Same namespace: bot -> shim (claude-shim:8080) and any internal calls.
+    - to:
+        - podSelector: {}
+    # Sanctioned cross-namespace egress: shared Claude router (model access).
+    # ROUTER_NS resolves per environment (dev / prod) from local.env — the
+    # service is claude-code-router-{dev,prod} in that namespace.
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: '{{"ROUTER_NS" | env}}' }
+      ports:
+        - { protocol: TCP, port: 8788 }
+  ingress:
+    # Same namespace (bot <-> shim).
+    - from:
+        - podSelector: {}
+    # Kubelet health/readiness probes originate from the node. Covers the nuke
+    # node + pod CIDRs (K3s: pods 10.42.0.0/16, services 10.43.0.0/16).
+    - from:
+        - ipBlock: { cidr: 10.0.0.0/8 }

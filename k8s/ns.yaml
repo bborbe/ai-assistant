@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: star-citizen
+  labels:
+    name: star-citizen
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sc-assistant
+  namespace: star-citizen
