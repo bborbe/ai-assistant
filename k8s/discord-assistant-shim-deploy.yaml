@@ -33,6 +33,7 @@ spec:
             - |
               set -eu
               export GIT_SSH_COMMAND="ssh -i /home/node/.ssh/vault_deploy_key -o StrictHostKeyChecking=accept-new"
+              git config --global --add safe.directory /vault
               if [ ! -d /vault/.git ]; then
                 git clone git@github.com:bborbe/obsidian-starcitzen.git /vault
               fi

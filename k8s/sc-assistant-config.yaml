@@ -23,7 +23,7 @@ data:
         mcp_config: /home/node/mcp-empty.json
         allowed_tools: Read,Edit,Write,Glob,Grep,Bash(vault-cli:*),Bash(date:*),Bash(shasum:*),Bash(ls:*),Bash(gh api:*),Bash(gh pr view:*),Bash(git ls-remote:*)
   mcp-empty.json: |
-    {}
+    {"mcpServers": {}}
   vault-sync.sh: |
     #!/bin/sh
     # obsidian-git equivalent for the pod: keep /vault current (pull) and push
@@ -31,6 +31,9 @@ data:
     # edit that obsidian-git already pushed is not clobbered by a pod push.
     set -eu
     export GIT_SSH_COMMAND="ssh -i /home/node/.ssh/vault_deploy_key -o StrictHostKeyChecking=accept-new"
+    # The PVC is owned by the vault-clone init user; git's dubious-ownership
+    # check refuses it otherwise.
+    git config --global --add safe.directory /vault
     cd /vault
     while true; do
       git pull --rebase --quiet 2>/dev/null || true
