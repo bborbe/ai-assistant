@@ -18,7 +18,7 @@ spec:
     spec:
       serviceAccountName: sc-assistant
       imagePullSecrets:
-        - name: docker-quant
+        - name: docker
       # node user (uid 1000) must write the local-path vault PVC.
       securityContext:
         fsGroup: 1000

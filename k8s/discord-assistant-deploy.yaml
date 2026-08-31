@@ -19,7 +19,7 @@ spec:
     spec:
       serviceAccountName: sc-assistant
       imagePullSecrets:
-        - name: docker-quant
+        - name: docker
       terminationGracePeriodSeconds: 30
       containers:
         - name: bot
