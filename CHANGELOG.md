@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.24.0
 
 - feat: Star Citizen deployment manifests — dedicated `star-citizen` namespace with default-deny NetworkPolicy (DNS, Discord gateway, same-namespace, shared router only), ServiceAccount, private-registry image pull, and a vault mount (PVC + git clone init + vault-sync sidecar) for the SC assistant. Dockerfile adds `git` for the vault sidecar.
 
