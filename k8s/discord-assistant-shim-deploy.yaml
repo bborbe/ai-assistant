@@ -93,6 +93,12 @@ spec:
               value: /vault
             - name: SHIM_SESSIONS_FILE
               value: /home/node/shim-sessions.json
+            # Default-persona MCP config. Without it a key carrying no identity
+            # segment falls back to the module default
+            # (~/.claude/mcp-obsidian-personal.json), absent in the pod — claude
+            # then exits and the turn fails with EIO.
+            - name: SHIM_MCP_CONFIG
+              value: /home/node/mcp-empty.json
             # Identity config: identities.sc -> cwd /vault, tight allowed-tools,
             # empty MCP set (see sc-assistant-config.yaml).
             - name: DISCORD_ASSISTANT_CONFIG
