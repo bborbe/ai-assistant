@@ -90,7 +90,7 @@ spec:
             - name: SHIM_CWD
               value: /vault
             - name: SHIM_SESSIONS_FILE
-              value: /home/node/.claude/shim-sessions.json
+              value: /home/node/shim-sessions.json
             # Identity config: identities.sc -> cwd /vault, tight allowed-tools,
             # empty MCP set (see sc-assistant-config.yaml).
             - name: DISCORD_ASSISTANT_CONFIG
