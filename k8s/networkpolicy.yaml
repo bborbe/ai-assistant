@@ -43,6 +43,13 @@ spec:
         - ipBlock: { cidr: 138.199.0.0/16 }
       ports:
         - { protocol: TCP, port: 443 }
+    # Vault repo (git-over-SSH to github.com) — vault-clone init + vault-sync
+    # sidecar pull/push. github.com + ssh.github.com resolve inside 140.82.112.0/20.
+    - to:
+        - ipBlock: { cidr: 140.82.112.0/20 }
+      ports:
+        - { protocol: TCP, port: 22 }
+        - { protocol: TCP, port: 443 }
     # Same namespace: bot -> shim (claude-shim:8080) and any internal calls.
     - to:
         - podSelector: {}
