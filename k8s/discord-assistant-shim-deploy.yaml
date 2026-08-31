@@ -39,6 +39,8 @@ spec:
           volumeMounts:
             - { name: vault, mountPath: /vault }
             - { name: ssh-deploy-key, mountPath: /home/node/.ssh, readOnly: true }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
@@ -53,6 +55,8 @@ spec:
             - { name: vault, mountPath: /vault }
             - { name: ssh-deploy-key, mountPath: /home/node/.ssh, readOnly: true }
             - { name: vault-scripts, mountPath: /vault-scripts, readOnly: true }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
@@ -129,12 +133,16 @@ spec:
           resources:
             requests: { cpu: 100m, memory: 256Mi }
             limits: { memory: 1Gi }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: { drop: ['ALL'] }
       volumes:
+        - name: tmp
+          emptyDir: {}
         - name: shim-home
           emptyDir: {}
         - name: vault

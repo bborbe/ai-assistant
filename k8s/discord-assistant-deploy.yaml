@@ -68,8 +68,13 @@ spec:
           resources:
             requests: { cpu: 100m, memory: 192Mi }
             limits: { memory: 512Mi }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: { drop: ['ALL'] }
+      volumes:
+        - name: tmp
+          emptyDir: {}
