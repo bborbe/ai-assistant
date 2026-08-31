@@ -1,5 +1,14 @@
 # Writable copy of the StarCitizen Obsidian vault (bborbe/obsidian-starcitzen)
-# mounted at /vault. The assistant reads/writes here; a vault-sync sidecar
+# mounted at /vault.
+#
+# A standalone PVC (not volumeClaimTemplates) is correct here: the shim
+# Deployment is pinned to replicas=1 because one Discord bot identity permits
+# one gateway connection. Raising replicas would give each pod an independent
+# vault — don't; the single-writer constraint is what keeps git-sync coherent.
+#
+# storageClassName local-path is the DEFAULT provisioner on both nuke-dev and
+# nuke-prod (verified 2026-08-31, both 2-node K3s). RWO + one replica means the
+# pod schedules onto the node holding the volume. The assistant reads/writes here; a vault-sync sidecar
 # (see shim deploy) commits + pushes so changes land back in the repo and reach
 # the Mac's Obsidian on its next pull.
 apiVersion: v1

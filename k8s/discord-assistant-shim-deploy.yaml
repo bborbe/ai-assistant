@@ -17,6 +17,11 @@ spec:
         sc.assistant: 'true'
     spec:
       serviceAccountName: sc-assistant
+      # No imagePullSecrets on purpose: the nuke registry
+      # (docker.prod.nuke.benjamin-borbe.de:443) serves anonymous pulls, and
+      # no `docker` secret exists in any namespace — the fleet's other
+      # deployments reference one that is absent. Verified 2026-08-31: pulls
+      # succeed in star-citizen with none configured.
       # node user (uid 1000) must write the local-path vault PVC; image USER is
       # non-numeric (node) so runAsNonRoot needs an explicit numeric runAsUser.
       securityContext:
@@ -47,6 +52,11 @@ spec:
             capabilities: { drop: ['ALL'] }
       containers:
         # obsidian-git equivalent: pull Mac changes, commit + push pod writes.
+        #
+        # A regular container, not a native sidecar (initContainer with
+        # restartPolicy: Always) — so the pod's own `restartPolicy: Always`
+        # governs it and the kubelet restarts it in place if it crashes. No
+        # per-container restartPolicy is needed or valid here.
         - name: vault-sync
           image: '{{"DOCKER_REGISTRY" | env}}/bborbe/discord-assistant:{{"BRANCH" | env}}'
           command: ['sh', '/vault-scripts/vault-sync.sh']

@@ -18,6 +18,11 @@ spec:
         sc.assistant: 'true'
     spec:
       serviceAccountName: sc-assistant
+      # No imagePullSecrets on purpose: the nuke registry
+      # (docker.prod.nuke.benjamin-borbe.de:443) serves anonymous pulls, and
+      # no `docker` secret exists in any namespace — the fleet's other
+      # deployments reference one that is absent. Verified 2026-08-31: pulls
+      # succeed in star-citizen with none configured.
       # Image USER is non-numeric (node) — runAsNonRoot can't verify it without
       # an explicit numeric runAsUser. node's uid/gid is 1000.
       securityContext:

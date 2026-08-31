@@ -39,13 +39,31 @@ data:
     export GIT_CONFIG_KEY_0=safe.directory
     export GIT_CONFIG_VALUE_0=/vault
     cd /vault
+    # Errors are logged, never silenced: a sync that cannot push must be visible
+    # in `kubectl logs`, not an infinite quiet loop. The loop still continues —
+    # a transient network failure should not end the sidecar — but every failure
+    # prints. The container's restartPolicy is the pod's (Always), so a genuine
+    # crash is restarted in place by the kubelet.
+    #
+    # Order is COMMIT -> PULL -> PUSH, not pull-first: `git pull --rebase` aborts
+    # with "cannot pull with rebase: You have unstaged changes" whenever the
+    # assistant has written since the last cycle, which is exactly when a sync is
+    # needed. Committing local work first makes the rebase a normal
+    # commit-on-commit merge. (Observed live on nuke-dev 2026-08-31 — the error
+    # was invisible until this loop started logging.)
     while true; do
-      git pull --rebase --quiet 2>/dev/null || true
       if [ -n "$(git status --porcelain)" ]; then
         git add -A
-        git -c user.email="sc-assistant@starcitzen" -c user.name="SC Assistant" \
-          commit -m "vault sync: $(date -u +%Y-%m-%dT%H:%M:%SZ)" 2>/dev/null || true
-        git push --quiet 2>/dev/null || true
+        git -c user.email="${VAULT_GIT_EMAIL:-sc-assistant@starcitzen}" \
+            -c user.name="${VAULT_GIT_NAME:-SC Assistant}" \
+            commit -m "vault sync: $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          || echo "vault-sync: commit failed"
+      fi
+      git pull --rebase --quiet || echo "vault-sync: pull failed (continuing)"
+      # Push whenever the local branch is ahead — covers a commit made this cycle
+      # and one left unpushed by an earlier failure.
+      if [ -n "$(git log --branches --not --remotes --oneline 2>/dev/null)" ]; then
+        git push --quiet || echo "vault-sync: push failed (will retry next cycle)"
       fi
       sleep 30
     done
