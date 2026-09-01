@@ -39,11 +39,14 @@ spec:
           args:
             - |
               set -eu
-              export GIT_SSH_COMMAND="ssh -i /home/node/.ssh/vault_deploy_key -o StrictHostKeyChecking=accept-new"
+              # Deploy keys + host aliases from /home/node/.ssh (ssh_config from
+              # the ConfigMap, three per-repo keys from the Secret). GitHub
+              # deploy keys are one-key-per-repo, so each repo has its own alias.
+              export GIT_SSH_COMMAND="ssh -F /home/node/.ssh/ssh_config"
               for pair in \
-                "git@github.com:seibert-data/obsidian-brogrammers.git /vault/brogrammers" \
-                "git@github.com:seibert-data/obsidian-agent.git /vault/agent" \
-                "git@github.com:seibert-data/obsidian-openbrain.git /vault/openbrain"; do
+                "git@github-brogrammers:seibert-data/obsidian-brogrammers.git /vault/brogrammers" \
+                "git@github-agent:seibert-data/obsidian-agent.git /vault/agent" \
+                "git@github-openbrain:seibert-data/obsidian-openbrain.git /vault/openbrain"; do
                 set -- $pair; repo=$1; dir=$2
                 if [ ! -d "$dir/.git" ]; then
                   git clone "$repo" "$dir"
@@ -52,6 +55,12 @@ spec:
           volumeMounts:
             - { name: vault, mountPath: /vault }
             - { name: ssh-deploy-key, mountPath: /home/node/.ssh, readOnly: true }
+            - {
+                name: brogrammers-assistant-config,
+                mountPath: /home/node/.ssh/ssh_config,
+                subPath: ssh-config,
+                readOnly: true,
+              }
             - { name: tmp, mountPath: /tmp }
           securityContext:
             runAsNonRoot: true
@@ -70,6 +79,12 @@ spec:
           volumeMounts:
             - { name: vault, mountPath: /vault }
             - { name: ssh-deploy-key, mountPath: /home/node/.ssh, readOnly: true }
+            - {
+                name: brogrammers-assistant-config,
+                mountPath: /home/node/.ssh/ssh_config,
+                subPath: ssh-config,
+                readOnly: true,
+              }
             - { name: vault-scripts, mountPath: /vault-scripts, readOnly: true }
             - { name: tmp, mountPath: /tmp }
           securityContext:
@@ -180,9 +195,13 @@ spec:
           secret:
             secretName: discord-assistant
             items:
-              - key: VAULT_GIT_KEY
-                path: vault_deploy_key
+              - key: VAULT_GIT_KEY_BROGRAMMERS
+                path: vault_deploy_key_brogrammers
+              - key: VAULT_GIT_KEY_AGENT
+                path: vault_deploy_key_agent
+              - key: VAULT_GIT_KEY_OPENBRAIN
+                path: vault_deploy_key_openbrain
             # 0444: secret files are root-owned, but the vault-clone / vault-sync
-            # containers run as the non-root node user (uid 1000). Pod-local key;
+            # containers run as the non-root node user (uid 1000). Pod-local keys;
             # the pod is already isolated by the NetworkPolicy.
             defaultMode: 0444

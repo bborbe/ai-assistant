@@ -10,7 +10,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 ## Unreleased
 
-- feat: Brogrammers Team Assistant k8s manifests. Dedicated `brogrammers` namespace (bot + shim Deployments, ServiceAccount `bro-assistant`, label `brogrammers.assistant`) mounting all three `seibert-data/obsidian-*` vaults — brogrammers, agent, openbrain — into one 5Gi PVC under `/vault/{brogrammers,agent,openbrain}` with a single vault-sync sidecar looping the three repos, identity `bro` (cwd `/vault/brogrammers`, tight allowed-tools, empty MCP), SC's NetworkPolicy rules under the `brogrammers.assistant` label, and a self-contained per-instance apply (`k8s/brogrammers/Makefile` sourcing `local.env.brogrammers`). The shared `Makefile.k8s apply` gained `-maxdepth 1` so the SC apply cannot descend into the new directory; `.gitignore` now covers `local.env.*`.
+- feat: Brogrammers Team Assistant k8s manifests. Dedicated `brogrammers` namespace (bot + shim Deployments, ServiceAccount `bro-assistant`, label `brogrammers.assistant`) mounting all three `seibert-data/obsidian-*` vaults — brogrammers, agent, openbrain — into one 5Gi PVC under `/vault/{brogrammers,agent,openbrain}` with a single vault-sync sidecar looping the three repos, identity `bro` (cwd `/vault/brogrammers`, tight allowed-tools, empty MCP), SC's NetworkPolicy rules under the `brogrammers.assistant` label, and a self-contained per-instance apply (`k8s/brogrammers/Makefile` sourcing `local.env.brogrammers`). Three per-repo deploy keys (GitHub keys are one-per-repo) reach github.com via SSH host aliases in a mounted `ssh-config`. The shared `Makefile.k8s apply` gained `-maxdepth 1` so the SC apply cannot descend into the new directory; `.gitignore` now covers `local.env.*`.
 
 ## v0.25.0
 

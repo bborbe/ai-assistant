@@ -30,6 +30,30 @@ data:
         allowed_tools: Read,Edit,Write,Glob,Grep,Bash(date:*),Bash(shasum:*),Bash(ls:*),Bash(gh api:*),Bash(gh pr view:*),Bash(git ls-remote:*)
   mcp-empty.json: |
     {"mcpServers": {}}
+  ssh-config: |
+    # Three vault repos, three deploy keys (GitHub deploy keys are one-key-per-
+    # repo — a single key cannot reach all three, verified 2026-09-01 by the
+    # 422 "key is already in use" on the second registration). The shim and
+    # vault-sync therefore reach github.com through host aliases that pick the
+    # right IdentityFile per repo.
+    Host github-brogrammers
+      HostName github.com
+      User git
+      IdentityFile /home/node/.ssh/vault_deploy_key_brogrammers
+      IdentitiesOnly yes
+      StrictHostKeyChecking accept-new
+    Host github-agent
+      HostName github.com
+      User git
+      IdentityFile /home/node/.ssh/vault_deploy_key_agent
+      IdentitiesOnly yes
+      StrictHostKeyChecking accept-new
+    Host github-openbrain
+      HostName github.com
+      User git
+      IdentityFile /home/node/.ssh/vault_deploy_key_openbrain
+      IdentitiesOnly yes
+      StrictHostKeyChecking accept-new
   vault-sync.sh: |
     #!/bin/sh
     # obsidian-git equivalent for the pod: keep the three team vaults current
@@ -37,7 +61,9 @@ data:
     # one loop over the three repos under /vault. Pull first so a Mac edit that
     # obsidian-git already pushed is not clobbered by a pod push.
     set -eu
-    export GIT_SSH_COMMAND="ssh -i /home/node/.ssh/vault_deploy_key -o StrictHostKeyChecking=accept-new"
+    # Deploy keys + host aliases come from /home/node/.ssh/ssh_config (mounted
+    # from the ConfigMap); GIT_SSH_COMMAND just points ssh at it.
+    export GIT_SSH_COMMAND="ssh -F /home/node/.ssh/ssh_config"
     # The PVC files are owned by the vault-clone init user; git's
     # dubious-ownership check refuses the repo otherwise. Env-based config —
     # /home/node is on the read-only rootfs, so `git config --global` cannot
