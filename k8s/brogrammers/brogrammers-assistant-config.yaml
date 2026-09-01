@@ -1,0 +1,82 @@
+# Identity config for the Brogrammers assistant pod.
+#
+# The shim (shim/claude_openai_shim.py) reads this via DISCORD_ASSISTANT_CONFIG
+# (default ~/.config/discord-assistant/config.yaml). The bro identity is the
+# pod's persona: cwd = the primary vault, bare `claude` (no launcher script —
+# the pod has no laptop launcher), a tight tool allowlist, and an EMPTY MCP
+# config so `--strict-mcp-config` passes with zero servers (in-cluster
+# semantic-search is a follow-up; the vault is small enough for Read/Edit/Grep/
+# Glob + the tool allowlist).
+#
+# NOTE: no claude_script on purpose. A launcher owns --add-dir/model/effort and
+# would reference laptop paths; the pod runs bare `claude` bounded by
+# --allowed-tools + --permission-mode auto (the shim passes both). cwd is the
+# primary vault; the sibling vaults are reachable as ../agent and ../openbrain.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: brogrammers-assistant-config
+  namespace: brogrammers
+data:
+  config.yaml: |
+    identities:
+      bro:
+        cwd: /vault/brogrammers
+        mcp_config: /home/node/mcp-empty.json
+        # No Bash(vault-cli:*): vault-cli is NOT installed in the image
+        # (verified for the SC pod 2026-08-31), so granting it only widens the
+        # allowlist for a binary that cannot run. Re-add together with the
+        # install if the pod ever needs vault CRUD.
+        allowed_tools: Read,Edit,Write,Glob,Grep,Bash(date:*),Bash(shasum:*),Bash(ls:*),Bash(gh api:*),Bash(gh pr view:*),Bash(git ls-remote:*)
+  mcp-empty.json: |
+    {"mcpServers": {}}
+  vault-sync.sh: |
+    #!/bin/sh
+    # obsidian-git equivalent for the pod: keep the three team vaults current
+    # (pull) and push back anything the assistant wrote (commit on change) —
+    # one loop over the three repos under /vault. Pull first so a Mac edit that
+    # obsidian-git already pushed is not clobbered by a pod push.
+    set -eu
+    export GIT_SSH_COMMAND="ssh -i /home/node/.ssh/vault_deploy_key -o StrictHostKeyChecking=accept-new"
+    # The PVC files are owned by the vault-clone init user; git's
+    # dubious-ownership check refuses the repo otherwise. Env-based config —
+    # /home/node is on the read-only rootfs, so `git config --global` cannot
+    # write there. Three repos, three safe.directory entries.
+    export GIT_CONFIG_COUNT=3
+    export GIT_CONFIG_KEY_0=safe.directory
+    export GIT_CONFIG_VALUE_0=/vault/brogrammers
+    export GIT_CONFIG_KEY_1=safe.directory
+    export GIT_CONFIG_VALUE_1=/vault/agent
+    export GIT_CONFIG_KEY_2=safe.directory
+    export GIT_CONFIG_VALUE_2=/vault/openbrain
+    # Errors are logged, never silenced: a sync that cannot push must be visible
+    # in `kubectl logs`, not an infinite quiet loop. The loop still continues —
+    # a transient network failure should not end the sidecar — but every failure
+    # prints.
+    #
+    # Order is COMMIT -> PULL -> PUSH, not pull-first: `git pull --rebase` aborts
+    # with "cannot pull with rebase: You have unstaged changes" whenever the
+    # assistant has written since the last cycle, which is exactly when a sync is
+    # needed. Committing local work first makes the rebase a normal
+    # commit-on-commit merge. (Observed live on nuke-dev 2026-08-31 — the error
+    # was invisible until the loop started logging.)
+    while true; do
+      for dir in /vault/brogrammers /vault/agent /vault/openbrain; do
+        ( cd "$dir"
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git -c user.email="${VAULT_GIT_EMAIL:-bro-assistant@brogrammers}" \
+                -c user.name="${VAULT_GIT_NAME:-Brogrammers Assistant}" \
+                commit -m "vault sync: $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              || echo "vault-sync: commit failed ($dir)"
+          fi
+          git pull --rebase --quiet || echo "vault-sync: pull failed ($dir) (continuing)"
+          # Push whenever the local branch is ahead — covers a commit made this
+          # cycle and one left unpushed by an earlier failure.
+          if [ -n "$(git log --branches --not --remotes --oneline 2>/dev/null)" ]; then
+            git push --quiet || echo "vault-sync: push failed ($dir) (will retry next cycle)"
+          fi
+        )
+      done
+      sleep 30
+    done

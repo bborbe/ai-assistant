@@ -1,0 +1,27 @@
+# Writable copies of the three team vaults (seibert-data/obsidian-*), mounted
+# at /vault/{brogrammers,agent,openbrain}.
+#
+# A standalone PVC (not volumeClaimTemplates) is correct here: the shim
+# Deployment is pinned to replicas=1 because one Discord bot identity permits
+# one gateway connection. Raising replicas would give each pod an independent
+# vault — don't; the single-writer constraint is what keeps git-sync coherent.
+#
+# Sized 5Gi: the three working trees are ~92M locally plus git history and
+# attachments; SC's single 2Gi vault is the lower bound. local-path is the
+# DEFAULT provisioner on both nuke-dev and nuke-prod (verified 2026-08-31).
+# RWO + one replica means the pod schedules onto the node holding the volume.
+# The assistant reads/writes here; a vault-sync sidecar (see shim deploy)
+# commits + pushes so changes land back in the repos and reach the Mac's
+# Obsidian on its next pull.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: brogrammers-vault
+  namespace: brogrammers
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: local-path

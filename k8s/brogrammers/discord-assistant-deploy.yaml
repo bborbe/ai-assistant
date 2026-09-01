@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: discord-assistant
+  namespace: brogrammers
+spec:
+  # A Discord bot identity permits ONE gateway connection — never scale this up.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: discord-assistant
+  template:
+    metadata:
+      labels:
+        app: discord-assistant
+        brogrammers.assistant: 'true'
+    spec:
+      serviceAccountName: bro-assistant
+      # No imagePullSecrets on purpose: the nuke registry
+      # (docker.prod.nuke.benjamin-borbe.de:443) serves anonymous pulls, and
+      # no `docker` secret exists in any namespace — verified for star-citizen.
+      # Image USER is non-numeric (node) — runAsNonRoot can't verify it without
+      # an explicit numeric runAsUser. node's uid/gid is 1000.
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: bot
+          image: '{{"DOCKER_REGISTRY" | env}}/bborbe/discord-assistant:{{"BRANCH" | env}}'
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: DISCORD_TOKEN
+              valueFrom:
+                secretKeyRef: { name: discord-assistant, key: DISCORD_TOKEN }
+            - name: ALLOWED_USER_IDS
+              valueFrom:
+                secretKeyRef: { name: discord-assistant, key: ALLOWED_USER_IDS }
+            - name: ADMIN_USER_IDS
+              valueFrom:
+                secretKeyRef: { name: discord-assistant, key: ADMIN_USER_IDS }
+            - name: IDENTITY
+              value: bro
+            - name: OPENAI_BASE_URL
+              value: http://claude-shim:8080/v1
+            # Text-only baseline in the cluster: no GPU on any node, speech
+            # stays on the laptop. VOICE_ENABLED=0 omits join/leave from the
+            # guild command list (see src/slash-commands.js).
+            - name: VOICE_ENABLED
+              value: '0'
+            - name: LOG_LEVEL
+              value: info
+          # Liveness must not depend on Discord: an outage there should drain,
+          # not restart every pod into a reconnect storm.
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+          # Readiness tracks the gateway connection.
+          readinessProbe:
+            httpGet: { path: /readiness, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 2
+          resources:
+            requests: { cpu: 100m, memory: 192Mi }
+            limits: { memory: 512Mi }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ['ALL'] }
+      volumes:
+        - name: tmp
+          emptyDir: {}

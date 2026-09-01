@@ -3,6 +3,12 @@
 # nothing, the Secret is silently skipped, and pods land in
 # CreateContainerConfigError. `config parse` resolves its own config (Keychain
 # auth), so no -teamvault-config flag.
+#
+# `-maxdepth 1` keeps this apply scoped to the instance's own manifests at the
+# repo root of the invoking directory. The k8s/brogrammers/ set has its own
+# Makefile + env; without the depth cap, `make -C k8s apply` (SC instance)
+# would descend into k8s/brogrammers/ and apply the Brogrammers manifests into
+# star-citizen. All SC yaml lives at k8s/ root, so this is safe.
 apply:
 	@command -v teamvault-cli >/dev/null 2>&1 || { echo "teamvault-cli not on PATH" >&2; exit 1; }
-	bash -c 'source ${ROOTDIR}/local.env && find . -name "*.yaml" | while read -r file; do cat $${file} | teamvault-cli config parse | kubectl apply --context=$${CLUSTER_CONTEXT} -f -; done'
+	bash -c 'source ${ROOTDIR}/local.env && find . -maxdepth 1 -name "*.yaml" | while read -r file; do cat $${file} | teamvault-cli config parse | kubectl apply --context=$${CLUSTER_CONTEXT} -f -; done'

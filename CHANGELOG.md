@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: Brogrammers Team Assistant k8s manifests. Dedicated `brogrammers` namespace (bot + shim Deployments, ServiceAccount `bro-assistant`, label `brogrammers.assistant`) mounting all three `seibert-data/obsidian-*` vaults — brogrammers, agent, openbrain — into one 5Gi PVC under `/vault/{brogrammers,agent,openbrain}` with a single vault-sync sidecar looping the three repos, identity `bro` (cwd `/vault/brogrammers`, tight allowed-tools, empty MCP), SC's NetworkPolicy rules under the `brogrammers.assistant` label, and a self-contained per-instance apply (`k8s/brogrammers/Makefile` sourcing `local.env.brogrammers`). The shared `Makefile.k8s apply` gained `-maxdepth 1` so the SC apply cannot descend into the new directory; `.gitignore` now covers `local.env.*`.
+
 ## v0.25.0
 
 - feat: two-tier access for the Discord surface. `ADMIN_USER_IDS` gates the slash commands (`/status`, `/new`, `/sessions`, `/switch`, and `/join`/`/leave` when voice is on) while `ALLOWED_USER_IDS` keeps gating the @mention surface, so guests can talk to the bot without reaching session control. Every command is registered with `setDefaultMemberPermissions(ManageGuild)` so Discord hides it from ordinary members, with an `isAdmin` check behind it because hiding is a client affordance and not authorisation. New `SLASH_COMMAND_GUILD_IDS` withholds commands from named guilds entirely — needed where the operator is an ordinary member and permission-gating would hide the commands from them too. An unset `ADMIN_USER_IDS` inherits `ALLOWED_USER_IDS`, so existing deployments keep their slash commands; set it explicitly to opt into the tighter tier, or empty to mean no admins.

@@ -1,0 +1,188 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: discord-assistant-shim
+  namespace: brogrammers
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: discord-assistant-shim
+  template:
+    metadata:
+      labels:
+        app: discord-assistant-shim
+        brogrammers.assistant: 'true'
+    spec:
+      serviceAccountName: bro-assistant
+      # No imagePullSecrets on purpose: the nuke registry
+      # (docker.prod.nuke.benjamin-borbe.de:443) serves anonymous pulls — same
+      # verified state as star-citizen.
+      # node user (uid 1000) must write the local-path vault PVC; image USER is
+      # non-numeric (node) so runAsNonRoot needs an explicit numeric runAsUser.
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+        runAsGroup: 1000
+      terminationGracePeriodSeconds: 30
+      initContainers:
+        # Clone the three team vaults into /vault on first start (empty PVC).
+        # One PVC, three repos as subdirs: the shim spawns bare `claude` with
+        # cwd from the identity config (no --add-dir / launcher in the pod), so
+        # the sibling vaults must be filesystem-reachable from cwd — i.e. all
+        # under the one /vault root.
+        - name: vault-clone
+          image: '{{"DOCKER_REGISTRY" | env}}/bborbe/discord-assistant:{{"BRANCH" | env}}'
+          command: ['sh', '-c']
+          args:
+            - |
+              set -eu
+              export GIT_SSH_COMMAND="ssh -i /home/node/.ssh/vault_deploy_key -o StrictHostKeyChecking=accept-new"
+              for pair in \
+                "git@github.com:seibert-data/obsidian-brogrammers.git /vault/brogrammers" \
+                "git@github.com:seibert-data/obsidian-agent.git /vault/agent" \
+                "git@github.com:seibert-data/obsidian-openbrain.git /vault/openbrain"; do
+                set -- $pair; repo=$1; dir=$2
+                if [ ! -d "$dir/.git" ]; then
+                  git clone "$repo" "$dir"
+                fi
+              done
+          volumeMounts:
+            - { name: vault, mountPath: /vault }
+            - { name: ssh-deploy-key, mountPath: /home/node/.ssh, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ['ALL'] }
+      containers:
+        # obsidian-git equivalent: pull Mac changes, commit + push pod writes.
+        #
+        # A regular container, not a native sidecar (initContainer with
+        # restartPolicy: Always) — so the pod's own `restartPolicy: Always`
+        # governs it and the kubelet restarts it in place if it crashes.
+        - name: vault-sync
+          image: '{{"DOCKER_REGISTRY" | env}}/bborbe/discord-assistant:{{"BRANCH" | env}}'
+          command: ['sh', '/vault-scripts/vault-sync.sh']
+          volumeMounts:
+            - { name: vault, mountPath: /vault }
+            - { name: ssh-deploy-key, mountPath: /home/node/.ssh, readOnly: true }
+            - { name: vault-scripts, mountPath: /vault-scripts, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ['ALL'] }
+        - name: shim
+          # Same image as the bot — this container overrides the ENTRYPOINT.
+          image: '{{"DOCKER_REGISTRY" | env}}/bborbe/discord-assistant:{{"BRANCH" | env}}'
+          imagePullPolicy: Always
+          command: ['python3', '-u', 'shim/claude_openai_shim.py']
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # Listen on the pod IP, not loopback — the bot reaches this via the
+            # claude-shim Service from a different pod.
+            - name: SHIM_HOST
+              value: 0.0.0.0
+            - name: SHIM_PORT
+              value: '8080'
+            # Which model this endpoint advertises to OpenAI clients.
+            - name: SHIM_MODEL
+              value: claude-code
+            # The shim shells out to the `claude` CLI, which reaches the backend
+            # through the in-cluster router (ROUTER_HOST resolves per env). No
+            # provider credential in the pod: ANTHROPIC_API_KEY is a router
+            # x-api-key, not any provider/company key.
+            - name: ANTHROPIC_BASE_URL
+              value: '{{"ROUTER_HOST" | env}}'
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef: { name: discord-assistant, key: ROUTER_API_KEY }
+            # The filesystem the assistant reaches: the three team vaults.
+            - name: SHIM_CWD
+              value: /vault/brogrammers
+            - name: SHIM_SESSIONS_FILE
+              value: /home/node/shim-sessions.json
+            # Default-persona MCP config — empty set, same as SC (in-cluster
+            # semantic-search is a follow-up).
+            - name: SHIM_MCP_CONFIG
+              value: /home/node/mcp-empty.json
+            # Identity config: identities.bro -> cwd /vault/brogrammers, tight
+            # allowed-tools, empty MCP (see brogrammers-assistant-config.yaml).
+            - name: DISCORD_ASSISTANT_CONFIG
+              value: /home/node/.config/discord-assistant/config.yaml
+            - name: LOG_LEVEL
+              value: info
+          volumeMounts:
+            # Writable home for the shim: claude CLI session state + shim-sessions.json.
+            - name: shim-home
+              mountPath: /home/node
+            # The three vaults (git clones of the seibert-data obsidian repos).
+            - name: vault
+              mountPath: /vault
+            # Identity config + empty MCP file (subPath files into shim-home).
+            - name: brogrammers-assistant-config
+              mountPath: /home/node/.config/discord-assistant/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            # NOTE: mounted at the emptyDir root, NOT inside /home/node/.claude —
+            # a subPath mount there auto-creates the dir as root-owned and the
+            # shim (uid 1000) cannot write shim-sessions.json into it.
+            - name: brogrammers-assistant-config
+              mountPath: /home/node/mcp-empty.json
+              subPath: mcp-empty.json
+              readOnly: true
+            # claude CLI scratch (EROFS without a writable /tmp).
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet: { path: /v1/models, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /v1/models, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 2
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 1Gi }
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ['ALL'] }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: shim-home
+          emptyDir: {}
+        - name: vault
+          persistentVolumeClaim:
+            claimName: brogrammers-vault
+        - name: brogrammers-assistant-config
+          configMap:
+            name: brogrammers-assistant-config
+        - name: vault-scripts
+          configMap:
+            name: brogrammers-assistant-config
+            items:
+              - key: vault-sync.sh
+                path: vault-sync.sh
+        - name: ssh-deploy-key
+          secret:
+            secretName: discord-assistant
+            items:
+              - key: VAULT_GIT_KEY
+                path: vault_deploy_key
+            # 0444: secret files are root-owned, but the vault-clone / vault-sync
+            # containers run as the non-root node user (uid 1000). Pod-local key;
+            # the pod is already isolated by the NetworkPolicy.
+            defaultMode: 0444

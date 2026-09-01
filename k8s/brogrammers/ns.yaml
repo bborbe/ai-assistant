@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: brogrammers
+  labels:
+    name: brogrammers
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bro-assistant
+  namespace: brogrammers
