@@ -90,7 +90,11 @@ This is the same contract the `run` and `shim` Makefile targets already use, inc
 
 Secrets are isolated **per component**, which matters more here than trimming the variable list: the bot needs most of `local.env` to function, so stripping the environment to three variables would simply break it. Instead, each component resolves only its own secret — the bot never holds the shim's `SHIM_FRONT_API_KEY`, the shim never holds `DISCORD_TOKEN`, and neither reaches speech-to-speech or the transcriber. This works because `local.env` deliberately stores no secrets, only the TeamVault key _ids_.
 
-The one real exception is `CHAT_BRIDGE_TOKEN`, a genuine shared secret that lives in `local.env` because the bot and the shim authenticate to each other with it. The launcher unsets it for the two components that have no use for it.
+`CHAT_BRIDGE_TOKEN` is the one secret **two** components share — the bot and the shim authenticate to each other with it — but it is no longer an exception to the key-id rule. It used to be stored as a literal in `local.env`, which meant a real shared secret sat in every checkout of a public repo; it now resolves from `CHAT_BRIDGE_TOKEN_KEY` like the rest:
+
+- `CHAT_BRIDGE_TOKEN` ← `teamvault-cli password $CHAT_BRIDGE_TOKEN_KEY` (bot and shim only)
+
+The per-component split is unchanged in effect and stronger in mechanism: speech-to-speech and the transcriber never resolve it at all, rather than receiving it and having it unset afterwards. The launcher also unsets any inherited `CHAT_BRIDGE_TOKEN` before that branch, so a literal left in an operator's shell or a stale `local.env` cannot quietly defeat either rule.
 
 ## Bad config stops the job instead of looping
 
