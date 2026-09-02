@@ -14,6 +14,20 @@ cd "$(dirname "$0")/.."
 [ -f local.env ] || { echo "local.env missing — run: cp local.env.example local.env" >&2; exit 1; }
 set -a; . ./local.env; set +a
 
+# The chat bridge secret is a TeamVault key id now, not a literal — resolve it
+# once here, before anything starts. Both processes this script launches need
+# the SAME value (the bot serves POST /chat, the shim calls it), so resolving
+# per-process would be two lookups of one secret. The bridge fails CLOSED on an
+# empty token: without this, a dev run would simply stop posting spoken replies
+# to the channel, with one log line and no error.
+if [ -n "${CHAT_BRIDGE_TOKEN_KEY:-}" ] && [ -z "${CHAT_BRIDGE_TOKEN:-}" ]; then
+  CHAT_BRIDGE_TOKEN=$(teamvault-cli password "$CHAT_BRIDGE_TOKEN_KEY") || {
+    echo "could not resolve CHAT_BRIDGE_TOKEN_KEY=$CHAT_BRIDGE_TOKEN_KEY from TeamVault" >&2
+    exit 1
+  }
+  export CHAT_BRIDGE_TOKEN
+fi
+
 # In-repo, so a fresh clone works with no external dependency.
 S2S_LAUNCHER="${S2S_LAUNCHER:-$PWD/scripts/s2s-minimax}"
 SHIM_PORT="${SHIM_PORT:-8080}"
