@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- chore: `CHAT_BRIDGE_TOKEN` is resolved from TeamVault like every other secret, via a new `CHAT_BRIDGE_TOKEN_KEY` key id. It was the one documented exception to "local.env holds no secrets, only key ids" — which meant a real shared secret sat in every checkout of a public repo. The per-component split is unchanged in effect and stronger in mechanism: `bot` and `shim` resolve it (they authenticate to each other with it), while `s2s` and `transcriber` never fetch it at all rather than receiving it and having it unset afterwards. The launcher unsets any inherited value first, so a literal left in a shell or a stale `local.env` cannot silently defeat either rule. `scripts/dev.sh` resolves it once up front — without that, a dev run would quietly stop posting spoken replies to the channel, since the bridge fails closed on an empty token. A half-migrated `local.env` (literal still present, key id missing) warns loudly on start instead of disabling the bridge in silence.
+
 ## v0.25.1
 
 - chore: widen the `local.env` ignore rule to `local.env*`. Only the exact name was ignored, so sibling env files an operator creates alongside it — `local.env.prod`, a `local.env.<something>.bak` — were untracked but stageable in a public repo, and they carry the real `CHAT_BRIDGE_TOKEN` and `ROUTER_API_KEY` rather than TeamVault key ids. Nothing had been committed (the tracked `local.env.example` holds a placeholder); this closes the path before it is.

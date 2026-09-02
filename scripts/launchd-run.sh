@@ -153,14 +153,42 @@ set -a
 . ./local.env
 set +a
 
-# Per-component secret isolation. local.env deliberately holds no secrets, only
-# the TeamVault key *ids*, so the only secrets in this process are the ones
-# resolved below — and each component resolves only its own. CHAT_BRIDGE_TOKEN
-# is the exception: it is a real shared secret in local.env, needed by the bot
-# and the shim (they authenticate to each other with it) and by neither of the
-# other two, so drop it there rather than letting it ride along.
+# Per-component secret isolation. local.env holds no secrets, only the
+# TeamVault key *ids*, so the only secrets in this process are the ones
+# resolved below — and each component resolves only its own.
+#
+# CHAT_BRIDGE_TOKEN used to be the one exception: a real shared secret sitting
+# in local.env, which put it in every checkout of a public repo. It now follows
+# the same key-id rule as everything else, resolved from CHAT_BRIDGE_TOKEN_KEY.
+#
+# It is still the one secret TWO components share: the bot and the shim
+# authenticate to each other with it. s2s and transcriber need it for nothing,
+# so they never resolve it — that is the isolation, and it is now enforced by
+# not fetching rather than by unsetting after the fact.
+#
+# Unset unconditionally first: an operator's shell (or a stale local.env) can
+# still export the literal, and inheriting it would silently defeat both the
+# key-id rule and the per-component split.
+inherited_chat_bridge_token="${CHAT_BRIDGE_TOKEN:-}"
+unset CHAT_BRIDGE_TOKEN
 case "$component" in
-s2s | transcriber) unset CHAT_BRIDGE_TOKEN ;;
+bot | shim)
+  if [ -n "${CHAT_BRIDGE_TOKEN_KEY:-}" ]; then
+    command -v teamvault-cli >/dev/null 2>&1 || die_config "teamvault-cli not on PATH"
+    resolve_secret "$CHAT_BRIDGE_TOKEN_KEY" CHAT_BRIDGE_TOKEN_KEY
+    CHAT_BRIDGE_TOKEN="$RESOLVED_SECRET"
+    export CHAT_BRIDGE_TOKEN
+  elif [ -n "$inherited_chat_bridge_token" ]; then
+    # Half-migrated local.env: the literal is still there, the key id is not.
+    # Warn rather than die — the bridge is optional and the rest of the
+    # component works fine without it. But it must not be SILENT: the bridge
+    # fails closed, so the only other symptom is spoken replies quietly
+    # ceasing to appear in the channel, which reads as a bug in the feature
+    # rather than a missing variable.
+    echo "launchd-run[$component]: CHAT_BRIDGE_TOKEN is set as a literal but CHAT_BRIDGE_TOKEN_KEY is not." >&2
+    echo "launchd-run[$component]: the literal is IGNORED and the chat bridge is DISABLED — migrate local.env to CHAT_BRIDGE_TOKEN_KEY (see local.env.example)." >&2
+  fi
+  ;;
 esac
 
 case "$component" in
