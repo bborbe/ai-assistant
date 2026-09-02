@@ -230,6 +230,21 @@ CHAT_BRIDGE_DIRECTIVE = (
     "the answer, and it arrives without you saying so."
 )
 
+# The inverse of the above, injected when this conversation has silenced chat
+# posting (see the voice-only switch below). Without it the model keeps its
+# in-context belief that everything it writes is posted — so it says "the
+# details are in the chat" into a channel the user explicitly silenced, and
+# the silencing looks broken from the user's side. Same correction, opposite
+# sign: never claim written copy is in the channel, because it is not.
+CHAT_BRIDGE_VOICE_ONLY_DIRECTIVE = (
+    "WRITTEN COPY. The voice channel's text chat is currently SILENCED for this "
+    "conversation — the user asked for speech only. Nothing you write is posted "
+    "there. So NEVER say something is or will be in the chat, and never offer to "
+    "write it there. If the user asks you to write it down, say it out loud "
+    "instead — the written copy is still recorded to the transcript, but the "
+    "channel stays quiet."
+)
+
 # ── typed-turn hint ────────────────────────────────────────────────────────
 # A turn the user TYPED during a live call reaches us through speech-to-speech
 # looking exactly like a spoken one — no session key, no output mode, nothing
@@ -663,6 +678,30 @@ def is_solo(key: str) -> bool:
     """Look up solo state by voice key. Unknown keys return False (gate armed)."""
     with _SOLO_LOCK:
         return _SOLO_BY_KEY.get(key, False)
+
+
+# ── voice-only switch ──────────────────────────────────────────────────────
+# "don't write in the chat" silences chat posting for the rest of this
+# conversation; the opposite instruction turns it back on. Per-key, like solo —
+# the setting describes this conversation, never the whole shim, so other
+# channels and identities are unaffected. Sticky (not one-shot): it stays set
+# until the user says otherwise or the conversation is replaced.
+_CHAT_OFF_BY_KEY: dict[str, bool] = {}
+_CHAT_OFF_LOCK = Lock()
+
+
+def set_chat_off(key: str, off: bool) -> bool:
+    """Set the voice-only flag for a conversation key. Returns the previous."""
+    with _CHAT_OFF_LOCK:
+        previous = _CHAT_OFF_BY_KEY.get(key, False)
+        _CHAT_OFF_BY_KEY[key] = bool(off)
+    return previous
+
+
+def is_chat_off(key: str) -> bool:
+    """Look up voice-only state by key. Unknown keys return False (posting on)."""
+    with _CHAT_OFF_LOCK:
+        return _CHAT_OFF_BY_KEY.get(key, False)
 
 
 def voice_key() -> str:
@@ -1542,6 +1581,49 @@ def _wants_chat_post(prompt: str) -> bool:
     return bool(_CHAT_REQUEST_RE.search(prompt))
 
 
+# ── voice-only switch (recognition) ─────────────────────────────────────────
+# The user can silence chat posting for the rest of a conversation ("don't
+# write in the chat") and turn it back on ("you can write in the chat again").
+# Same code-side philosophy as `_CHAT_REQUEST_RE`: the intent is read off the
+# user's own turn with a regex, never left to the model to announce. An
+# unmatched phrasing fails safe — the switch simply stays wherever it was.
+#
+# Deliberately not covered by `_CHAT_REQUEST_RE` in either direction: "don't
+# write in the chat" contains "write ... in the chat" and would otherwise
+# trigger a chat post, not silence it. The negations are what make it an OFF.
+_CHAT_OFF_RE = re.compile(
+    r"\b(?:don'?t|do not|stop|quit|no more|enough)\b[^.?!]{0,40}?"
+    r"\b(?:write|post|type|send|put|paste|text)\b[^.?!]{0,30}?"
+    r"\b(?:in|into|to|on)\b\s+(?:the\s+)?(?:chat|channel)\b",
+    re.I)
+
+
+# The opposite instruction, within the same conversation. "again"/"anymore"
+# disambiguate a re-enable from an ordinary "write it in the chat" request:
+# the latter is the third trigger (wants the answer posted NOW), the former
+# restores posting for subsequent turns.
+_CHAT_ON_RE = re.compile(
+    r"\b(?:write|post|type|send|put|paste|text)\b[^.?!]{0,40}?"
+    r"\b(?:in|into|to|on)\b\s+(?:the\s+)?(?:chat|channel)\b\s+again"
+    r"|\byou\s+can\s+(?:write|post|type|send|put|paste|text)\b[^.?!]{0,40}?"
+    r"\b(?:again|now|anymore)\b"
+    r"|\b(?:start|resume|turn\s+back\s+on|re-?enable)\b[^.?!]{0,40}?"
+    r"\b(?:chat|posting|writing)\b",
+    re.I)
+
+
+def _apply_chat_switch(prompt: str, key: str) -> None:
+    """Flip the per-key voice-only flag if the user's turn asks for it."""
+    if _CHAT_OFF_RE.search(prompt):
+        previous = set_chat_off(key, True)
+        if not previous:
+            print(f"  voice-only: chat posting OFF for {key}", flush=True)
+    elif _CHAT_ON_RE.search(prompt):
+        previous = set_chat_off(key, False)
+        if previous:
+            print(f"  voice-only: chat posting back ON for {key}", flush=True)
+
+
 def _has_postable_shape(text: str) -> bool:
     """Would this answer be worth reading back later, even if never truncated?
 
@@ -1556,7 +1638,7 @@ def _has_postable_shape(text: str) -> bool:
     return len(_LIST_LINE_RE.findall(text)) >= 2
 
 
-def post_chat_message(text: str, key: str) -> None:
+def post_chat_message(text: str, key: str, voice_only: bool = False) -> None:
     """POST the full answer to the bot's chat-bridge route. Never raises.
 
     `key` resolves the target through `identity_for()`, same as cwd/persona —
@@ -1570,6 +1652,10 @@ def post_chat_message(text: str, key: str) -> None:
     falls back to the global exactly as before — a single-identity install
     behaves unchanged.
 
+    `voice_only` is the conversation's silenced state (see `_apply_chat_switch`):
+    the post STILL happens so the transcript keeps the full answer, but the
+    payload tells the bot to write the transcript without touching the channel.
+
     No channel id in the payload — the bot owns routing to whichever voice
     call is actually live (see `# Design`). Best-effort: a failure here must
     never take down a voice turn that has already been spoken.
@@ -1579,7 +1665,10 @@ def post_chat_message(text: str, key: str) -> None:
         return
     url = identity_for(key)["chat_bridge_url"]
     try:
-        body = json.dumps({"text": text}).encode()
+        payload = {"text": text}
+        if voice_only:
+            payload["voiceOnly"] = True
+        body = json.dumps(payload).encode()
         req = urllib.request.Request(
             url, data=body, method="POST",
             headers={"Content-Type": "application/json",
@@ -2430,6 +2519,12 @@ class Handler(BaseHTTPRequestHandler):
         # unrelated later one.
         typed_turn = take_typed_turn(key)
 
+        # The voice-only switch, read off THIS turn: "don't write in the chat"
+        # silences chat posting for the rest of this conversation, the opposite
+        # instruction turns it back on. Checked before the post decision below
+        # so the instruction's own turn is already silenced.
+        _apply_chat_switch(prompt, key)
+
         # Answer filler without waking Claude Code. Empty content means
         # speech-to-speech synthesises nothing, so the bot simply stays quiet —
         # which is what a person does when you say "okay" mid-thought.
@@ -2492,11 +2587,14 @@ class Handler(BaseHTTPRequestHandler):
             prompt = strip_wake_phrase(prompt)
 
         # The transcript directive is voice-only: it is the record of a call,
-        # and a text surface already has its own history in the thread.
+        # and a text surface already has its own history in the thread. The
+        # chat-bridge directive is replaced by its voice-only inverse when this
+        # conversation has silenced posting — see the comment above it.
         parts = [p for p in (system, MEMORY_DIRECTIVE,
                              VOICE_DIRECTIVE if voice else TEXT_DIRECTIVE,
                              TRANSCRIPT_DIRECTIVE if voice else "",
-                             CHAT_BRIDGE_DIRECTIVE
+                             (CHAT_BRIDGE_VOICE_ONLY_DIRECTIVE
+                              if is_chat_off(key) else CHAT_BRIDGE_DIRECTIVE)
                              if (voice and CHAT_BRIDGE_TOKEN) else "") if p]
         mine = next_seq(key)
 
@@ -2654,20 +2752,27 @@ class Handler(BaseHTTPRequestHandler):
                 # inferences about the answer; this one is a fact about the
                 # question. Spoken turns keep the inferences, so a spoken
                 # "hello" still does not litter the channel.
+                #
+                # Voice-only mode (see _apply_chat_switch) gates all of these
+                # upstream: the answer is still posted — but to the transcript,
+                # not to the channel. The bridge stays on the one path so
+                # nothing is lost; only the destination changes.
+                chat_off = is_chat_off(key)
                 why = ("the question was typed" if typed_turn
                        else "asked for it in writing" if _wants_chat_post(prompt)
                        else "spoken reply was truncated" if truncated
                        else "answer has postable shape" if _has_postable_shape(answer)
                        else "")
                 if why:
-                    print(f"  chat bridge: posting — {why}", flush=True)
+                    where = "transcript only (voice-only)" if chat_off else "channel"
+                    print(f"  chat bridge: posting to {where} — {why}", flush=True)
                     # strip_panels, same as the text branch below. The bridge
                     # posts into a Discord channel, which is a chat window and
                     # not a terminal — its docstring says "applied to BOTH
                     # surfaces", and this path was the one place that skipped
                     # it, so "📌 No task anchor" and "⏰ Next:" lines were
                     # landing in the channel verbatim.
-                    post_chat_message(strip_panels(answer), key)
+                    post_chat_message(strip_panels(answer), key, voice_only=chat_off)
                 else:
                     print("  chat bridge: not posting (short, plain, "
                           "and not requested)", flush=True)
