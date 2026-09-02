@@ -2786,9 +2786,14 @@ if __name__ == "__main__":
             print(f"  identity {guild_id} -> cwd={overrides.get('cwd', CWD)}")
     else:
         print("  identities  none configured — every key resolves to the default persona")
-    # Before serving, tell every bot we serve that this process came back up
-    # with no memory of who was bound — each re-announces its live call (or
-    # answers "nothing to do"). One POST per identity per restart, never a
-    # poll; see notify_voice_rebind().
-    notify_voice_rebind()
-    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+    # Tell every bot we serve that this process came back up with no memory
+    # of who was bound — each re-announces its live call (or answers "nothing
+    # to do"). One POST per identity per restart, never a poll; see
+    # notify_voice_rebind(). Runs from a daemon thread AFTER the server is
+    # constructed (not before it serves): a bot that receives the ping
+    # immediately POSTs its re-bind back to `/voice/bind`, and that POST must
+    # land on a listening server — notifying first made the very first
+    # restart race the bind it was meant to fix.
+    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    Thread(target=notify_voice_rebind, daemon=True).start()
+    server.serve_forever()

@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: the shim's startup rebind notify now runs after its HTTP server is constructed (from a daemon thread), not before it serves. Notifying first made the very first restart after deploy race the fix: a bot with a live call received the ping and immediately POSTed its re-bind back to `/voice/bind` while the shim was still in the notify loop and not yet listening — `fetch failed`, and the call stayed deaf. Found by live verification of v0.26.1 (bot log `voice: rebind failed — ... fetch failed` on a real call).
+
 ## v0.26.1
 
 - fix: a shim restart no longer silently kills a live Discord voice call. The shim's in-memory `/voice/bind` pointer reset to `default` on every restart, so the first spoken turn of any call that survived the restart classified against the wrong key and the wake gate rejected it — the bot looked healthy, `/readiness` stayed 200, and the only cure was leaving and rejoining. The shim now POSTs `/voice/rebind` to each bot it serves at startup (same chat-bridge auth as `/voice/yield`), and the bot re-announces the bind for every live call — no polling, one push per restart, idempotent.
