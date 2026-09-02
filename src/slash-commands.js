@@ -52,6 +52,27 @@ function buildCommands({ voiceEnabled }) {
       new SlashCommandBuilder()
         .setName('leave')
         .setDescription('Stop listening and leave the voice channel'),
+      // Voice-only for the same reason join/leave are: the wake phrase gates
+      // voice turns and nothing else, so on a text-only instance the command
+      // would advertise control over a gate that never runs.
+      //
+      // The option is NOT required — invoking it bare is the query form, which
+      // is the first thing you want mid-call ("is the gate on right now?").
+      new SlashCommandBuilder()
+        .setName('wake')
+        .setDescription('Show or change whether the wake phrase is required in this call')
+        .addStringOption((o) =>
+          o
+            .setName('mode')
+            .setDescription(
+              'on = always require it, off = allow solo auto-answer, auto = use the default',
+            )
+            .addChoices(
+              { name: 'on', value: 'on' },
+              { name: 'off', value: 'off' },
+              { name: 'auto', value: 'auto' },
+            ),
+        ),
     );
   }
 

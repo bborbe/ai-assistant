@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: admin `/wake on|off|auto` toggles the wake-phrase requirement for the live call at runtime, no restart. `VOICE_ALWAYS_WAKE` stays the default; the command overrides it per voice key. Reaches both processes — a new sticky `/v1/voice/wake` route sets a tri-state override on the shim (`effective_always_wake`), and the bot re-derives `session.solo` under the new posture — so the shim's own always-wake term cannot silently re-arm what the bot just relaxed. `auto` clears the override back to the env default; the override is in-memory and per-key, so a restart falls back to the configured default and nothing leaks across calls. Invoking `/wake` bare reports the current posture without changing it. Admin-gated by `config.isAdmin`, not by command hiding.
+
 ## v0.25.1
 
 - chore: widen the `local.env` ignore rule to `local.env*`. Only the exact name was ignored, so sibling env files an operator creates alongside it — `local.env.prod`, a `local.env.<something>.bak` — were untracked but stageable in a public repo, and they carry the real `CHAT_BRIDGE_TOKEN` and `ROUTER_API_KEY` rather than TeamVault key ids. Nothing had been committed (the tracked `local.env.example` holds a placeholder); this closes the path before it is.

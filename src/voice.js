@@ -125,6 +125,12 @@ class Session {
     // otherwise — the safe direction, since being wrong the other way means
     // answering every sentence of a conversation held with someone else.
     this.solo = false;
+    // Runtime override of `config.voiceAlwaysWake` for THIS call, set by an
+    // admin over /wake. Tri-state, matching the shim's own store: true forces
+    // the phrase, false relaxes to head-count behaviour, null means no override
+    // — use the configured default. Null on every new session, so an override
+    // never outlives the call it was set in.
+    this.wakeOverride = null;
     // Per-speaker buffers. Discord gives a separate stream per user (per SSRC),
     // which is the expensive half of any diarization pipeline — appending them
     // all to one buffer would throw that away AND garble the audio, since the
@@ -1199,7 +1205,12 @@ async function syncSolo(session, channel) {
   // instance's convenience, and an instance that opts out must tell the shim
   // (and its own local mirror) that the room is never solo — the shim enforces
   // the same flag independently, so a stale per-key True cannot disarm it.
-  const solo = humans === 1 && !config.voiceAlwaysWake;
+  // The override replaces ONLY the always-wake term — `humans === 1` still has
+  // to hold, so relaxing it can never make the bot answer unaddressed speech in
+  // a room with other people. The shim applies the identical rule to its own
+  // copy (`effective_always_wake`), which is what keeps the two sides agreeing.
+  const alwaysWake = session.wakeOverride ?? config.voiceAlwaysWake;
+  const solo = humans === 1 && !alwaysWake;
   const res = await llm.setVoiceSolo(solo, session.voiceKey);
   if (res.unsupported) {
     // The gate stays armed on an endpoint that never heard of the route, so
@@ -1232,8 +1243,8 @@ async function syncSolo(session, channel) {
   if (solo !== session.solo) {
     session.solo = solo;
     log.info(
-      config.voiceAlwaysWake
-        ? 'voice: wake phrase forced (VOICE_ALWAYS_WAKE)'
+      alwaysWake
+        ? `voice: wake phrase forced (${session.wakeOverride === null ? 'VOICE_ALWAYS_WAKE' : '/wake override'})`
         : `voice: ${solo ? 'alone — wake phrase not required' : 'not alone — wake phrase required'}`,
       {
         humans,
@@ -1241,6 +1252,48 @@ async function syncSolo(session, channel) {
       },
     );
   }
+}
+
+/**
+ * Set (or clear, with null) the wake-phrase override for a guild's live call.
+ *
+ * Both processes have to be reached, and the shim is the one that matters: the
+ * bot's copy only decides whether it POSTs solo, while the shim's own
+ * `effective_always_wake` is what the gate actually reads. A bot-side-only
+ * change would be silently re-armed there — the "typing dots, no answer" shape.
+ *
+ * Order is deliberate: tell the shim FIRST, and only adopt the value locally if
+ * it took. A failed POST leaves both sides on the previous value rather than
+ * drifting apart, which is the same failure posture `syncSolo` takes.
+ *
+ * Returns `{ ok, unsupported?, error?, solo?, alwaysWake? }` — the caller turns
+ * that into what the admin sees.
+ */
+async function setWakeOverride(guildId, value) {
+  const session = sessions.get(guildId);
+  if (!session || session.closed) return { ok: false, error: 'no live call' };
+
+  const res = await llm.setVoiceWake(value, session.voiceKey);
+  if (!res.ok) {
+    log.warn('voice: wake override not applied', {
+      error: res.error || (res.unsupported ? 'endpoint has no /voice/wake' : 'unknown'),
+      voiceKey: session.voiceKey,
+    });
+    return res;
+  }
+
+  const previous = session.wakeOverride;
+  session.wakeOverride = value;
+  // Re-derive `session.solo` under the new posture and re-POST it, so the two
+  // sides agree on BOTH terms of the gate and not just the one that changed.
+  await syncSolo(session, session.channel);
+  log.info('voice: wake override set', {
+    previous,
+    value,
+    solo: session.solo,
+    voiceKey: session.voiceKey,
+  });
+  return { ok: true, solo: session.solo, alwaysWake: value ?? config.voiceAlwaysWake };
 }
 
 function transcriptFor(guildId, channelId) {
@@ -1342,6 +1395,7 @@ module.exports = {
   liveSessionFor,
   noteVoiceState,
   syncSolo,
+  setWakeOverride,
   // Exported for unit tests: "who is in the room" is the whole input to the
   // wake-gate decision, and the bot-is-a-member case is exactly the one that
   // makes "alone" unreachable if counted naively.

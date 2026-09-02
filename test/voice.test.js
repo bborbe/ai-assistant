@@ -1252,6 +1252,55 @@ test('syncSolo stays armed when VOICE_ALWAYS_WAKE forces it', async () => {
   }
 });
 
+test('syncSolo honours a runtime wake override in both directions', async () => {
+  // The override replaces the env default for THIS call. Forcing it on an
+  // instance whose default is off is the noisy-room case; relaxing it on one
+  // whose default is on is the Star Citizen instance going solo for a session.
+  const prev = config.voiceAlwaysWake;
+  try {
+    config.voiceAlwaysWake = false;
+    const forced = { voiceKey: 'voice:G5', solo: false, wakeOverride: true };
+    await voice.syncSolo(forced, makeChannel({ humans: 1 }));
+    assert.equal(forced.solo, false, 'override on keeps the gate armed while alone');
+
+    config.voiceAlwaysWake = true;
+    const relaxed = { voiceKey: 'voice:G6', solo: false, wakeOverride: false };
+    await voice.syncSolo(relaxed, makeChannel({ humans: 1 }));
+    assert.equal(relaxed.solo, true, 'override off disarms despite the env default');
+  } finally {
+    config.voiceAlwaysWake = prev;
+  }
+});
+
+test('a null wake override falls back to the configured default', async () => {
+  // The third state — what `/wake auto` restores. A session that has never been
+  // touched by the command must behave exactly as it did before the command existed.
+  const prev = config.voiceAlwaysWake;
+  try {
+    config.voiceAlwaysWake = true;
+    const session = { voiceKey: 'voice:G7', solo: false, wakeOverride: null };
+    await voice.syncSolo(session, makeChannel({ humans: 1 }));
+    assert.equal(session.solo, false, 'null defers to VOICE_ALWAYS_WAKE');
+  } finally {
+    config.voiceAlwaysWake = prev;
+  }
+});
+
+test('a relaxed override still cannot disarm the gate in a shared room', async () => {
+  // Precedence: the override replaces only the always-wake term. Head-count is
+  // untouched, so `/wake off` never makes the bot answer unaddressed speech
+  // while someone else is in the channel.
+  const prev = config.voiceAlwaysWake;
+  try {
+    config.voiceAlwaysWake = true;
+    const session = { voiceKey: 'voice:G8', solo: false, wakeOverride: false };
+    await voice.syncSolo(session, makeChannel({ humans: 3 }));
+    assert.equal(session.solo, false, 'three humans keep the gate armed');
+  } finally {
+    config.voiceAlwaysWake = prev;
+  }
+});
+
 test('syncSolo keeps session.solo armed when the POST fails', async () => {
   // The shim's per-key state did not get updated on a failed POST, so the bot
   // must mirror that — fail closed, never fail open. Same direction as a
