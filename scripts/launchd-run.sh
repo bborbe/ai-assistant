@@ -169,6 +169,7 @@ set +a
 # Unset unconditionally first: an operator's shell (or a stale local.env) can
 # still export the literal, and inheriting it would silently defeat both the
 # key-id rule and the per-component split.
+inherited_chat_bridge_token="${CHAT_BRIDGE_TOKEN:-}"
 unset CHAT_BRIDGE_TOKEN
 case "$component" in
 bot | shim)
@@ -177,6 +178,15 @@ bot | shim)
     resolve_secret "$CHAT_BRIDGE_TOKEN_KEY" CHAT_BRIDGE_TOKEN_KEY
     CHAT_BRIDGE_TOKEN="$RESOLVED_SECRET"
     export CHAT_BRIDGE_TOKEN
+  elif [ -n "$inherited_chat_bridge_token" ]; then
+    # Half-migrated local.env: the literal is still there, the key id is not.
+    # Warn rather than die — the bridge is optional and the rest of the
+    # component works fine without it. But it must not be SILENT: the bridge
+    # fails closed, so the only other symptom is spoken replies quietly
+    # ceasing to appear in the channel, which reads as a bug in the feature
+    # rather than a missing variable.
+    echo "launchd-run[$component]: CHAT_BRIDGE_TOKEN is set as a literal but CHAT_BRIDGE_TOKEN_KEY is not." >&2
+    echo "launchd-run[$component]: the literal is IGNORED and the chat bridge is DISABLED — migrate local.env to CHAT_BRIDGE_TOKEN_KEY (see local.env.example)." >&2
   fi
   ;;
 esac
