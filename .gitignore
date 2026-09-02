@@ -7,6 +7,5 @@ out/
 # never commit credentials; the bot token lives in TeamVault
 .env
 .env.*
-local.env
-transcripts/
 local.env*
+transcripts/
