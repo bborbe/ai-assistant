@@ -32,6 +32,7 @@ history.
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import pty
@@ -2433,7 +2434,21 @@ class Handler(BaseHTTPRequestHandler):
         # setting it false — "no override, use VOICE_ALWAYS_WAKE" is a third
         # state, and conflating it with off would make the configured default
         # unreachable until the process restarts.
+        #
+        # ADMIN SURFACE: this route carries the decision the bot's
+        # config.isAdmin gate makes, so it must not be settable by whatever can
+        # merely reach the port. Bot and shim authenticate to each other with
+        # CHAT_BRIDGE_TOKEN (the same secret the shim's chat-bridge posts carry,
+        # validated on the bot side in src/health.js). Fail closed when it is
+        # unset, mirroring the chat-bridge guard. The sibling sticky routes
+        # (/voice/solo, /voice/bind) stay unauthenticated exactly as they were
+        # before this route existed — they carry state the bot itself writes,
+        # not an operator decision.
         if self.path.rstrip("/").endswith("/voice/wake"):
+            supplied = self.headers.get("Authorization", "")
+            expected = f"Bearer {CHAT_BRIDGE_TOKEN}"
+            if not CHAT_BRIDGE_TOKEN or not hmac.compare_digest(supplied, expected):
+                return self._json(401, {"error": {"message": "unauthorized"}})
             key = self.headers.get("X-Session-Key", "").strip()
             if not key:
                 # Same contract as /voice/solo: the bot always sends the key, so

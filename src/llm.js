@@ -150,6 +150,11 @@ async function setVoiceSolo(solo, sessionKey) {
  * Same shape and same degrade contract as `setVoiceSolo` above: a 404 means the
  * backend predates the route, and the caller treats that as "gate stays as it
  * was" rather than as a failure to retry.
+ *
+ * Authenticated with the chat-bridge token, not `config.apiKey`: this route is
+ * the admin surface (the shim refuses it otherwise), and the token is the one
+ * the bot and shim use to authenticate to each other — see src/health.js,
+ * which validates the shim's posts against the same value.
  */
 async function setVoiceWake(value, sessionKey) {
   // `auto` is the CLEAR, not a third boolean — it removes the override so the
@@ -159,7 +164,7 @@ async function setVoiceWake(value, sessionKey) {
     const res = await fetch(`${config.baseUrl}/voice/wake`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${config.apiKey}`,
+        Authorization: `Bearer ${config.chatBridgeToken}`,
         'X-Voice-Wake': mode,
         'X-Session-Key': sessionKey,
       },

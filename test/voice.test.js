@@ -48,13 +48,16 @@ function fakeSession({ channelId = 'chan-1', closed = false, sendImpl, guildId }
 const llm = require('../src/llm');
 const realMarkTypedTurn = llm.markTypedTurn;
 const realSetVoiceSolo = llm.setVoiceSolo;
+const realSetVoiceWake = llm.setVoiceWake;
 let typedTurnCalls = [];
 let voiceSoloCalls = [];
+let voiceWakeCalls = [];
 
 test.beforeEach(() => {
   voice.sessions.clear();
   typedTurnCalls = [];
   voiceSoloCalls = [];
+  voiceWakeCalls = [];
   llm.markTypedTurn = async (key, typed = true) => {
     typedTurnCalls.push({ key, typed });
     return true;
@@ -63,11 +66,16 @@ test.beforeEach(() => {
     voiceSoloCalls.push({ solo, key });
     return { ok: true };
   };
+  llm.setVoiceWake = async (value, key) => {
+    voiceWakeCalls.push({ value, key });
+    return { ok: true };
+  };
 });
 
 test.after(() => {
   llm.markTypedTurn = realMarkTypedTurn;
   llm.setVoiceSolo = realSetVoiceSolo;
+  llm.setVoiceWake = realSetVoiceWake;
 });
 
 // speak() awaits the typed-turn hint BEFORE touching the socket, so the two
@@ -1306,6 +1314,67 @@ test('a relaxed override still cannot disarm the gate in a shared room', async (
   } finally {
     config.voiceAlwaysWake = prev;
   }
+});
+
+test('setWakeOverride adopts locally only when the shim accepts', async () => {
+  // The admin command's core: POST the override FIRST, and only mirror it on
+  // the session if the shim took it. A failed POST must leave both sides where
+  // they were, never drift.
+  const session = {
+    voiceKey: 'voice:G4',
+    solo: false,
+    wakeOverride: null,
+    channel: makeChannel({ humans: 1 }),
+  };
+  voice.sessions.set('G4', session);
+  const res = await voice.setWakeOverride('G4', true);
+  assert.equal(res.ok, true);
+  assert.equal(session.wakeOverride, true, 'accepted by the shim, adopted locally');
+  assert.deepEqual(voiceWakeCalls, [{ value: true, key: 'voice:G4' }]);
+  // syncSolo re-ran under the new posture: still solo (one human) but armed.
+  assert.equal(session.solo, false, 'override on keeps the gate armed while alone');
+});
+
+test('setWakeOverride does not adopt when the POST fails', async () => {
+  // Fail closed, same contract as syncSolo: the shim still holds its old value,
+  // so the bot must keep its old value too — an adopted-but-rejected override
+  // is the drift that shows up as typing dots with no answer.
+  const session = {
+    voiceKey: 'voice:G5',
+    solo: false,
+    wakeOverride: null,
+    channel: makeChannel({ humans: 1 }),
+  };
+  voice.sessions.set('G5', session);
+  llm.setVoiceWake = async () => ({ ok: false, error: 'endpoint 500' });
+  const res = await voice.setWakeOverride('G5', false);
+  assert.equal(res.ok, false);
+  assert.equal(session.wakeOverride, null, 'rejected by the shim, not adopted');
+});
+
+test('setWakeOverride refuses with no live call', async () => {
+  // Bare /wakephrase outside a call must not invent a target.
+  const res = await voice.setWakeOverride('G99', true);
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'no live call');
+});
+
+test('setWakeOverride treats an unsupported route as a no-op, not a failure to retry', async () => {
+  // A shim without /voice/wake (404) has no override state at all — report
+  // that as unsupported so the caller says "stays as it is" rather than
+  // hammering a route that does not exist.
+  const session = {
+    voiceKey: 'voice:G6',
+    solo: false,
+    wakeOverride: null,
+    channel: makeChannel({ humans: 1 }),
+  };
+  voice.sessions.set('G6', session);
+  llm.setVoiceWake = async () => ({ ok: false, unsupported: true });
+  const res = await voice.setWakeOverride('G6', true);
+  assert.equal(res.ok, false);
+  assert.equal(res.unsupported, true);
+  assert.equal(session.wakeOverride, null, 'nothing adopted on 404');
 });
 
 test('syncSolo keeps session.solo armed when the POST fails', async () => {
