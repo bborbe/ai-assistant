@@ -1591,10 +1591,15 @@ def _wants_chat_post(prompt: str) -> bool:
 # Deliberately not covered by `_CHAT_REQUEST_RE` in either direction: "don't
 # write in the chat" contains "write ... in the chat" and would otherwise
 # trigger a chat post, not silence it. The negations are what make it an OFF.
+# The OFF side uses the gerund forms the user actually speaks ("stop POSTING
+# text in the chat" was the verbatim instruction that started this task) — a
+# plain \bpost\b would never match "posting".
 _CHAT_OFF_RE = re.compile(
     r"\b(?:don'?t|do not|stop|quit|no more|enough)\b[^.?!]{0,40}?"
-    r"\b(?:write|post|type|send|put|paste|text)\b[^.?!]{0,30}?"
-    r"\b(?:in|into|to|on)\b\s+(?:the\s+)?(?:chat|channel)\b",
+    r"\b(?:write|writing|post|posting|type|typing|send|sending|put|paste|text|texting)\b"
+    r"[^.?!]{0,30}?"
+    r"\b(?:in|into|to|on)\b\s+(?:the\s+)?(?:chat|channel)\b"
+    r"|\bvoice[- ]?only\b",
     re.I)
 
 

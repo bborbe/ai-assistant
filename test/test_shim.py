@@ -628,6 +628,16 @@ class VoiceOnlySwitch(unittest.TestCase):
         shim._apply_chat_switch("please don't write in the chat anymore", self.KEY)
         self.assertTrue(shim.is_chat_off(self.KEY))
 
+    def test_apply_chat_switch_recognises_the_verbatim_boss_phrasing(self):
+        # The exact instruction that started this task, on a live call:
+        # "can you stop posting text in the chat? It's enough if you speak to me"
+        shim._apply_chat_switch("stop posting text in the chat", self.KEY)
+        self.assertTrue(shim.is_chat_off(self.KEY))
+
+    def test_apply_chat_switch_recognises_voice_only(self):
+        shim._apply_chat_switch("from now on, voice only please", self.KEY)
+        self.assertTrue(shim.is_chat_off(self.KEY))
+
     def test_apply_chat_switch_recognises_the_on_instruction(self):
         shim._apply_chat_switch("don't write in the chat", self.KEY)
         self.assertTrue(shim.is_chat_off(self.KEY))
