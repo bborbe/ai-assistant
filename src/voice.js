@@ -1344,7 +1344,7 @@ function liveSessionFor(guildId, channelId) {
  * by a missing feature, and is dropped rather than guessed at (see the task's
  * Out of Scope).
  */
-async function postToChannel(text) {
+async function postToChannel(text, { voiceOnly = false } = {}) {
   const live = [...sessions.values()].filter((s) => !s.closed);
   if (live.length === 0) {
     log.warn('chat bridge: no live voice session, dropping', { chars: text.length });
@@ -1358,6 +1358,18 @@ async function postToChannel(text) {
   }
   const session = live[0];
   try {
+    if (voiceOnly) {
+      // Voice-only conversation (the shim's switch): the transcript keeps the
+      // full answer — same write postToChannel always does — but the channel
+      // stays quiet. The write and the post are deliberately NOT entangled
+      // here: silencing one surface must not silence the record.
+      session.transcript?.writeText(config.botName, text);
+      log.info('chat bridge: wrote transcript, channel silenced (voice-only)', {
+        channel: session.channelId,
+        chars: text.length,
+      });
+      return { posted: false, reason: 'voice-only', channel: session.channelId };
+    }
     for (const part of chunk(text)) await session.channel.send(part);
     session.transcript?.writeText(config.botName, text);
     log.info('chat bridge: posted to channel', { channel: session.channelId, chars: text.length });

@@ -573,6 +573,88 @@ class ChatBridgePosting(unittest.TestCase):
         posted_request = urlopen.call_args[0][0]
         self.assertEqual(posted_request.full_url, shim.CHAT_BRIDGE_URL)
 
+    def test_voice_only_posts_are_marked_in_the_payload(self):
+        with mock.patch.object(shim.urllib.request, "urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = b""
+            shim.post_chat_message("hello", "voice:999", voice_only=True)
+        posted_request = urlopen.call_args[0][0]
+        self.assertEqual(
+            json.loads(posted_request.data.decode()),
+            {"text": "hello", "voiceOnly": True})
+
+    def test_ordinary_posts_carry_no_voice_only_flag(self):
+        with mock.patch.object(shim.urllib.request, "urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = b""
+            shim.post_chat_message("hello", "voice:999", voice_only=False)
+        posted_request = urlopen.call_args[0][0]
+        self.assertEqual(json.loads(posted_request.data.decode()), {"text": "hello"})
+
+
+class VoiceOnlySwitch(unittest.TestCase):
+    """The voice-only switch: silence chat posting per conversation.
+
+    The design mirrors the solo flag — per-key, sticky, default off — because
+    the setting describes THIS conversation, not the whole shim. The failure
+    direction matters: an unknown key must default to posting ON (the switch
+    is opt-in per conversation, and nothing may change for everyone else).
+    """
+
+    KEY = "voice:test"
+
+    def setUp(self):
+        self._previous = shim.is_chat_off(self.KEY)
+        shim.set_chat_off(self.KEY, False)
+
+    def tearDown(self):
+        shim.set_chat_off(self.KEY, self._previous)
+
+    def test_unknown_key_defaults_to_chat_posting_on(self):
+        # The load-bearing direction: a key the switch never touched must behave
+        # exactly as before the feature existed.
+        self.assertFalse(shim.is_chat_off("voice:never-seen"))
+
+    def test_set_chat_off_returns_the_previous_value(self):
+        self.assertFalse(shim.set_chat_off(self.KEY, True))
+        self.assertTrue(shim.set_chat_off(self.KEY, False))
+
+    def test_per_key_state_is_isolated_between_keys(self):
+        shim.set_chat_off("voice:111111", True)
+        shim.set_chat_off("voice:222222", False)
+        self.assertTrue(shim.is_chat_off("voice:111111"))
+        self.assertFalse(shim.is_chat_off("voice:222222"))
+        self.assertFalse(shim.is_chat_off("voice:999999"))
+
+    def test_apply_chat_switch_recognises_the_off_instruction(self):
+        shim._apply_chat_switch("please don't write in the chat anymore", self.KEY)
+        self.assertTrue(shim.is_chat_off(self.KEY))
+
+    def test_apply_chat_switch_recognises_the_verbatim_boss_phrasing(self):
+        # The exact instruction that started this task, on a live call:
+        # "can you stop posting text in the chat? It's enough if you speak to me"
+        shim._apply_chat_switch("stop posting text in the chat", self.KEY)
+        self.assertTrue(shim.is_chat_off(self.KEY))
+
+    def test_apply_chat_switch_recognises_voice_only(self):
+        shim._apply_chat_switch("from now on, voice only please", self.KEY)
+        self.assertTrue(shim.is_chat_off(self.KEY))
+
+    def test_apply_chat_switch_recognises_the_on_instruction(self):
+        shim._apply_chat_switch("don't write in the chat", self.KEY)
+        self.assertTrue(shim.is_chat_off(self.KEY))
+        shim._apply_chat_switch("okay you can write in the chat again", self.KEY)
+        self.assertFalse(shim.is_chat_off(self.KEY))
+
+    def test_an_ordinary_write_request_does_not_toggle_the_switch(self):
+        # "write it in the chat" is the third chat-bridge trigger (wants THIS
+        # answer posted), not an instruction about future turns.
+        shim._apply_chat_switch("can you write the summary in the chat", self.KEY)
+        self.assertFalse(shim.is_chat_off(self.KEY))
+
+    def test_an_unmatched_instruction_leaves_the_switch_where_it_was(self):
+        shim.set_chat_off(self.KEY, True)
+        shim._apply_chat_switch("what's the weather like", self.KEY)
+        self.assertTrue(shim.is_chat_off(self.KEY))
+
 
 class VoiceYieldHandover(unittest.TestCase):
     """LAST JOINER WINS: who gets asked to leave voice when the bind changes.

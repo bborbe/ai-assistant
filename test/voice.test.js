@@ -140,6 +140,32 @@ test('postToChannel reports send-failed when channel.send throws', async () => {
   assert.equal(session._transcriptWrites.length, 0, 'no transcript write on a failed send');
 });
 
+test('postToChannel voiceOnly writes the transcript but never sends to the channel', async () => {
+  const session = fakeSession({ channelId: 'chan-42' });
+  voice.sessions.set('guild-1', session);
+
+  const result = await voice.postToChannel('ARC-L1 Wide Forest Station', { voiceOnly: true });
+
+  // The channel stays quiet — this is the whole point of the switch.
+  assert.deepEqual(result, { posted: false, reason: 'voice-only', channel: 'chan-42' });
+  assert.deepEqual(session._sent, []);
+  // ...but the record keeps the full answer, so silencing the chat loses nothing.
+  assert.equal(session._transcriptWrites.length, 1);
+  assert.equal(session._transcriptWrites[0].text, 'ARC-L1 Wide Forest Station');
+});
+
+test('postToChannel voiceOnly still chunks-drops nothing and follows the same routing', async () => {
+  // Voice-only must not change the routing rules — an ambiguous multi-session
+  // call is still dropped rather than guessed at, and the transcript write
+  // still lands only for exactly one live session.
+  voice.sessions.set('guild-1', fakeSession({ channelId: 'chan-1' }));
+  voice.sessions.set('guild-2', fakeSession({ channelId: 'chan-2' }));
+
+  const result = await voice.postToChannel('hello', { voiceOnly: true });
+
+  assert.deepEqual(result, { posted: false, reason: 'ambiguous-multiple-sessions' });
+});
+
 test('yieldVoice is a no-op success when this identity holds no call', async () => {
   const result = await voice.yieldVoice('sc');
   assert.deepEqual(result, { yielded: false, reason: 'no-live-session' });
