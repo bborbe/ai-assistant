@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.27.1
 
 - fix: the shim's startup rebind notify now runs after its HTTP server is constructed (from a daemon thread), not before it serves. Notifying first made the very first restart after deploy race the fix: a bot with a live call received the ping and immediately POSTed its re-bind back to `/voice/bind` while the shim was still in the notify loop and not yet listening — `fetch failed`, and the call stayed deaf. Found by live verification of v0.26.1 (bot log `voice: rebind failed — ... fetch failed` on a real call).
 
