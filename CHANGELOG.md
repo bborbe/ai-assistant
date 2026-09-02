@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: a shim restart no longer silently kills a live Discord voice call. The shim's in-memory `/voice/bind` pointer reset to `default` on every restart, so the first spoken turn of any call that survived the restart classified against the wrong key and the wake gate rejected it — the bot looked healthy, `/readiness` stayed 200, and the only cure was leaving and rejoining. The shim now POSTs `/voice/rebind` to each bot it serves at startup (same chat-bridge auth as `/voice/yield`), and the bot re-announces the bind for every live call — no polling, one push per restart, idempotent.
+
 ## v0.26.0
 
 - chore: `CHAT_BRIDGE_TOKEN` is resolved from TeamVault like every other secret, via a new `CHAT_BRIDGE_TOKEN_KEY` key id. It was the one documented exception to "local.env holds no secrets, only key ids" — which meant a real shared secret sat in every checkout of a public repo. The per-component split is unchanged in effect and stronger in mechanism: `bot` and `shim` resolve it (they authenticate to each other with it), while `s2s` and `transcriber` never fetch it at all rather than receiving it and having it unset afterwards. The launcher unsets any inherited value first, so a literal left in a shell or a stale `local.env` cannot silently defeat either rule. `scripts/dev.sh` resolves it once up front — without that, a dev run would quietly stop posting spoken replies to the channel, since the bridge fails closed on an empty token. A half-migrated `local.env` (literal still present, key id missing) warns loudly on start instead of disabling the bridge in silence.
