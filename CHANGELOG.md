@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: voice-only mode — saying "don't write in the chat" silences chat posting for the rest of that conversation (per session key, never global); the opposite instruction turns it back on. The full answer still reaches the transcript either way, so silencing the channel loses nothing. The switch is recognized code-side in the shim (`_apply_chat_switch`, mirroring the existing chat-request regex) and carried to the bot as a `voiceOnly` flag on the bridge payload; the bot writes the transcript and skips `channel.send`. The model's chat-bridge directive is swapped for a voice-only inverse so it stops claiming the details are in the chat while the channel is silenced.
+
 ## v0.26.1
 
 - fix: a shim restart no longer silently kills a live Discord voice call. The shim's in-memory `/voice/bind` pointer reset to `default` on every restart, so the first spoken turn of any call that survived the restart classified against the wrong key and the wake gate rejected it — the bot looked healthy, `/readiness` stayed 200, and the only cure was leaving and rejoining. The shim now POSTs `/voice/rebind` to each bot it serves at startup (same chat-bridge auth as `/voice/yield`), and the bot re-announces the bind for every live call — no polling, one push per restart, idempotent.

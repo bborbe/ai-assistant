@@ -73,8 +73,13 @@ async function handleChatPost(req, send) {
     return send(400, { error: 'text is required' });
   }
 
+  // voiceOnly: the shim's voice-only switch (see _apply_chat_switch in the
+  // shim). The post is still sent — the transcript must keep the full answer —
+  // but postToChannel writes the transcript and skips the channel.
+  const voiceOnly = parsed?.voiceOnly === true;
+
   try {
-    const result = await voice.postToChannel(text);
+    const result = await voice.postToChannel(text, { voiceOnly });
     return send(200, result);
   } catch (e) {
     log.error('chat bridge: handler failed', { error: e.message });
