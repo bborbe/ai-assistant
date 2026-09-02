@@ -784,6 +784,31 @@ class SoloGate(unittest.TestCase):
             shim.set_wake_override(self.KEY, None)
             shim.ALWAYS_WAKE = prev
 
+    def test_a_stale_override_is_what_join_must_clear(self):
+        # The drift this pins: a voice key outlives the call it was used in, so
+        # an override set in a previous call is still here when the next call
+        # binds the same key. The bot's fresh Session starts at null and posts
+        # solo=True; without the clear the shim answers that with a still-armed
+        # gate, and the user sees typing dots and no reply.
+        prev = shim.ALWAYS_WAKE
+        try:
+            shim.ALWAYS_WAKE = False
+            shim.set_wake_override(self.KEY, True)  # previous call did `/wake on`
+            shim.set_solo(self.KEY, True)  # new call: bot says the room is solo
+            self.assertFalse(
+                shim.is_solo(self.KEY) and not shim.effective_always_wake(self.KEY),
+                "stale override keeps the gate armed while the bot thinks it is not",
+            )
+            # What join now does before the first syncSolo.
+            shim.set_wake_override(self.KEY, None)
+            self.assertTrue(
+                shim.is_solo(self.KEY) and not shim.effective_always_wake(self.KEY),
+                "clearing the override puts both sides back in agreement",
+            )
+        finally:
+            shim.set_wake_override(self.KEY, None)
+            shim.ALWAYS_WAKE = prev
+
     def test_unknown_key_defaults_to_gate_armed(self):
         # THE 2026-08-18 FIX. Before per-key state, a fresh key inherited whatever
         # the previous call had set — a private session's True bled into the

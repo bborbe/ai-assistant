@@ -1038,6 +1038,23 @@ async function join(channel) {
     session.names.set(id, member.displayName ?? member.user.username);
   }
   sessions.set(channel.guild.id, session);
+  // A voice key outlives the call it was used in, so the shim can still hold a
+  // /wake override an admin set in a PREVIOUS call on this guild while this
+  // fresh Session starts at `wakeOverride = null`. Clearing it here is what
+  // makes "no persistence across calls" true on BOTH sides rather than only the
+  // bot's: without it the two disagree from the first utterance, and the
+  // visible symptom is the bot showing typing dots for a turn the shim then
+  // answers with silence.
+  const cleared = await llm.setVoiceWake(null, voiceKey);
+  if (!cleared.ok && !cleared.unsupported) {
+    // Not fatal — but it is the one case where a stale override survives into
+    // this call, so it must not be silent. `unsupported` is excluded on
+    // purpose: a shim with no /voice/wake route has no override to clear.
+    log.warn('voice: could not clear a previous call’s wake override', {
+      error: cleared.error,
+      voiceKey,
+    });
+  }
   // Awaited, unlike the voiceStateUpdate path: this must land BEFORE the first
   // utterance, or the opening question of a private call is judged against a
   // gate that is still armed from whatever the last call left behind.
