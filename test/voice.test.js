@@ -4,6 +4,13 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { EventEmitter } = require('node:events');
 const WebSocket = require('ws');
+// `make precommit` sources local.env (Makefile `-include`), which sets
+// IDENTITY, and these key-shape tests assume a single-identity deployment —
+// exactly the trap test/llm.test.js already dodges by deleting the var before
+// the first require of config. Without this, every `voice:G1` assertion fails
+// with a `:personal` suffix it never asked for.
+delete process.env.IDENTITY;
+delete require.cache[require.resolve('../src/config')];
 const voice = require('../src/voice');
 const config = require('../src/config');
 const { Session } = voice;
@@ -1273,7 +1280,7 @@ test('syncSolo honours a runtime wake override in both directions', async () => 
 });
 
 test('a null wake override falls back to the configured default', async () => {
-  // The third state — what `/wake auto` restores. A session that has never been
+  // The third state — what `/wakephrase auto` restores. A session that has never been
   // touched by the command must behave exactly as it did before the command existed.
   const prev = config.voiceAlwaysWake;
   try {
@@ -1288,7 +1295,7 @@ test('a null wake override falls back to the configured default', async () => {
 
 test('a relaxed override still cannot disarm the gate in a shared room', async () => {
   // Precedence: the override replaces only the always-wake term. Head-count is
-  // untouched, so `/wake off` never makes the bot answer unaddressed speech
+  // untouched, so `/wakephrase off` never makes the bot answer unaddressed speech
   // while someone else is in the channel.
   const prev = config.voiceAlwaysWake;
   try {
