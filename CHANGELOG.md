@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: the shim's startup rebind notify now runs after its HTTP server is constructed (from a daemon thread), not before it serves. Notifying first made the very first restart after deploy race the fix: a bot with a live call received the ping and immediately POSTed its re-bind back to `/voice/bind` while the shim was still in the notify loop and not yet listening — `fetch failed`, and the call stayed deaf. Found by live verification of v0.26.1 (bot log `voice: rebind failed — ... fetch failed` on a real call).
+
 ## v0.27.0
 
 - feat: voice-only mode — saying "don't write in the chat" silences chat posting for the rest of that conversation (per session key, never global); the opposite instruction turns it back on. The full answer still reaches the transcript either way, so silencing the channel loses nothing. The switch is recognized code-side in the shim (`_apply_chat_switch`, mirroring the existing chat-request regex) and carried to the bot as a `voiceOnly` flag on the bridge payload; the bot writes the transcript and skips `channel.send`. The model's chat-bridge directive is swapped for a voice-only inverse so it stops claiming the details are in the chat while the channel is silenced.
