@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.25.1
 
 - chore: widen the `local.env` ignore rule to `local.env*`. Only the exact name was ignored, so sibling env files an operator creates alongside it — `local.env.prod`, a `local.env.<something>.bak` — were untracked but stageable in a public repo, and they carry the real `CHAT_BRIDGE_TOKEN` and `ROUTER_API_KEY` rather than TeamVault key ids. Nothing had been committed (the tracked `local.env.example` holds a placeholder); this closes the path before it is.
 
