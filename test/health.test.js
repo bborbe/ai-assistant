@@ -237,3 +237,63 @@ test('POST /voice/yield with no body still succeeds — a bot holding no call is
     voice.yieldVoice = beforeYield;
   }
 });
+
+// POST /voice/rebind — shim restart, re-announce live binds. Same auth as
+// /chat and /voice/yield on purpose (see handleVoiceRebindPost) — one shared
+// secret, not a third scheme for a third bridge route.
+test('POST /voice/rebind is 503 when no token is configured (fails closed)', async () => {
+  const before = config.chatBridgeToken;
+  config.chatBridgeToken = '';
+  try {
+    await withServer({}, async (base) => {
+      const res = await fetch(`${base}/voice/rebind`, { method: 'POST' });
+      assert.equal(res.status, 503);
+    });
+  } finally {
+    config.chatBridgeToken = before;
+  }
+});
+
+test('POST /voice/rebind is 401 with a missing or wrong bearer token', async () => {
+  const before = config.chatBridgeToken;
+  config.chatBridgeToken = 'secret';
+  try {
+    await withServer({}, async (base) => {
+      const noAuth = await fetch(`${base}/voice/rebind`, { method: 'POST' });
+      assert.equal(noAuth.status, 401);
+
+      const wrongAuth = await fetch(`${base}/voice/rebind`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer nope' },
+      });
+      assert.equal(wrongAuth.status, 401);
+    });
+  } finally {
+    config.chatBridgeToken = before;
+  }
+});
+
+test('POST /voice/rebind with a valid token calls voice.rebindVoice and returns its result', async () => {
+  const before = config.chatBridgeToken;
+  const beforeRebind = voice.rebindVoice;
+  config.chatBridgeToken = 'secret';
+  let called = false;
+  voice.rebindVoice = async () => {
+    called = true;
+    return { rebound: true, guilds: ['guild-1'] };
+  };
+  try {
+    await withServer({}, async (base) => {
+      const res = await fetch(`${base}/voice/rebind`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer secret' },
+      });
+      assert.equal(res.status, 200);
+      assert.deepEqual(await res.json(), { rebound: true, guilds: ['guild-1'] });
+      assert.equal(called, true);
+    });
+  } finally {
+    config.chatBridgeToken = before;
+    voice.rebindVoice = beforeRebind;
+  }
+});

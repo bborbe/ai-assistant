@@ -134,6 +134,34 @@ async function handleVoiceYieldPost(req, send) {
 }
 
 /**
+ * The shim's startup back-edge: it just restarted and lost its in-memory
+ * `/voice/bind` pointer, so it asks every bot it serves to re-announce its
+ * live calls. Same auth mechanism as /chat and /voice/yield deliberately —
+ * one shared secret, one fail-closed check, not a third scheme. No body:
+ * the caller knows WHAT happened (a shim restart), never WHICH channel — the
+ * bot decides from its own sessions map.
+ */
+async function handleVoiceRebindPost(req, send) {
+  if (!config.chatBridgeToken) {
+    return send(503, { error: 'chat bridge not configured' });
+  }
+  const auth = Buffer.from(req.headers['authorization'] || '');
+  const expected = Buffer.from(`Bearer ${config.chatBridgeToken}`);
+  const authorized = auth.length === expected.length && crypto.timingSafeEqual(auth, expected);
+  if (!authorized) {
+    return send(401, { error: 'unauthorized' });
+  }
+
+  try {
+    const result = await voice.rebindVoice();
+    return send(200, result);
+  } catch (e) {
+    log.error('voice rebind: handler failed', { error: e.message });
+    return send(500, { error: 'internal error' });
+  }
+}
+
+/**
  * Liveness/readiness endpoints so this can run as a normal k8s workload.
  *
  * The split matters more here than in a plain web service, because the bot's
@@ -146,6 +174,7 @@ async function handleVoiceYieldPost(req, send) {
  *                503 here only drains traffic, which is the right response.
  *   POST /chat — the shim's chat-bridge back-edge (see handleChatPost).
  *   POST /voice/yield — LAST JOINER WINS handover (see handleVoiceYieldPost).
+ *   POST /voice/rebind — shim restarted, re-announce live binds (see handleVoiceRebindPost).
  */
 function startHealthServer({ port, host, isReady, build }) {
   const server = http.createServer((req, res) => {
@@ -178,6 +207,19 @@ function startHealthServer({ port, host, isReady, build }) {
       // Same unhandled-rejection guard as /chat above.
       handleVoiceYieldPost(req, send).catch((e) => {
         log.error('voice yield: unhandled', { error: e.message });
+        try {
+          send(500, { error: 'internal error' });
+        } catch {
+          // Response already sent or the socket is gone; nothing more to do.
+        }
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/voice/rebind') {
+      // Same unhandled-rejection guard as /chat above.
+      handleVoiceRebindPost(req, send).catch((e) => {
+        log.error('voice rebind: unhandled', { error: e.message });
         try {
           send(500, { error: 'internal error' });
         } catch {

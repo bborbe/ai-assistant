@@ -1345,6 +1345,60 @@ async function yieldVoice(newIdentity) {
   return { yielded: true, channels: left };
 }
 
+/**
+ * Re-announce the voice binding for every live call, on request from the
+ * shim that it just restarted and lost its in-memory `/voice/bind` pointer.
+ *
+ * The shim knows it restarted; only the bot knows which calls are live, so
+ * the shim asks and the bot answers with a fresh bind per live session.
+ * Mirrors `yieldVoice` deliberately — same "the caller knows WHAT happened,
+ * never WHICH channel" shape, same "a guild with no live session is success,
+ * not failure" contract. Idempotent: a session whose key is already bound
+ * re-binds to the same key, so a shim that pings on every startup costs
+ * nothing on a healthy day.
+ *
+ * Solo state is re-synced too: the shim's per-key solo flags live in the
+ * same memory the restart cleared, so they are exactly as stale as the bind.
+ */
+async function rebindVoice() {
+  const live = [...sessions.values()].filter((s) => !s.closed);
+  if (live.length === 0) {
+    log.info('voice: rebind requested, holding no call — nothing to do');
+    return { rebound: false, reason: 'no-live-session' };
+  }
+  const rebound = [];
+  for (const session of live) {
+    // Same one-retry shape as `join()`: the failure that matters is a
+    // momentarily unreachable endpoint racing the re-announce.
+    let bind = await llm.bindVoiceKey(session.voiceKey);
+    if (bind.retryable) bind = await llm.bindVoiceKey(session.voiceKey);
+    session.voiceKeyBound = !bind.error;
+    if (bind.error) {
+      log.warn('voice: rebind failed — spoken turns may reach another conversation', {
+        guildId: session.guildId,
+        key: session.voiceKey,
+        error: bind.error,
+      });
+      continue;
+    }
+    if (bind.unsupported) {
+      log.info(
+        'voice: rebind — endpoint has no /voice/bind — one shared conversation for all voice',
+        {
+          key: session.voiceKey,
+        },
+      );
+    }
+    await syncSolo(session, session.channel);
+    rebound.push(session.guildId);
+    log.info('voice: rebound live call after shim restart', {
+      guildId: session.guildId,
+      key: session.voiceKey,
+    });
+  }
+  return { rebound: true, guilds: rebound };
+}
+
 module.exports = {
   join,
   leave,
@@ -1360,6 +1414,7 @@ module.exports = {
   humansIn,
   postToChannel,
   yieldVoice,
+  rebindVoice,
   // Exported for unit tests to exercise Session.prototype.speak against a
   // fake ws (no real audio pipeline needed) — see test/voice.test.js.
   Session,
