@@ -8,9 +8,11 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## v0.27.1
+## Unreleased
 
 - feat: admin `/wakephrase on|off|auto` toggles the wake-phrase requirement for the live call at runtime, no restart. `VOICE_ALWAYS_WAKE` stays the default; the command overrides it per voice key. Reaches both processes — a new sticky `/v1/voice/wake` route sets a tri-state override on the shim (`effective_always_wake`), and the bot re-derives `session.solo` under the new posture — so the shim's own always-wake term cannot silently re-arm what the bot just relaxed. `auto` clears the override back to the env default; the override is in-memory and per-key, so a restart falls back to the configured default and nothing leaks across calls. Invoking `/wakephrase` bare reports the current posture without changing it. Admin-gated by `config.isAdmin`, not by command hiding.
+
+## v0.27.1
 
 - fix: the shim's startup rebind notify now runs after its HTTP server is constructed (from a daemon thread), not before it serves. Notifying first made the very first restart after deploy race the fix: a bot with a live call received the ping and immediately POSTed its re-bind back to `/voice/bind` while the shim was still in the notify loop and not yet listening — `fetch failed`, and the call stayed deaf. Found by live verification of v0.26.1 (bot log `voice: rebind failed — ... fetch failed` on a real call).
 
