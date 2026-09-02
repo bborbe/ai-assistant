@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.27.0
 
 - feat: voice-only mode — saying "don't write in the chat" silences chat posting for the rest of that conversation (per session key, never global); the opposite instruction turns it back on. The full answer still reaches the transcript either way, so silencing the channel loses nothing. The switch is recognized code-side in the shim (`_apply_chat_switch`, mirroring the existing chat-request regex) and carried to the bot as a `voiceOnly` flag on the bridge payload; the bot writes the transcript and skips `channel.send`. The model's chat-bridge directive is swapped for a voice-only inverse so it stops claiming the details are in the chat while the channel is silenced.
 
