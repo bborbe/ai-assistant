@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- chore: widen the `local.env` ignore rule to `local.env*`. Only the exact name was ignored, so sibling env files an operator creates alongside it — `local.env.prod`, a `local.env.<something>.bak` — were untracked but stageable in a public repo, and they carry the real `CHAT_BRIDGE_TOKEN` and `ROUTER_API_KEY` rather than TeamVault key ids. Nothing had been committed (the tracked `local.env.example` holds a placeholder); this closes the path before it is.
+
 ## v0.25.0
 
 - feat: two-tier access for the Discord surface. `ADMIN_USER_IDS` gates the slash commands (`/status`, `/new`, `/sessions`, `/switch`, and `/join`/`/leave` when voice is on) while `ALLOWED_USER_IDS` keeps gating the @mention surface, so guests can talk to the bot without reaching session control. Every command is registered with `setDefaultMemberPermissions(ManageGuild)` so Discord hides it from ordinary members, with an `isAdmin` check behind it because hiding is a client affordance and not authorisation. New `SLASH_COMMAND_GUILD_IDS` withholds commands from named guilds entirely — needed where the operator is an ordinary member and permission-gating would hide the commands from them too. An unset `ADMIN_USER_IDS` inherits `ALLOWED_USER_IDS`, so existing deployments keep their slash commands; set it explicitly to opt into the tighter tier, or empty to mean no admins.
