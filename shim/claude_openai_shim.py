@@ -2519,12 +2519,6 @@ class Handler(BaseHTTPRequestHandler):
         # unrelated later one.
         typed_turn = take_typed_turn(key)
 
-        # The voice-only switch, read off THIS turn: "don't write in the chat"
-        # silences chat posting for the rest of this conversation, the opposite
-        # instruction turns it back on. Checked before the post decision below
-        # so the instruction's own turn is already silenced.
-        _apply_chat_switch(prompt, key)
-
         # Answer filler without waking Claude Code. Empty content means
         # speech-to-speech synthesises nothing, so the bot simply stays quiet —
         # which is what a person does when you say "okay" mid-thought.
@@ -2585,6 +2579,15 @@ class Handler(BaseHTTPRequestHandler):
             # question the model is asked, and strip_wake_phrase is a no-op on
             # an utterance that carries no phrase.
             prompt = strip_wake_phrase(prompt)
+
+        # The voice-only switch, read off THIS turn and only after the wake
+        # gate: "don't write in the chat" silences chat posting for the rest of
+        # this conversation, the opposite instruction turns it back on. Gated
+        # here so an unaddressed utterance (someone in the room saying it to a
+        # human, not the bot) cannot flip the setting — a QUIET turn above
+        # never reaches this line. Checked before the post decision below so
+        # the instruction's own turn is already silenced.
+        _apply_chat_switch(prompt, key)
 
         # The transcript directive is voice-only: it is the record of a call,
         # and a text surface already has its own history in the thread. The
