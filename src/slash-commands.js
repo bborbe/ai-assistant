@@ -59,7 +59,7 @@ function buildCommands({ voiceEnabled }) {
       // The option is NOT required — invoking it bare is the query form, which
       // is the first thing you want mid-call ("is the gate on right now?").
       new SlashCommandBuilder()
-        .setName('wake')
+        .setName('wakephrase')
         .setDescription('Show or change whether the wake phrase is required in this call')
         .addStringOption((o) =>
           o

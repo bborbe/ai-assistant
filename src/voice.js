@@ -126,7 +126,7 @@ class Session {
     // answering every sentence of a conversation held with someone else.
     this.solo = false;
     // Runtime override of `config.voiceAlwaysWake` for THIS call, set by an
-    // admin over /wake. Tri-state, matching the shim's own store: true forces
+    // admin over /wakephrase. Tri-state, matching the shim's own store: true forces
     // the phrase, false relaxes to head-count behaviour, null means no override
     // — use the configured default. Null on every new session, so an override
     // never outlives the call it was set in.
@@ -1039,7 +1039,7 @@ async function join(channel) {
   }
   sessions.set(channel.guild.id, session);
   // A voice key outlives the call it was used in, so the shim can still hold a
-  // /wake override an admin set in a PREVIOUS call on this guild while this
+  // /wakephrase override an admin set in a PREVIOUS call on this guild while this
   // fresh Session starts at `wakeOverride = null`. Clearing it here is what
   // makes "no persistence across calls" true on BOTH sides rather than only the
   // bot's: without it the two disagree from the first utterance, and the
@@ -1261,7 +1261,7 @@ async function syncSolo(session, channel) {
     session.solo = solo;
     log.info(
       alwaysWake
-        ? `voice: wake phrase forced (${session.wakeOverride === null ? 'VOICE_ALWAYS_WAKE' : '/wake override'})`
+        ? `voice: wake phrase forced (${session.wakeOverride === null ? 'VOICE_ALWAYS_WAKE' : '/wakephrase override'})`
         : `voice: ${solo ? 'alone — wake phrase not required' : 'not alone — wake phrase required'}`,
       {
         humans,

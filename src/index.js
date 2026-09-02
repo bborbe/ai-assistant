@@ -153,13 +153,13 @@ client.on('interactionCreate', async (i) => {
   // keeps a guild's previous command list until the new one is PUT, so an
   // instance restarted into text-only can still receive them for a moment.
   if (
-    (i.commandName === 'join' || i.commandName === 'leave' || i.commandName === 'wake') &&
+    (i.commandName === 'join' || i.commandName === 'leave' || i.commandName === 'wakephrase') &&
     !config.voiceEnabled
   ) {
     return i.reply({ content: VOICE_DISABLED_REPLY, flags: MessageFlags.Ephemeral });
   }
 
-  if (i.commandName === 'wake') {
+  if (i.commandName === 'wakephrase') {
     const session = voice.sessions.get(i.guildId);
     if (!session || session.closed) {
       return i.reply({

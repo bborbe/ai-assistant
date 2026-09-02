@@ -709,7 +709,7 @@ class SoloGate(unittest.TestCase):
 
     def test_wake_override_absent_defers_to_the_env_default(self):
         # The third state. No override means the key follows ALWAYS_WAKE, which
-        # is what makes `/wake auto` a real restore rather than a synonym for
+        # is what makes `/wakephrase auto` a real restore rather than a synonym for
         # `off`.
         self.assertIsNone(shim.wake_override(self.KEY))
         prev = shim.ALWAYS_WAKE
@@ -737,7 +737,7 @@ class SoloGate(unittest.TestCase):
             shim.ALWAYS_WAKE = prev
 
     def test_clearing_the_override_restores_the_default(self):
-        # `/wake auto`. Without the clear, the configured default is unreachable
+        # `/wakephrase auto`. Without the clear, the configured default is unreachable
         # for the life of the process once the command is used at all.
         prev = shim.ALWAYS_WAKE
         try:
@@ -772,7 +772,7 @@ class SoloGate(unittest.TestCase):
 
     def test_relaxing_the_override_cannot_answer_a_shared_room(self):
         # The precedence rule: the override replaces only the always-wake term.
-        # Head-count still has to say solo, so `/wake off` in a room with other
+        # Head-count still has to say solo, so `/wakephrase off` in a room with other
         # people leaves the gate armed rather than answering everything said.
         shim.set_solo(self.KEY, False)
         prev = shim.ALWAYS_WAKE
@@ -793,7 +793,7 @@ class SoloGate(unittest.TestCase):
         prev = shim.ALWAYS_WAKE
         try:
             shim.ALWAYS_WAKE = False
-            shim.set_wake_override(self.KEY, True)  # previous call did `/wake on`
+            shim.set_wake_override(self.KEY, True)  # previous call did `/wakephrase on`
             shim.set_solo(self.KEY, True)  # new call: bot says the room is solo
             self.assertFalse(
                 shim.is_solo(self.KEY) and not shim.effective_always_wake(self.KEY),

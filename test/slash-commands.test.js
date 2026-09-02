@@ -14,9 +14,9 @@ const names = (opts) => buildCommands(opts).map((c) => c.name);
 
 // Every command that exists only because this instance can hear. Kept as one
 // list so adding a voice command means updating this in exactly one place —
-// `wake` was added here after it shipped as the third member and the old
+// `wakephrase` was added here after it shipped as the third member and the old
 // hard-coded `join`/`leave` filter turned it into a text-surface regression.
-const VOICE_ONLY = ['join', 'leave', 'wake'];
+const VOICE_ONLY = ['join', 'leave', 'wakephrase'];
 
 test('voice enabled advertises the voice commands', () => {
   const n = names({ voiceEnabled: true });
