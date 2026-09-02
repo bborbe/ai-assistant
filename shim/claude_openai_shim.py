@@ -1671,6 +1671,47 @@ def notify_voice_yield(previous_key: str, new_identity: str) -> None:
         print(f"  voice yield: notify failed ({e}) -> {url}", flush=True)
 
 
+def notify_voice_rebind() -> None:
+    """Ask every configured bot to re-announce its live voice bind.
+
+    A shim restart drops the in-memory `/voice/bind` pointer, so the first
+    spoken turn of any call that was live when it went down classifies
+    against `default` and the wake gate rejects it. The shim knows it
+    restarted; only the bot knows which calls are live — so on startup we
+    ask, over the same chat-bridge back-edge `post_chat_message` and
+    `notify_voice_yield` use, and each bot re-binds whatever it holds.
+
+    Fan-out to every configured identity rather than the one that was bound:
+    the whole point is that the bind is gone, so there is no way to know
+    which identity it named. Idempotent on the bot side — a bot with no live
+    call answers "nothing to do" and the one with a live call re-binds.
+
+    Best-effort, like both siblings: a bot that is down must not block
+    startup, and a shim with no chat bridge configured has nothing to say.
+    """
+    if not CHAT_BRIDGE_TOKEN:
+        print("  voice rebind: CHAT_BRIDGE_TOKEN not set — skipping notify", flush=True)
+        return
+    # Every identity with an explicit chat_bridge_url, plus the global that
+    # identities without one fall back to (`identity_for`) — a restart loses
+    # the bind, so we cannot know which of them was holding it.
+    urls = {CHAT_BRIDGE_URL}
+    for overrides in IDENTITIES.values():
+        if overrides.get("chat_bridge_url"):
+            urls.add(overrides["chat_bridge_url"])
+    for chat_url in sorted(urls):
+        url = chat_url.rsplit("/", 1)[0] + "/voice/rebind"
+        try:
+            req = urllib.request.Request(
+                url, data=b"", method="POST",
+                headers={"Authorization": f"Bearer {CHAT_BRIDGE_TOKEN}"})
+            with urllib.request.urlopen(req, timeout=CHAT_BRIDGE_TIMEOUT) as resp:
+                resp.read()
+            print(f"  voice rebind: asked bot to re-announce its live call -> {url}", flush=True)
+        except Exception as e:
+            print(f"  voice rebind: notify failed ({e}) -> {url}", flush=True)
+
+
 def maybe_yield_voice(previous: str, key: str) -> None:
     """Decide whether the `/voice/bind` handler needs to ask anyone to yield.
 
@@ -2851,4 +2892,9 @@ if __name__ == "__main__":
             print(f"  identity {guild_id} -> cwd={overrides.get('cwd', CWD)}")
     else:
         print("  identities  none configured — every key resolves to the default persona")
+    # Before serving, tell every bot we serve that this process came back up
+    # with no memory of who was bound — each re-announces its live call (or
+    # answers "nothing to do"). One POST per identity per restart, never a
+    # poll; see notify_voice_rebind().
+    notify_voice_rebind()
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

@@ -635,6 +635,78 @@ class VoiceYieldHandover(unittest.TestCase):
         self.assertIn("notify failed", captured.getvalue())
 
 
+class VoiceRebind(unittest.TestCase):
+    """Shim-startup notify: ask every bot to re-announce its live bind.
+
+    A shim restart drops the in-memory `/voice/bind` pointer, so the first
+    spoken turn of a call that was live when it went down classifies against
+    `default` and the wake gate rejects it. The shim knows it restarted; only
+    the bot knows which calls are live — so `notify_voice_rebind()` asks over
+    the same chat-bridge back-edge as the yield handover.
+    """
+
+    def setUp(self):
+        self._previous_identities = shim.IDENTITIES
+        self._previous_token = shim.CHAT_BRIDGE_TOKEN
+        self._previous_url = shim.CHAT_BRIDGE_URL
+
+    def tearDown(self):
+        shim.IDENTITIES = self._previous_identities
+        shim.CHAT_BRIDGE_TOKEN = self._previous_token
+        shim.CHAT_BRIDGE_URL = self._previous_url
+
+    def test_no_token_skips_the_notify(self):
+        shim.CHAT_BRIDGE_TOKEN = ""
+        shim.IDENTITIES = {}
+        with mock.patch.object(shim.urllib.request, "urlopen") as urlopen:
+            captured = io.StringIO()
+            with contextlib.redirect_stdout(captured):
+                shim.notify_voice_rebind()
+        urlopen.assert_not_called()
+        self.assertIn("CHAT_BRIDGE_TOKEN not set", captured.getvalue())
+
+    def test_no_identities_posts_to_the_global_chat_bridge_url(self):
+        shim.CHAT_BRIDGE_TOKEN = "test-token"
+        shim.IDENTITIES = {}
+        shim.CHAT_BRIDGE_URL = "http://127.0.0.1:8081/chat"
+        with mock.patch.object(shim.urllib.request, "urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = b""
+            shim.notify_voice_rebind()
+        posted_request = urlopen.call_args[0][0]
+        self.assertEqual(posted_request.full_url, "http://127.0.0.1:8081/voice/rebind")
+
+    def test_identities_post_to_each_explicit_url_plus_the_global_fallback(self):
+        shim.CHAT_BRIDGE_TOKEN = "test-token"
+        shim.CHAT_BRIDGE_URL = "http://127.0.0.1:8081/chat"
+        shim.IDENTITIES = {
+            "personal": {"chat_bridge_url": "http://127.0.0.1:8081/chat"},
+            "sc": {"chat_bridge_url": "http://127.0.0.1:8091/chat"},
+        }
+        with mock.patch.object(shim.urllib.request, "urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = b""
+            shim.notify_voice_rebind()
+        urls = sorted(call[0][0].full_url for call in urlopen.call_args_list)
+        self.assertEqual(
+            urls,
+            [
+                "http://127.0.0.1:8081/voice/rebind",
+                "http://127.0.0.1:8091/voice/rebind",
+            ],
+        )
+
+    def test_an_unreachable_bot_logs_and_does_not_block_startup(self):
+        shim.CHAT_BRIDGE_TOKEN = "test-token"
+        shim.IDENTITIES = {}
+        shim.CHAT_BRIDGE_URL = "http://127.0.0.1:8081/chat"
+        with mock.patch.object(shim.urllib.request, "urlopen") as urlopen:
+            urlopen.side_effect = OSError("connection refused")
+            captured = io.StringIO()
+            with contextlib.redirect_stdout(captured):
+                # Must not raise — a down bot must never block shim startup.
+                shim.notify_voice_rebind()
+        self.assertIn("notify failed", captured.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
 
