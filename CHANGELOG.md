@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.26.1
 
 - fix: a shim restart no longer silently kills a live Discord voice call. The shim's in-memory `/voice/bind` pointer reset to `default` on every restart, so the first spoken turn of any call that survived the restart classified against the wrong key and the wake gate rejected it — the bot looked healthy, `/readiness` stayed 200, and the only cure was leaving and rejoining. The shim now POSTs `/voice/rebind` to each bot it serves at startup (same chat-bridge auth as `/voice/yield`), and the bot re-announces the bind for every live call — no polling, one push per restart, idempotent.
 
