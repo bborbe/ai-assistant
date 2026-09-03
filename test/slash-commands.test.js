@@ -43,9 +43,20 @@ test('disabling voice removes only the voice commands', () => {
   // Named explicitly so removing one of these from the array is a test failure
   // rather than a silently smaller command list — the failure mode that left
   // `new` and `sessions` unreachable for weeks.
-  for (const n of ['status', 'new', 'sessions', 'switch']) {
+  for (const n of ['status', 'new', 'sessions', 'switch', 'mode']) {
     assert.ok(disabled.includes(n), `${n} must survive with voice disabled`);
   }
+});
+
+test('/mode advertises both voice-only and voice-text choices', () => {
+  // The two names the user can type are the contract: `voice-only` silences
+  // chat posting for the conversation, `voice-text` turns it back on. A
+  // choice that silently drops from the list is exactly the class of
+  // regression the other tests here exist to catch.
+  const mode = buildCommands({ voiceEnabled: true }).find((c) => c.name === 'mode');
+  assert.ok(mode, '/mode must be registered');
+  const choices = mode.options[0].choices.map((c) => c.value);
+  assert.deepEqual(choices.sort(), ['voice-only', 'voice-text']);
 });
 
 // Discord hides a command from anyone lacking this permission. Asserted on

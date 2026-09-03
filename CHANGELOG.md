@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: `/mode` slash command as a second surface for the voice-only switch — `/mode voice-only` silences chat posting for this conversation, `/mode voice-text` turns it back on (the default). Same per-key flag the spoken "don't write in the chat" instruction flips, set via a new bot→shim `/chat/posting` route mirroring `/voice/solo`; both surfaces drive one state, so a mode set by voice shows up in `/mode` and vice versa.
+
 ## v0.28.0
 
 - feat: admin `/wakephrase on|off|auto` toggles the wake-phrase requirement for the live call at runtime, no restart. `VOICE_ALWAYS_WAKE` stays the default; the command overrides it per voice key. Reaches both processes — a new sticky `/v1/voice/wake` route sets a tri-state override on the shim (`effective_always_wake`), and the bot re-derives `session.solo` under the new posture — so the shim's own always-wake term cannot silently re-arm what the bot just relaxed. `auto` clears the override back to the env default; the override is in-memory and per-key, so a restart falls back to the configured default and nothing leaks across calls. Invoking `/wakephrase` bare reports the current posture without changing it. Admin-gated by `config.isAdmin`, not by command hiding.

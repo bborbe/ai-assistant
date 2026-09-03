@@ -5,7 +5,7 @@ const { Client, GatewayIntentBits, Partials, REST, Routes, MessageFlags } = requ
 const config = require('./config');
 const voice = require('./voice');
 const text = require('./text');
-const { sessionKeyFor } = require('./llm');
+const { sessionKeyFor, setChatPosting } = require('./llm');
 const { buildCommands, VOICE_DISABLED_REPLY } = require('./slash-commands');
 const log = require('./log');
 const { startHealthServer } = require('./health');
@@ -236,6 +236,26 @@ client.on('interactionCreate', async (i) => {
     if (i.commandName === 'new') return i.editReply(await newSession(key));
     if (i.commandName === 'sessions') return i.editReply(await sessionsList(key));
     return i.editReply(await switchSession(key, i.options.getString('id')));
+  }
+
+  if (i.commandName === 'mode') {
+    // Not deferred: this is one localhost POST to the shim, far inside the 3s
+    // deadline — but it does reach the network, so the reply still goes
+    // ephemeral and still tells the user which mode the conversation is now in.
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    const key = sessionKeyFor(i.channel, i.user.id);
+    const posting = i.options.getString('mode') !== 'voice-only';
+    const result = await setChatPosting(posting, key);
+    if (!result.ok) {
+      const reason = result.unsupported
+        ? 'the backend does not support per-conversation modes'
+        : result.error || 'the endpoint is unreachable';
+      return i.editReply(`Could not switch mode (${reason}). Posting stays as it was.`);
+    }
+    const mode = posting ? 'voice-text' : 'voice-only';
+    return i.editReply(
+      `This conversation is now **${mode}**: ${posting ? 'I speak and post to the channel' : 'I speak and never post to the channel'}.`,
+    );
   }
 
   if (i.commandName === 'leave') {

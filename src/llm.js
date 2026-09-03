@@ -145,6 +145,45 @@ async function setVoiceSolo(solo, sessionKey) {
 }
 
 /**
+ * Tell the endpoint whether this conversation posts to the channel at all —
+ * the /mode slash command's back-edge, same flag the spoken instruction flips.
+ *
+ * `posting=true` is the normal state (voice-text): spoken replies ALSO land in
+ * the channel's text chat. `posting=false` is voice-only: the full answer
+ * still reaches the transcript, but the channel stays quiet. Sticky like
+ * `setVoiceSolo` — it describes the conversation's standing mode.
+ *
+ * `sessionKey` names the conversation, the same key `voiceKeyFor`/`bindVoiceKey`
+ * use, so the /mode command issued from a call's own text chat lands on the
+ * exact key the shim gates.
+ *
+ * ADMIN SURFACE like `setVoiceWake`: silencing the channel is an operator
+ * decision, so this is authenticated with the chat-bridge token (the secret
+ * the bot and shim use to authenticate to each other), not `config.apiKey` —
+ * see the /voice/wake docstring above for the reasoning in full.
+ *
+ * Failure degrades toward posting staying ON — the mode nobody opted into
+ * turning off, and the one that cannot hide a missing answer.
+ */
+async function setChatPosting(posting, sessionKey) {
+  try {
+    const res = await fetch(`${config.baseUrl}/chat/posting`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.chatBridgeToken}`,
+        'X-Chat-Posting': posting ? 'true' : 'false',
+        'X-Session-Key': sessionKey,
+      },
+    });
+    if (res.ok) return { ok: true };
+    if (res.status === 404) return { ok: false, unsupported: true };
+    return { ok: false, error: `endpoint ${res.status}` };
+  } catch (e) {
+    return { ok: false, error: e.message, retryable: true };
+  }
+}
+
+/**
  * Set the runtime wake-phrase override for a voice key. `null` clears it.
  *
  * Same shape and same degrade contract as `setVoiceSolo` above: a 404 means the
@@ -328,6 +367,7 @@ module.exports = {
   bindSession,
   bindVoiceKey,
   setVoiceSolo,
+  setChatPosting,
   setVoiceWake,
   availableSessions,
   sessionKeyFor,
