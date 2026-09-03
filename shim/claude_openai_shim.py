@@ -246,6 +246,27 @@ CHAT_BRIDGE_VOICE_ONLY_DIRECTIVE = (
     "channel stays quiet."
 )
 
+# The mode change must reach the model as IN-CONTEXT FACT, not only as a
+# system directive — precedent beats the system prompt (the hub page's
+# documented lesson; observed live 2026-09-03, the model said "the details
+# are in the chat" into a silenced channel). Prepended to the user's prompt,
+# so the statement lands in the session history the model reads every turn.
+# The OFF note is restated on every silenced turn so a long voice-only
+# conversation cannot drift; the ON note is prepended on the turn that flips
+# back, announcing posting is live again. `remember()` mirrors them into the
+# front model's view, keeping both tiers consistent.
+CHAT_MODE_CONTEXT_NOTE_OFF = (
+    "REMINDER: voice-only mode is ON for this conversation — the user asked "
+    "to stop posting to the channel. Nothing you write is posted to the voice "
+    "channel's text chat; the transcript records it instead. So NEVER say "
+    "something is or will be in the chat, and never offer to write it there."
+)
+CHAT_MODE_CONTEXT_NOTE_ON = (
+    "NOTE: the user has turned chat posting back ON — voice-text mode is "
+    "active again. Everything you write IS posted to the voice channel's text "
+    "chat, in full and automatically. You may say the details are in the chat."
+)
+
 # ── typed-turn hint ────────────────────────────────────────────────────────
 # A turn the user TYPED during a live call reaches us through speech-to-speech
 # looking exactly like a spoken one — no session key, no output mode, nothing
@@ -1661,16 +1682,40 @@ _CHAT_ON_RE = re.compile(
     re.I)
 
 
-def _apply_chat_switch(prompt: str, key: str) -> None:
-    """Flip the per-key voice-only flag if the user's turn asks for it."""
+def _apply_chat_switch(prompt: str, key: str) -> bool:
+    """Flip the per-key voice-only flag if the user's turn asks for it.
+
+    Returns whether the switch is now OFF (voice-only). The caller prepends a
+    context note to the prompt when it flips, so the mode change reaches the
+    model as in-context FACT — a system directive alone loses to in-context
+    precedent (the hub page's documented lesson, observed live: after the
+    flip the model kept saying "the details are in the chat").
+    """
     if _CHAT_OFF_RE.search(prompt):
         previous = set_chat_off(key, True)
         if not previous:
             print(f"  voice-only: chat posting OFF for {key}", flush=True)
-    elif _CHAT_ON_RE.search(prompt):
+        return True
+    if _CHAT_ON_RE.search(prompt):
         previous = set_chat_off(key, False)
         if previous:
             print(f"  voice-only: chat posting back ON for {key}", flush=True)
+    return is_chat_off(key)
+
+
+def chat_mode_context_note(chat_off: bool, just_turned_on: bool) -> str:
+    """The in-context mode note to prepend to a voice turn's prompt.
+
+    Returns the note plus a blank line (ready to concatenate before the
+    prompt), or "" when no note belongs — the steady voice-text state (the
+    default) needs none, since the model's baseline belief already matches it
+    and the plain CHAT_BRIDGE_DIRECTIVE is in the system prompt.
+    """
+    if chat_off:
+        return CHAT_MODE_CONTEXT_NOTE_OFF + "\n\n"
+    if just_turned_on:
+        return CHAT_MODE_CONTEXT_NOTE_ON + "\n\n"
+    return ""
 
 
 def _has_postable_shape(text: str) -> bool:
@@ -2773,7 +2818,25 @@ class Handler(BaseHTTPRequestHandler):
         # human, not the bot) cannot flip the setting — a QUIET turn above
         # never reaches this line. Checked before the post decision below so
         # the instruction's own turn is already silenced.
+        chat_off_before = is_chat_off(key)
         _apply_chat_switch(prompt, key)
+        chat_off = is_chat_off(key)
+        # True exactly on the turn that turns posting back on (the opposite
+        # instruction), so the ON note announces the return once, not forever.
+        chat_off_just_turned_on = chat_off_before and not chat_off
+
+        # The mode change must ALSO reach the model as in-context FACT, not
+        # only as a directive: in-context precedent beats a system prompt (the
+        # hub page's documented lesson, observed live 2026-09-03 — after the
+        # flip the model kept saying "the details are in the chat" into a
+        # silenced channel). The prompt IS the user turn of the session, so
+        # stating the mode at its top puts the fact in the history the model
+        # reads every turn. OFF is restated on every silenced turn (a long
+        # voice-only conversation cannot drift back into claiming chat copy
+        # exists); ON is stated on the turn that flips back, so the model
+        # knows posting is live again before it answers.
+        if voice:
+            prompt = chat_mode_context_note(chat_off, chat_off_just_turned_on) + prompt
 
         # The transcript directive is voice-only: it is the record of a call,
         # and a text surface already has its own history in the thread. The
