@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.29.1
 
 - fix: the voice-only mode change now reaches the model as in-context FACT, not only as a swapped directive. A directive alone loses to in-context precedent (the hub page's documented lesson) — observed live: after the flip the model kept saying "the details are in the chat" into a silenced channel. The shim now prepends a mode note to the prompt on every silenced turn (and announces the return on the turn that flips back), so the statement sits in the session history the model reads, without resetting the conversation.
 
