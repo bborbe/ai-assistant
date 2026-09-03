@@ -152,8 +152,54 @@ client.on('interactionCreate', async (i) => {
   // Belt and braces: with voice disabled these are not registered, but Discord
   // keeps a guild's previous command list until the new one is PUT, so an
   // instance restarted into text-only can still receive them for a moment.
-  if ((i.commandName === 'join' || i.commandName === 'leave') && !config.voiceEnabled) {
+  if (
+    (i.commandName === 'join' || i.commandName === 'leave' || i.commandName === 'wakephrase') &&
+    !config.voiceEnabled
+  ) {
     return i.reply({ content: VOICE_DISABLED_REPLY, flags: MessageFlags.Ephemeral });
+  }
+
+  if (i.commandName === 'wakephrase') {
+    const session = voice.sessions.get(i.guildId);
+    if (!session || session.closed) {
+      return i.reply({
+        content: 'No live call here — the wake gate only applies while I am in a voice channel.',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    const mode = i.options.getString('mode');
+    const describe = (override) =>
+      override === null
+        ? `auto (following VOICE_ALWAYS_WAKE, currently **${config.voiceAlwaysWake ? 'on' : 'off'}**)`
+        : `**${override ? 'on' : 'off'}**`;
+
+    // Bare invocation is the query form — report, change nothing.
+    if (mode === null) {
+      return i.reply({
+        content:
+          `Wake phrase: ${describe(session.wakeOverride)}. ` +
+          `Right now I ${session.solo ? 'answer unprompted (you are alone)' : 'need the wake phrase'}.`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    // The POST reaches the shim, so it can outlast the 3s interaction deadline
+    // if the endpoint is exactly what is unwell.
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    const value = mode === 'auto' ? null : mode === 'on';
+    const res = await voice.setWakeOverride(i.guildId, value);
+    if (!res.ok) {
+      return i.editReply(
+        res.unsupported
+          ? 'That endpoint has no /voice/wake route — the wake phrase stays as it is.'
+          : `Could not change it: ${res.error}. Wake phrase unchanged.`,
+      );
+    }
+    return i.editReply(
+      `Wake phrase: ${describe(value)}. ` +
+        `I ${res.solo ? 'now answer unprompted while you are alone' : 'need the wake phrase to answer'}.`,
+    );
   }
 
   if (i.commandName === 'join') {

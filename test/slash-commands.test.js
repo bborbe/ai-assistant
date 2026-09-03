@@ -12,23 +12,31 @@ const { buildCommands } = require('../src/slash-commands');
 
 const names = (opts) => buildCommands(opts).map((c) => c.name);
 
-test('voice enabled advertises join and leave', () => {
+// Every command that exists only because this instance can hear. Kept as one
+// list so adding a voice command means updating this in exactly one place —
+// `wakephrase` was added here after it shipped as the third member and the old
+// hard-coded `join`/`leave` filter turned it into a text-surface regression.
+const VOICE_ONLY = ['join', 'leave', 'wakephrase'];
+
+test('voice enabled advertises the voice commands', () => {
   const n = names({ voiceEnabled: true });
-  assert.ok(n.includes('join'), 'join should be registered');
-  assert.ok(n.includes('leave'), 'leave should be registered');
+  for (const c of VOICE_ONLY) {
+    assert.ok(n.includes(c), `${c} should be registered`);
+  }
 });
 
-test('voice disabled advertises neither join nor leave', () => {
+test('voice disabled advertises none of the voice commands', () => {
   const n = names({ voiceEnabled: false });
-  assert.equal(n.includes('join'), false, 'join must not be advertised without voice');
-  assert.equal(n.includes('leave'), false, 'leave must not be advertised without voice');
+  for (const c of VOICE_ONLY) {
+    assert.equal(n.includes(c), false, `${c} must not be advertised without voice`);
+  }
 });
 
 test('disabling voice removes only the voice commands', () => {
   const enabled = names({ voiceEnabled: true });
   const disabled = names({ voiceEnabled: false });
   assert.deepEqual(
-    enabled.filter((n) => n !== 'join' && n !== 'leave'),
+    enabled.filter((n) => !VOICE_ONLY.includes(n)),
     disabled,
     'the text surface must be identical in both modes',
   );

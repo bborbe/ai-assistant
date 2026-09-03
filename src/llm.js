@@ -144,6 +144,39 @@ async function setVoiceSolo(solo, sessionKey) {
   }
 }
 
+/**
+ * Set the runtime wake-phrase override for a voice key. `null` clears it.
+ *
+ * Same shape and same degrade contract as `setVoiceSolo` above: a 404 means the
+ * backend predates the route, and the caller treats that as "gate stays as it
+ * was" rather than as a failure to retry.
+ *
+ * Authenticated with the chat-bridge token, not `config.apiKey`: this route is
+ * the admin surface (the shim refuses it otherwise), and the token is the one
+ * the bot and shim use to authenticate to each other — see src/health.js,
+ * which validates the shim's posts against the same value.
+ */
+async function setVoiceWake(value, sessionKey) {
+  // `auto` is the CLEAR, not a third boolean — it removes the override so the
+  // shim falls back to its VOICE_ALWAYS_WAKE default.
+  const mode = value === null ? 'auto' : value ? 'on' : 'off';
+  try {
+    const res = await fetch(`${config.baseUrl}/voice/wake`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.chatBridgeToken}`,
+        'X-Voice-Wake': mode,
+        'X-Session-Key': sessionKey,
+      },
+    });
+    if (res.ok) return { ok: true };
+    if (res.status === 404) return { ok: false, unsupported: true };
+    return { ok: false, error: `endpoint ${res.status}` };
+  } catch (e) {
+    return { ok: false, error: e.message, retryable: true };
+  }
+}
+
 /** Ask the backend to forget a conversation. Backends without the route say so. */
 async function resetSession(sessionKey) {
   const res = await fetch(`${config.baseUrl}/sessions/reset`, {
@@ -295,6 +328,7 @@ module.exports = {
   bindSession,
   bindVoiceKey,
   setVoiceSolo,
+  setVoiceWake,
   availableSessions,
   sessionKeyFor,
   voiceKeyFor,
