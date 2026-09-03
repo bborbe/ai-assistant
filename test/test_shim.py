@@ -655,6 +655,37 @@ class VoiceOnlySwitch(unittest.TestCase):
         shim._apply_chat_switch("what's the weather like", self.KEY)
         self.assertTrue(shim.is_chat_off(self.KEY))
 
+    def test_context_note_is_restated_while_silenced(self):
+        # THE 2026-09-03 FIX: a directive alone loses to in-context precedent —
+        # the model kept saying "the details are in the chat" into a silenced
+        # channel. The mode fact must sit in the prompt (the session history)
+        # every silenced turn, so the model cannot drift back into claiming
+        # chat copy exists.
+        note = shim.chat_mode_context_note(chat_off=True, just_turned_on=False)
+        self.assertIn("voice-only", note)
+        self.assertIn("Nothing you write is posted", note)
+
+    def test_context_note_announces_the_return_on_the_flip_turn(self):
+        # The opposite direction: when posting is turned back on, the model
+        # must know before it answers that "the details are in the chat" is
+        # true again — otherwise it keeps behaving as if silenced.
+        note = shim.chat_mode_context_note(chat_off=False, just_turned_on=True)
+        self.assertIn("back ON", note)
+        self.assertIn("IS posted", note)
+
+    def test_context_note_is_empty_in_steady_voice_text(self):
+        # The default state needs no note: the model's baseline belief already
+        # matches it, and the plain CHAT_BRIDGE_DIRECTIVE is in the system
+        # prompt. Adding one would just bloat every ordinary prompt.
+        self.assertEqual(shim.chat_mode_context_note(False, False), "")
+
+    def test_context_note_restated_even_after_flipping_off_this_turn(self):
+        # The instruction's OWN turn is already silenced (the switch flips
+        # before the post decision), so it must carry the note too — the very
+        # turn where the model might say "okay, I won't write in the chat".
+        note = shim.chat_mode_context_note(chat_off=True, just_turned_on=False)
+        self.assertTrue(note.endswith("\n\n"), "note is ready to prepend to the prompt")
+
 
 class VoiceYieldHandover(unittest.TestCase):
     """LAST JOINER WINS: who gets asked to leave voice when the bind changes.
