@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.29.0
 
 - feat: `/mode` slash command as a second surface for the voice-only switch — `/mode voice-only` silences chat posting for this conversation, `/mode voice-text` turns it back on (the default). Same per-key flag the spoken "don't write in the chat" instruction flips, set via a new bot→shim `/chat/posting` route mirroring `/voice/solo`; both surfaces drive one state, so a mode set by voice shows up in `/mode` and vice versa.
 
