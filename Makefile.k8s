@@ -3,6 +3,10 @@
 # nothing, the Secret is silently skipped, and pods land in
 # CreateContainerConfigError. `config parse` resolves its own config (Keychain
 # auth), so no -teamvault-config flag.
+# `--cache` enables the disk fallback (~/.teamvault-cache): when TeamVault is
+# down/unreachable the render serves the last-cached value instead of failing,
+# so `make apply` survives a TeamVault outage. Each lookup key must have been
+# fetched successfully once with --cache to populate its cache entry.
 apply:
 	@command -v teamvault-cli >/dev/null 2>&1 || { echo "teamvault-cli not on PATH" >&2; exit 1; }
-	bash -c 'source ${ROOTDIR}/local.env && find . -name "*.yaml" | while read -r file; do cat $${file} | teamvault-cli config parse | kubectl apply --context=$${CLUSTER_CONTEXT} -f -; done'
+	bash -c 'source ${ROOTDIR}/local.env && find . -name "*.yaml" | while read -r file; do cat $${file} | teamvault-cli config parse --cache | kubectl apply --context=$${CLUSTER_CONTEXT} -f -; done'
