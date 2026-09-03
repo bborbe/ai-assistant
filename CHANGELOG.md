@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.30.1
 
 - chore: `make apply` renders secrets through `teamvault-cli config parse --cache`, so a TeamVault outage no longer blocks a deploy — the disk fallback (`~/.teamvault-cache`) serves the last-cached value on remote error instead of failing the render.
 
