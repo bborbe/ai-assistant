@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.29.2
 
 - chore: create the `discord-assistant` k8s Secret from a committed templated manifest — `ROUTER_API_KEY` now resolves from TeamVault (deploy env files hold only the lookup key), so the Secret is reproducible instead of hand-applied out-of-repo.
 
