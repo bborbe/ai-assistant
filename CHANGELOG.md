@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: the `discord-assistant` k8s Secret manifest now lists ALL five keys (`DISCORD_TOKEN`, `VAULT_GIT_KEY`, `ADMIN_USER_IDS`, `ALLOWED_USER_IDS` + `ROUTER_API_KEY`), each resolved from TeamVault at `make apply` time. The v0.29.2 ROUTER-only version was destructive: `kubectl apply` on an apply-owned Secret deletes data keys absent from the new config, so applying it wiped the other four keys from both live clusters (shims stuck in `Init:0/1` until the Secret was restored). A partial secret manifest is now rejected by design — every live key must be in the file.
+
 ## v0.29.2
 
 - chore: create the `discord-assistant` k8s Secret from a committed templated manifest — `ROUTER_API_KEY` now resolves from TeamVault (deploy env files hold only the lookup key), so the Secret is reproducible instead of hand-applied out-of-repo.
