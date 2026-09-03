@@ -287,3 +287,51 @@ test('setVoiceSolo distinguishes unsupported from broken', async () => {
     global.fetch = realFetch;
   }
 });
+
+test('setChatPosting carries the mode and the conversation key', async () => {
+  // The /mode slash command's back-edge. The shim gates the chat-bridge post
+  // on the SAME per-key flag the spoken instruction flips, so this header has
+  // to name the exact conversation — a missing or wrong X-Session-Key would
+  // either be rejected by the route or flip a different conversation's mode.
+  const { setChatPosting } = require('../src/llm');
+  const realFetch = global.fetch;
+  let captured;
+  try {
+    global.fetch = async (_url, init) => {
+      captured = init;
+      return { ok: true, status: 200 };
+    };
+    await setChatPosting(true, 'voice:G1:personal');
+    assert.equal(captured.method, 'POST');
+    assert.equal(captured.headers['X-Chat-Posting'], 'true');
+    assert.equal(captured.headers['X-Session-Key'], 'voice:G1:personal');
+    await setChatPosting(false, 'voice:G1:personal');
+    assert.equal(captured.headers['X-Chat-Posting'], 'false');
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
+test('setChatPosting distinguishes unsupported from broken', async () => {
+  // Same contract as setVoiceSolo: an endpoint without /chat/posting (any
+  // stateless backend) must degrade gracefully — posting stays as it was, the
+  // user gets told the backend does not support modes, and nothing wedges.
+  const { setChatPosting } = require('../src/llm');
+  const realFetch = global.fetch;
+  try {
+    global.fetch = async () => ({ ok: false, status: 404 });
+    assert.deepEqual(await setChatPosting(false, 'voice:G1'), { ok: false, unsupported: true });
+
+    global.fetch = async () => ({ ok: false, status: 500 });
+    assert.deepEqual(await setChatPosting(false, 'voice:G1'), { ok: false, error: 'endpoint 500' });
+
+    global.fetch = async () => {
+      throw new Error('connect ECONNREFUSED');
+    };
+    const down = await setChatPosting(false, 'voice:G1');
+    assert.equal(down.retryable, true);
+    assert.match(down.error, /ECONNREFUSED/);
+  } finally {
+    global.fetch = realFetch;
+  }
+});

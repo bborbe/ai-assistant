@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: `/mode` slash command as a second surface for the voice-only switch — `/mode voice-only` silences chat posting for this conversation, `/mode voice-text` turns it back on (the default). Same per-key flag the spoken "don't write in the chat" instruction flips, set via a new bot→shim `/chat/posting` route mirroring `/voice/solo`; both surfaces drive one state, so a mode set by voice shows up in `/mode` and vice versa.
+
 ## v0.27.1
 
 - fix: the shim's startup rebind notify now runs after its HTTP server is constructed (from a daemon thread), not before it serves. Notifying first made the very first restart after deploy race the fix: a bot with a live call received the ping and immediately POSTed its re-bind back to `/voice/bind` while the shim was still in the notify loop and not yet listening — `fetch failed`, and the call stayed deaf. Found by live verification of v0.26.1 (bot log `voice: rebind failed — ... fetch failed` on a real call).

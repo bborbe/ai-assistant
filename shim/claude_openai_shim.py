@@ -2525,6 +2525,30 @@ class Handler(BaseHTTPRequestHandler):
             print(f"-> TYPED [{key}] next turn came from the keyboard", flush=True)
             return self._json(200, {"typed": True, "key": key})
 
+        # The /mode slash command's back-edge: the bot sets the SAME per-key
+        # voice-only flag the spoken instruction flips, so both surfaces drive
+        # one state. Sticky like /voice/solo — it describes the conversation's
+        # standing mode, not one turn. Same out-of-band shape as /voice/bind:
+        # the bot owns the slash surface and the session key; the shim owns
+        # the flag that gates the chat-bridge post.
+        if self.path.rstrip("/").endswith("/chat/posting"):
+            key = self.headers.get("X-Session-Key", "").strip()
+            if not key:
+                # The bot always sends the key, mirroring /voice/solo — a
+                # missing one is a client bug, not something to fold into a
+                # default key (which is what the old global did, and the cause
+                # of the 2026-08-18 cross-call leak).
+                return self._json(400, {"error": {"message": "missing X-Session-Key"}})
+            posting = self.headers.get("X-Chat-Posting", "").strip().strip("\"'").lower()
+            off = posting not in ("1", "true", "yes", "on")
+            previous = set_chat_off(key, off)
+            state = "OFF (voice-only)" if off else "ON (voice-text)"
+            print(f"-> CHAT POSTING [{key}] {state} (was {previous})", flush=True)
+            return self._json(
+                200,
+                {"posting": not off, "previous": not previous, "key": key},
+            )
+
         if self.path.rstrip("/").endswith("/sessions/reset"):
             key = self._key()
             drop_process(key)          # kill the live process, not just the mapping
