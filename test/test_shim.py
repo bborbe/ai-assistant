@@ -861,6 +861,108 @@ class SoloGate(unittest.TestCase):
         finally:
             shim.ALWAYS_WAKE = prev
 
+    def test_wake_override_absent_defers_to_the_env_default(self):
+        # The third state. No override means the key follows ALWAYS_WAKE, which
+        # is what makes `/wakephrase auto` a real restore rather than a synonym for
+        # `off`.
+        self.assertIsNone(shim.wake_override(self.KEY))
+        prev = shim.ALWAYS_WAKE
+        try:
+            shim.ALWAYS_WAKE = True
+            self.assertTrue(shim.effective_always_wake(self.KEY))
+            shim.ALWAYS_WAKE = False
+            self.assertFalse(shim.effective_always_wake(self.KEY))
+        finally:
+            shim.ALWAYS_WAKE = prev
+
+    def test_wake_override_beats_the_env_default_both_ways(self):
+        # The point of the runtime toggle: an admin can force the phrase on an
+        # instance whose default is off, and relax it on one whose default is on.
+        prev = shim.ALWAYS_WAKE
+        try:
+            shim.ALWAYS_WAKE = False
+            shim.set_wake_override(self.KEY, True)
+            self.assertTrue(shim.effective_always_wake(self.KEY))
+            shim.ALWAYS_WAKE = True
+            shim.set_wake_override(self.KEY, False)
+            self.assertFalse(shim.effective_always_wake(self.KEY))
+        finally:
+            shim.set_wake_override(self.KEY, None)
+            shim.ALWAYS_WAKE = prev
+
+    def test_clearing_the_override_restores_the_default(self):
+        # `/wakephrase auto`. Without the clear, the configured default is unreachable
+        # for the life of the process once the command is used at all.
+        prev = shim.ALWAYS_WAKE
+        try:
+            shim.ALWAYS_WAKE = True
+            shim.set_wake_override(self.KEY, False)
+            self.assertFalse(shim.effective_always_wake(self.KEY))
+            previous = shim.set_wake_override(self.KEY, None)
+            self.assertFalse(previous, "clear returns the value it replaced")
+            self.assertIsNone(shim.wake_override(self.KEY))
+            self.assertTrue(shim.effective_always_wake(self.KEY))
+        finally:
+            shim.set_wake_override(self.KEY, None)
+            shim.ALWAYS_WAKE = prev
+
+    def test_wake_override_is_per_key(self):
+        # Same reason the solo state is per-key: an override set in a private
+        # call must not follow the bot into the next call on another channel.
+        other = "voice:G9"
+        prev = shim.ALWAYS_WAKE
+        try:
+            shim.ALWAYS_WAKE = True
+            shim.set_wake_override(self.KEY, False)
+            self.assertFalse(shim.effective_always_wake(self.KEY))
+            self.assertTrue(
+                shim.effective_always_wake(other),
+                "an untouched key keeps the default",
+            )
+        finally:
+            shim.set_wake_override(self.KEY, None)
+            shim.set_wake_override(other, None)
+            shim.ALWAYS_WAKE = prev
+
+    def test_relaxing_the_override_cannot_answer_a_shared_room(self):
+        # The precedence rule: the override replaces only the always-wake term.
+        # Head-count still has to say solo, so `/wakephrase off` in a room with other
+        # people leaves the gate armed rather than answering everything said.
+        shim.set_solo(self.KEY, False)
+        prev = shim.ALWAYS_WAKE
+        try:
+            shim.ALWAYS_WAKE = True
+            shim.set_wake_override(self.KEY, False)
+            self.assertFalse(shim.is_solo(self.KEY) and not shim.effective_always_wake(self.KEY))
+        finally:
+            shim.set_wake_override(self.KEY, None)
+            shim.ALWAYS_WAKE = prev
+
+    def test_a_stale_override_is_what_join_must_clear(self):
+        # The drift this pins: a voice key outlives the call it was used in, so
+        # an override set in a previous call is still here when the next call
+        # binds the same key. The bot's fresh Session starts at null and posts
+        # solo=True; without the clear the shim answers that with a still-armed
+        # gate, and the user sees typing dots and no reply.
+        prev = shim.ALWAYS_WAKE
+        try:
+            shim.ALWAYS_WAKE = False
+            shim.set_wake_override(self.KEY, True)  # previous call did `/wakephrase on`
+            shim.set_solo(self.KEY, True)  # new call: bot says the room is solo
+            self.assertFalse(
+                shim.is_solo(self.KEY) and not shim.effective_always_wake(self.KEY),
+                "stale override keeps the gate armed while the bot thinks it is not",
+            )
+            # What join now does before the first syncSolo.
+            shim.set_wake_override(self.KEY, None)
+            self.assertTrue(
+                shim.is_solo(self.KEY) and not shim.effective_always_wake(self.KEY),
+                "clearing the override puts both sides back in agreement",
+            )
+        finally:
+            shim.set_wake_override(self.KEY, None)
+            shim.ALWAYS_WAKE = prev
+
     def test_unknown_key_defaults_to_gate_armed(self):
         # THE 2026-08-18 FIX. Before per-key state, a fresh key inherited whatever
         # the previous call had set — a private session's True bled into the

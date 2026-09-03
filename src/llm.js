@@ -157,6 +157,11 @@ async function setVoiceSolo(solo, sessionKey) {
  * use, so the /mode command issued from a call's own text chat lands on the
  * exact key the shim gates.
  *
+ * ADMIN SURFACE like `setVoiceWake`: silencing the channel is an operator
+ * decision, so this is authenticated with the chat-bridge token (the secret
+ * the bot and shim use to authenticate to each other), not `config.apiKey` —
+ * see the /voice/wake docstring above for the reasoning in full.
+ *
  * Failure degrades toward posting staying ON — the mode nobody opted into
  * turning off, and the one that cannot hide a missing answer.
  */
@@ -165,8 +170,41 @@ async function setChatPosting(posting, sessionKey) {
     const res = await fetch(`${config.baseUrl}/chat/posting`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${config.apiKey}`,
+        Authorization: `Bearer ${config.chatBridgeToken}`,
         'X-Chat-Posting': posting ? 'true' : 'false',
+        'X-Session-Key': sessionKey,
+      },
+    });
+    if (res.ok) return { ok: true };
+    if (res.status === 404) return { ok: false, unsupported: true };
+    return { ok: false, error: `endpoint ${res.status}` };
+  } catch (e) {
+    return { ok: false, error: e.message, retryable: true };
+  }
+}
+
+/**
+ * Set the runtime wake-phrase override for a voice key. `null` clears it.
+ *
+ * Same shape and same degrade contract as `setVoiceSolo` above: a 404 means the
+ * backend predates the route, and the caller treats that as "gate stays as it
+ * was" rather than as a failure to retry.
+ *
+ * Authenticated with the chat-bridge token, not `config.apiKey`: this route is
+ * the admin surface (the shim refuses it otherwise), and the token is the one
+ * the bot and shim use to authenticate to each other — see src/health.js,
+ * which validates the shim's posts against the same value.
+ */
+async function setVoiceWake(value, sessionKey) {
+  // `auto` is the CLEAR, not a third boolean — it removes the override so the
+  // shim falls back to its VOICE_ALWAYS_WAKE default.
+  const mode = value === null ? 'auto' : value ? 'on' : 'off';
+  try {
+    const res = await fetch(`${config.baseUrl}/voice/wake`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.chatBridgeToken}`,
+        'X-Voice-Wake': mode,
         'X-Session-Key': sessionKey,
       },
     });
@@ -330,6 +368,7 @@ module.exports = {
   bindVoiceKey,
   setVoiceSolo,
   setChatPosting,
+  setVoiceWake,
   availableSessions,
   sessionKeyFor,
   voiceKeyFor,

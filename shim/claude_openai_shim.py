@@ -32,6 +32,7 @@ history.
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import pty
@@ -679,6 +680,49 @@ def is_solo(key: str) -> bool:
     with _SOLO_LOCK:
         return _SOLO_BY_KEY.get(key, False)
 
+
+# Per-key runtime override of ALWAYS_WAKE, set by an admin mid-call over
+# /v1/voice/wake. Tri-state on purpose: True forces the phrase, False relaxes to
+# head-count behaviour, and ABSENT means "no override" — defer to the
+# ALWAYS_WAKE env default. A plain bool cannot express that third case, which is
+# what `/wake auto` restores; without it the configured default is unreachable
+# for the life of the process once the command is used at all.
+#
+# In-memory and per-key, like _SOLO_BY_KEY above and for the same two reasons: a
+# process-wide value leaks across calls (the bug v0.20.0 fixed), and a persisted
+# one would carry a "wake OFF" across a restart invisibly — the shape of the
+# incident where the assistant answered a 5-person meeting for 2.5h. A restart
+# falls back to the configured default, which is the safe direction.
+_WAKE_OVERRIDE_BY_KEY: dict[str, bool] = {}
+_WAKE_OVERRIDE_LOCK = Lock()
+
+
+def set_wake_override(key: str, value: bool | None) -> bool | None:
+    """Set (or clear, with None) the wake override for a key. Returns previous."""
+    with _WAKE_OVERRIDE_LOCK:
+        previous = _WAKE_OVERRIDE_BY_KEY.get(key)
+        if value is None:
+            _WAKE_OVERRIDE_BY_KEY.pop(key, None)
+        else:
+            _WAKE_OVERRIDE_BY_KEY[key] = bool(value)
+    return previous
+
+
+def wake_override(key: str) -> bool | None:
+    """Look up the override for a key. None means no override — use the default."""
+    with _WAKE_OVERRIDE_LOCK:
+        return _WAKE_OVERRIDE_BY_KEY.get(key)
+
+
+def effective_always_wake(key: str) -> bool:
+    """ALWAYS_WAKE for this key, with any runtime override applied.
+
+    The override replaces ONLY the always-wake term. Head-count logic is
+    untouched: relaxing it cannot make an unaddressed turn answerable in a room
+    with other people, because `is_solo(key)` still has to be True.
+    """
+    override = wake_override(key)
+    return ALWAYS_WAKE if override is None else override
 
 # ── voice-only switch ──────────────────────────────────────────────────────
 # "don't write in the chat" silences chat posting for the rest of this
@@ -2515,6 +2559,67 @@ class Handler(BaseHTTPRequestHandler):
                 {"solo": is_solo(key), "previous": previous, "key": key},
             )
 
+        # Runtime wake-phrase override, set by an admin over the bot's slash
+        # command. Sticky and out-of-band for the same reason as /voice/solo
+        # above: speech-to-speech owns the HTTP call to /chat/completions and
+        # can attach no headers of its own, so posture has to arrive separately.
+        #
+        # X-Voice-Wake: on | off | auto. `auto` CLEARS the override rather than
+        # setting it false — "no override, use VOICE_ALWAYS_WAKE" is a third
+        # state, and conflating it with off would make the configured default
+        # unreachable until the process restarts.
+        #
+        # ADMIN SURFACE: this route carries the decision the bot's
+        # config.isAdmin gate makes, so it must not be settable by whatever can
+        # merely reach the port. Bot and shim authenticate to each other with
+        # CHAT_BRIDGE_TOKEN (the same secret the shim's chat-bridge posts carry,
+        # validated on the bot side in src/health.js). Fail closed when it is
+        # unset, mirroring the chat-bridge guard. The sibling sticky routes
+        # (/voice/solo, /voice/bind) stay unauthenticated exactly as they were
+        # before this route existed — they carry state the bot itself writes,
+        # not an operator decision.
+        if self.path.rstrip("/").endswith("/voice/wake"):
+            supplied = self.headers.get("Authorization", "")
+            expected = f"Bearer {CHAT_BRIDGE_TOKEN}"
+            if not CHAT_BRIDGE_TOKEN or not hmac.compare_digest(supplied, expected):
+                return self._json(401, {"error": {"message": "unauthorized"}})
+            key = self.headers.get("X-Session-Key", "").strip()
+            if not key:
+                # Same contract as /voice/solo: the bot always sends the key, so
+                # a missing one is a client bug. Folding it into a default key
+                # is what caused the cross-call leak this route is keyed to
+                # avoid in the first place.
+                return self._json(400, {"error": {"message": "missing X-Session-Key"}})
+            raw = self.headers.get("X-Voice-Wake", "").strip().strip("\"'").lower()
+            if raw in ("on", "1", "true", "yes"):
+                value = True
+            elif raw in ("off", "0", "false", "no"):
+                value = False
+            elif raw in ("auto", "default", "clear"):
+                value = None
+            else:
+                return self._json(
+                    400,
+                    {"error": {"message": f"bad X-Voice-Wake: {raw!r} (want on|off|auto)"}},
+                )
+            previous = set_wake_override(key, value)
+            effective = effective_always_wake(key)
+            print(
+                f"-> WAKE [{key}] override={value} (was {previous}) "
+                f"effective_always_wake={effective}",
+                flush=True,
+            )
+            return self._json(
+                200,
+                {
+                    "key": key,
+                    "override": value,
+                    "previous": previous,
+                    "always_wake": effective,
+                    "default": ALWAYS_WAKE,
+                },
+            )
+
         if self.path.rstrip("/").endswith("/turns/typed"):
             key = self._key()
             if self.headers.get("X-Turn-Typed", "").lower() == "false":
@@ -2531,7 +2636,18 @@ class Handler(BaseHTTPRequestHandler):
         # standing mode, not one turn. Same out-of-band shape as /voice/bind:
         # the bot owns the slash surface and the session key; the shim owns
         # the flag that gates the chat-bridge post.
+        #
+        # ADMIN SURFACE, same as /voice/wake: silencing the channel is an
+        # operator decision, not state the bot merely observes and reports.
+        # Whatever can reach the port must not be able to turn the assistant's
+        # chat off, so this route requires CHAT_BRIDGE_TOKEN and fails closed
+        # when it is unset — mirroring /voice/wake's guard, not the
+        # unauthenticated /voice/solo sibling.
         if self.path.rstrip("/").endswith("/chat/posting"):
+            supplied = self.headers.get("Authorization", "")
+            expected = f"Bearer {CHAT_BRIDGE_TOKEN}"
+            if not CHAT_BRIDGE_TOKEN or not hmac.compare_digest(supplied, expected):
+                return self._json(401, {"error": {"message": "unauthorized"}})
             key = self.headers.get("X-Session-Key", "").strip()
             if not key:
                 # The bot always sends the key, mirroring /voice/solo — a
@@ -2636,7 +2752,7 @@ class Handler(BaseHTTPRequestHandler):
         # interrupt, and the cost of a miss (say it again) is unchanged. This
         # reverses only WHEN the gate is armed — how it matches is untouched.
         if voice and not typed_turn:
-            solo = is_solo(key) and not ALWAYS_WAKE
+            solo = is_solo(key) and not effective_always_wake(key)
             if not solo and not is_addressed(prompt):
                 print(f"-> QUIET [{key}] not addressed: {prompt[:60]!r}", flush=True)
                 if req.get("stream"):

@@ -3,6 +3,15 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
+// `make precommit` sources local.env (Makefile `-include`), which sets
+// IDENTITY. These key-shape tests assume a single-identity deployment, so the
+// var has to go before config is first required — the per-test identity tests
+// below delete it themselves, but the module-level requires here would
+// otherwise capture `config.identity = 'personal'` and every `voice:G1`
+// assertion would fail with a `:personal` suffix it never asked for.
+delete process.env.IDENTITY;
+delete require.cache[require.resolve('../src/config')];
+delete require.cache[require.resolve('../src/llm')];
 const { sessionKeyFor, DEFAULT_SESSION_KEY } = require('../src/llm');
 
 const channel = (over) => ({ isThread: () => false, isVoiceBased: () => false, ...over });
