@@ -35,6 +35,11 @@ function fakeMsg({ content, liveGuildId = 'guild-1', channelId = 'chan-1' } = {}
     guild: { id: liveGuildId },
     content,
     mentions: { users: { has: (id) => id === 'bot-1' } },
+    // Voice commands reply via msg.reply (the slash-command surface), not
+    // channel.send — the routing tests above answer in-channel, so this is
+    // only reachable from a join/leave command. Tests that want a failure can
+    // override it after construction.
+    reply: async (part) => sent.push(part),
     channel: {
       id: channelId,
       // No `threads` property: conversationChannel() falls back to the
@@ -189,4 +194,43 @@ test('stripAddress leaves the @everyone role alone', () => {
     guildId,
   );
   assert.match(out, new RegExp(`<@&${guildId}>`));
+});
+
+// Crash-loop regression: a `/join` reply that Discord rejects (160002 — bot
+// lacks "Read Message History" in the guild) must not take the process down.
+// Observed 2026-09-04 on the SC bot: the join reply throws, the catch's own
+// reply throws again, the rejection escapes the async messageCreate handler
+// and index.js's unhandledRejection handler exits(1) — launchd restarts, the
+// startup evictGhost disconnects the voice connection, and the next /leave
+// finds no session. The fix: a reply failure inside handleVoiceCommand is
+// logged, never allowed to propagate.
+test('a /leave reply failure is swallowed, not a crash', async () => {
+  const client = fakeClient();
+  text.register(client);
+  const msg = fakeMsg({ content: '/leave' });
+  // 160002: Cannot reply without permission to read message history
+  msg.reply = async () => {
+    throw new Error('Cannot reply without permission to read message history');
+  };
+  // No session, so voice.leave returns false and the reply path runs. The
+  // rejection must not escape handleVoiceCommand.
+  await client.fire(msg);
+  // If the exception had escaped, client.fire would have rejected above.
+  assert.ok(true);
+});
+
+test('a /join reply failure inside the catch is swallowed, not a crash', async () => {
+  const client = fakeClient();
+  text.register(client);
+  const msg = fakeMsg({ content: '/join' });
+  msg.member.voice = {
+    channel: { id: 'chan-1', name: 'voice', guild: { id: 'guild-1' } },
+  };
+  msg.reply = async () => {
+    throw new Error('Cannot reply without permission to read message history');
+  };
+  // voice.join will fail against the fake channel (no adapter), landing in the
+  // catch — whose reply also rejects. Both must be contained.
+  await client.fire(msg);
+  assert.ok(true);
 });
