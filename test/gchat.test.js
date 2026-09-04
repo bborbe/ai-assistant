@@ -6,7 +6,7 @@ const assert = require('node:assert');
 // The session-key tests assume a single identity; set it before config is
 // first required (mirrors llm.test.js, which deletes it — same reason, the
 // module-level require captures config.identity at load).
-process.env.IDENTITY = 'bro';
+process.env.IDENTITY = 'data';
 delete require.cache[require.resolve('../src/config')];
 delete require.cache[require.resolve('../src/gchat')];
 const { parseEvent, gchatSessionKey, classify } = require('../src/gchat');
@@ -52,18 +52,18 @@ test('parseEvent returns null on invalid JSON', () => {
 });
 
 test('gchatSessionKey uses trailing ids, identity last', () => {
-  assert.equal(gchatSessionKey('spaces/AAA', 'spaces/AAA/threads/BBB'), 'gchat:AAA_BBB:bro');
+  assert.equal(gchatSessionKey('spaces/AAA', 'spaces/AAA/threads/BBB'), 'gchat:AAA_BBB:data');
 });
 
 test('gchatSessionKey degrades to _space without a thread', () => {
-  assert.equal(gchatSessionKey('spaces/AAA', null), 'gchat:AAA_space:bro');
+  assert.equal(gchatSessionKey('spaces/AAA', null), 'gchat:AAA_space:data');
 });
 
 test('gchatSessionKey has exactly three colon segments, gchat prefix', () => {
   const key = gchatSessionKey('spaces/AAA', 'spaces/AAA/threads/BBB');
   assert.equal(key.split(':').length, 3);
   assert.equal(key.split(':')[0], 'gchat');
-  assert.equal(key.split(':')[2], 'bro');
+  assert.equal(key.split(':')[2], 'data');
 });
 
 test('classify: non-empty is shape, empty is ask-requester', () => {
