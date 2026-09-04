@@ -1,6 +1,9 @@
-# discord-assistant
+# ai-assistant
 
-One Discord bot that reaches an **OpenAI-compatible endpoint** from two surfaces — text and voice — so the backend behind it can be swapped without touching the bot.
+[![CI](https://github.com/bborbe/ai-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/bborbe/ai-assistant/actions/workflows/ci.yml)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/bborbe/ai-assistant)
+
+One assistant that reaches an **OpenAI-compatible endpoint** from multiple surfaces — Discord (text and voice) and Google Chat — so the backend behind it can be swapped without touching the bot.
 
 ```
 Discord (cloud)
