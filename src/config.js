@@ -167,6 +167,16 @@ const config = {
   healthHost: process.env.HEALTH_HOST || '0.0.0.0',
   healthPort: parseInt(process.env.HEALTH_PORT || '8080', 10),
 
+  // Google Chat transport — OPTIONAL second surface. Off by default: an
+  // instance without GCHAT_ENABLED behaves exactly as before (Discord only).
+  // Set GCHAT_ENABLED=1 to run the Chat surface alongside Discord, through the
+  // SAME session engine (llm.chat → shim, X-Session-Key). The Chat env is only
+  // required when enabled — a Discord-only instance never needs it.
+  gchatEnabled: flag(process.env.GCHAT_ENABLED, false),
+  gchatSubscription: (process.env.GCHAT_PUBSUB_SUBSCRIPTION || '').trim(),
+  gchatProject: (process.env.GCHAT_PROJECT || '').trim(),
+  gchatSaCredentials: (process.env.GCHAT_SA_CREDENTIALS || '').trim(),
+
   // Shared secret for the shim's POST /chat back-edge (health.js). Both
   // processes read the SAME env var name — a mismatch between a bot-side and
   // shim-side name is exactly the class of bug that loses a secret silently.
@@ -285,6 +295,13 @@ config.check = () => {
   if (!config.discordToken) problems.push('DISCORD_TOKEN is not set');
   if (!config.allowedUserIds.length) {
     problems.push('ALLOWED_USER_IDS is empty — nobody could talk to the bot');
+  }
+  if (config.gchatEnabled) {
+    if (!config.gchatSubscription)
+      problems.push('GCHAT_PUBSUB_SUBSCRIPTION is not set (GCHAT_ENABLED=1)');
+    if (!config.gchatProject) problems.push('GCHAT_PROJECT is not set (GCHAT_ENABLED=1)');
+    if (!config.gchatSaCredentials)
+      problems.push('GCHAT_SA_CREDENTIALS is not set (GCHAT_ENABLED=1)');
   }
   return problems;
 };

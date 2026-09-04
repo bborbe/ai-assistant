@@ -8,6 +8,9 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+- Add optional Google Chat transport — Pub/Sub subscriber + Chat API in-thread replies behind the `GCHAT_ENABLED` gate, sharing the shim session engine with Discord (`gchat:` session keys, disjoint from Discord's)
+
 ## v0.30.1
 
 - chore: `make apply` renders secrets through `teamvault-cli config parse --cache`, so a TeamVault outage no longer blocks a deploy — the disk fallback (`~/.teamvault-cache`) serves the last-cached value on remote error instead of failing the render.
