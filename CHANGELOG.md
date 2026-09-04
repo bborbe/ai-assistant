@@ -8,6 +8,9 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+- fix: a failed voice-command reply no longer crashes the bot — a Discord rejection (e.g. missing Read Message History) previously escaped the text handler, hit the unhandledRejection exit, and the launchd restart's ghost-eviction dropped the voice connection, making `/join` appear to work while `/leave` always failed
+
 ## v0.31.0
 - Add optional Google Chat transport — Pub/Sub subscriber + Chat API in-thread replies behind the `GCHAT_ENABLED` gate, sharing the shim session engine with Discord (`gchat:` session keys, disjoint from Discord's)
 

@@ -32,6 +32,27 @@ async function voiceChannelOf(client, userId) {
   return null;
 }
 
+/**
+ * Reply to a voice command, tolerating a failed reply.
+ *
+ * A reply can be rejected by Discord itself (160002: the bot lacks "Read
+ * Message History" in the guild) — and on 2026-09-04 that rejection escaped
+ * this async handler, hit index.js's unhandledRejection handler, and exited(1).
+ * launchd restarted the bot, the startup evictGhost disconnected the voice
+ * connection, and the next /leave found no session: join worked, leave never
+ * did, and the process crash-looped on every attempt. The voice action itself
+ * (join/leave) has already happened by the time we reply — the reply is
+ * confirmation, not the operation — so a failed reply is logged and swallowed,
+ * never allowed to take the bot down.
+ */
+async function safeVoiceReply(msg, text) {
+  try {
+    await msg.reply(text);
+  } catch (e) {
+    log.warn('voice reply failed', { error: e.message });
+  }
+}
+
 /** `join` / `leave` typed as a message — same effect as the slash command. */
 async function handleVoiceCommand(msg, client, cmd) {
   // Refused with a reason rather than ignored. The slash commands are not
@@ -40,7 +61,7 @@ async function handleVoiceCommand(msg, client, cmd) {
   // to be told why it did not, rather than watching the bot say nothing.
   if (!config.voiceEnabled) {
     log.info('voice command refused, voice disabled', { cmd, user: msg.author.tag });
-    return msg.reply(VOICE_DISABLED_REPLY);
+    return safeVoiceReply(msg, VOICE_DISABLED_REPLY);
   }
 
   const voice = require('./voice');
@@ -48,17 +69,17 @@ async function handleVoiceCommand(msg, client, cmd) {
     const guildId = msg.guild?.id ?? [...client.guilds.cache.keys()][0];
     const left = guildId ? voice.leave(guildId) : false;
     log.info('voice command via text', { cmd, ok: left });
-    return msg.reply(left ? 'Left the voice channel.' : 'I am not in a voice channel.');
+    return safeVoiceReply(msg, left ? 'Left the voice channel.' : 'I am not in a voice channel.');
   }
 
   const channel = msg.member?.voice?.channel ?? (await voiceChannelOf(client, msg.author.id));
   if (!channel) {
-    return msg.reply('Join a voice channel first, then say join.');
+    return safeVoiceReply(msg, 'Join a voice channel first, then say join.');
   }
   try {
     const session = await voice.join(channel);
     log.info('voice command via text', { cmd, channel: channel.name });
-    await msg.reply(`Listening in ${channel.name}.`);
+    await safeVoiceReply(msg, `Listening in ${channel.name}.`);
     if (session?.transcript && config.announceTranscription) {
       await channel
         .send(`🎙️ Transcribing **${channel.name}** — every speaker is written down.`)
@@ -66,7 +87,7 @@ async function handleVoiceCommand(msg, client, cmd) {
     }
   } catch (e) {
     log.error('voice join via text failed', { error: e.message });
-    await msg.reply(`Could not join: ${e.message}`);
+    await safeVoiceReply(msg, `Could not join: ${e.message}`);
   }
 }
 
