@@ -9,6 +9,7 @@ const { sessionKeyFor, setChatPosting } = require('./llm');
 const { buildCommands, VOICE_DISABLED_REPLY } = require('./slash-commands');
 const log = require('./log');
 const { startHealthServer } = require('./health');
+const gchat = require('./gchat');
 
 const problems = config.check();
 if (problems.length) {
@@ -20,13 +21,31 @@ if (problems.length) {
 // NOT check this: a Discord outage should drain traffic, not restart pods.
 let gatewayReady = false;
 let draining = false;
+let gchatReady = false;
 
 const health = startHealthServer({
   host: config.healthHost,
   port: config.healthPort,
   build: config.build,
-  isReady: () => gatewayReady && !draining,
+  isReady: () => gatewayReady && (!config.gchatEnabled || gchatReady) && !draining,
 });
+
+// Optional Google Chat transport. Started alongside the Discord client when
+// GCHAT_ENABLED=1; it shares the same session engine and identity, and a
+// Discord-only instance never touches it.
+let gchatHandle = null;
+if (config.gchatEnabled) {
+  try {
+    gchatHandle = gchat.startGchat();
+    gchatReady = true;
+    log.info('gchat transport started', {
+      subscription: config.gchatSubscription,
+      identity: config.identity,
+    });
+  } catch (e) {
+    log.error('gchat transport failed to start', { error: e.message });
+  }
+}
 
 const commands = buildCommands({ voiceEnabled: config.voiceEnabled });
 
@@ -290,6 +309,7 @@ function shutdown(signal) {
   for (const guild of client.guilds.cache.values()) {
     voice.evictGhost(guild).catch(() => {});
   }
+  if (gchatHandle) gchatHandle.close().catch(() => {});
   setTimeout(() => {
     client.destroy();
     health.close(() => {

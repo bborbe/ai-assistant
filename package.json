@@ -18,7 +18,9 @@
   "license": "BSD-3-Clause",
   "dependencies": {
     "@discordjs/voice": "^0.19.2",
+    "@google-cloud/pubsub": "^6.0.1",
     "discord.js": "^14.27.0",
+    "google-auth-library": "^11.0.2",
     "libsodium-wrappers": "^0.8.4",
     "opusscript": "^0.0.8",
     "prism-media": "^1.3.5",
