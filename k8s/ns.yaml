@@ -10,3 +10,5 @@ kind: ServiceAccount
 metadata:
   name: sc-assistant
   namespace: star-citizen
+imagePullSecrets:
+  - name: docker
