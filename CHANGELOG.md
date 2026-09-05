@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.31.2
 
 - fix: the `sc-assistant` ServiceAccount now sets `imagePullSecrets: [docker]` — its pods pull from `docker.prod.nuke` and carried no pull credentials at all, which works only while that registry allows anonymous pulls. The `docker` secret is already present in the `star-citizen` namespace in both clusters (replicated by kubernetes-reflector), so this references an existing secret rather than creating a dangling one
 
