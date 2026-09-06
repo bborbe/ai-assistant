@@ -92,11 +92,19 @@ die_transient() {
 run_server() {
   "$@" &
   child=$!
-  trap 'kill -TERM "$child" 2>/dev/null' TERM INT
+  # Memory supervision runs alongside: samples phys_footprint, pushes to the
+  # pushgateway, and TERMs the child past its cap — which the wait below turns
+  # into exit 75 and a fresh launchd restart. It exits on its own once the
+  # child is gone; the trap kills it explicitly so a TERM'd job does not leave
+  # an orphan sampler sleeping out its interval.
+  watch_memory "$child" &
+  watcher=$!
+  trap 'kill -TERM "$watcher" "$child" 2>/dev/null' TERM INT
   # `wait` returns early when a trapped signal arrives; loop until the child is
   # genuinely gone, or a forwarded SIGTERM would look like an exit.
   wait "$child"
   rc=$?
+  kill "$watcher" 2>/dev/null || true
   while kill -0 "$child" 2>/dev/null; do
     wait "$child"
     rc=$?
@@ -105,6 +113,113 @@ run_server() {
     die_transient "$component exited on signal $((rc - 128))"
   fi
   die_transient "$component exited with status $rc — a server exiting is never success"
+}
+
+# Read phys_footprint in MB for a PID. `ps` RSS reads ~20x low for MPS/MLX
+# processes, so the ceiling keys on phys_footprint — the metric Activity
+# Monitor and jetsam actually use (see [[Metrics That Lie With Plausible
+# Numbers]]). vmmap --summary prints a unit that varies per process
+# (B/K/M/G); normalise it, because misreading 9232 KB as 9232 MB is a 1000x
+# error that manufactures a leak in an idle process.
+footprint_mb() {
+  local pid="$1" line value suffix
+  line="$(vmmap --summary "$pid" 2>/dev/null | awk '/^Physical footprint:/{print $3; exit}')"
+  [ -n "$line" ] || return 1
+  value="${line%[KMG]}"
+  suffix="${line##*[0-9.]}"
+  case "$suffix" in
+  G) awk -v v="$value" 'BEGIN{printf "%d", v*1024}' ;;
+  M) awk -v v="$value" 'BEGIN{printf "%d", v}' ;;
+  K) awk -v v="$value" 'BEGIN{printf "%d", v/1024}' ;;
+  *) return 1 ;;
+  esac
+}
+
+# Largest phys_footprint in the process tree rooted at $1, in MB. The wrapper
+# is not the server — the tree is wrapper -> uv -> python (or node / python3
+# directly), and the real memory lives in the deepest process. Sample the whole
+# tree and take the largest: the property being measured decides the PID, not a
+# label. (The same lesson as the 2026-08-10 triage, where identifying the
+# process by name reported a healthy service as DOWN.)
+tree_footprint_mb() {
+  local pid="$1" mb total=0 child
+  mb="$(footprint_mb "$pid")" || mb=0
+  total="$mb"
+  for child in $(pgrep -P "$pid" 2>/dev/null); do
+    mb="$(tree_footprint_mb "$child")"
+    [ "$mb" -gt "$total" ] && total="$mb"
+  done
+  echo "$total"
+}
+
+# Push one phys_footprint sample to the pushgateway. Best-effort: a failed
+# push is logged nowhere and disables nothing — the cap is the load-bearing
+# half, the push is telemetry.
+push_footprint() {
+  local component="$1" mb="$2" pass="$3"
+  [ -n "$pass" ] || return 0
+  local url="${PUSHGATEWAY_URL:-https://pushgateway.prod.nuke.benjamin-borbe.de}"
+  local user="${PUSHGATEWAY_USERNAME:-monitoring}"
+  printf '# TYPE ai_assistant_phys_footprint_bytes gauge\nai_assistant_phys_footprint_bytes{component="%s"} %d\n' \
+    "$component" $((mb * 1048576)) |
+    curl -sS -u "$user:$pass" --data-binary @- \
+      "$url/metrics/job/ai-assistant/instance/$component" >/dev/null 2>&1 || true
+}
+
+# Watch one component's memory: sample phys_footprint on an interval, push each
+# sample to the pushgateway, and restart the component past its cap.
+#
+# Restarting is a TERM to the child, which run_server() turns into exit 75 and
+# launchd restarts fresh — the existing supervised-restart contract, nothing
+# new. The cap cannot be a plist key (ResidentSetSize / RLIMIT_RSS is a
+# documented no-op on macOS), so the bound lives here, in the supervisor.
+#
+# Env (all optional):
+#   MEMORY_CAP_MB_<component>  cap in MB for this component; unset = default below
+#   MEMORY_CAP_MB              fallback cap for any component without a specific one
+#   MEMORY_SAMPLE_INTERVAL     seconds between samples (default 60)
+#   PUSHGATEWAY_PASSWORD_KEY   TeamVault key id for the basic-auth password;
+#                              unset = telemetry disabled, cap still enforced
+#   PUSHGATEWAY_URL / PUSHGATEWAY_USERNAME  defaults target nukeprod monitoring
+watch_memory() {
+  local child="$1" mb cap pass=""
+  local cap_var="MEMORY_CAP_MB_${component}"
+  cap="${!cap_var:-${MEMORY_CAP_MB:-}}"
+  # Defaults bound the real consumers: s2s cold-loads ~5.5 GB and peaks ~8 GB
+  # mid-turn, so 12 GB sits above any single-turn peak yet far below the 50 GB
+  # the 2026-08-10 OOM produced; the transcriber is already cache-limited
+  # (~2.4 GB active + 512 MB cap), so 4 GB is pure headroom; shim and bot are
+  # tens of MB. Override any of them with MEMORY_CAP_MB_<component> in local.env,
+  # or set MEMORY_CAP_MB=0 to disable supervision for that component.
+  if [ -z "$cap" ]; then
+    case "$component" in
+    s2s) cap=12288 ;;
+    transcriber) cap=4096 ;;
+    shim | bot) cap=2048 ;;
+    *) cap=0 ;;
+    esac
+  fi
+  # Resolved HERE so only this subshell holds it — never exported to the
+  # component (resolve_secret's die_config would also kill the cap on a
+  # rejection, which is backwards: telemetry must not take the ceiling down).
+  if [ -n "${PUSHGATEWAY_PASSWORD_KEY:-}" ] && command -v teamvault-cli >/dev/null 2>&1; then
+    pass="$(teamvault-cli password "$PUSHGATEWAY_PASSWORD_KEY" 2>/dev/null || true)"
+    [ -n "$pass" ] ||
+      echo "launchd-run[$component]: pushgateway password unresolvable ($PUSHGATEWAY_PASSWORD_KEY) — telemetry disabled, cap still enforced" >&2
+  fi
+  local interval="${MEMORY_SAMPLE_INTERVAL:-60}"
+  while kill -0 "$child" 2>/dev/null; do
+    mb="$(tree_footprint_mb "$child")"
+    if [ "$mb" -gt 0 ]; then
+      push_footprint "$component" "$mb" "$pass"
+      if [ "$cap" -gt 0 ] && [ "$mb" -gt "$cap" ]; then
+        echo "launchd-run[$component]: phys_footprint ${mb} MB exceeds cap ${cap} MB — restarting" >&2
+        kill -TERM "$child" 2>/dev/null
+        return 0
+      fi
+    fi
+    sleep "$interval"
+  done
 }
 
 # Resolve a TeamVault secret into RESOLVED_SECRET, distinguishing "this key will
