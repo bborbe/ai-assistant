@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: supervised memory ceiling in the launchd launcher — `scripts/launchd-run.sh` now samples each component's `phys_footprint` (never `ps` RSS, which reads ~20× low for MPS/MLX) on an interval, TERMs a component past its per-component cap so launchd restarts it fresh, and pushes every sample to the nukeprod pushgateway (`ai_assistant_phys_footprint_bytes`). Defaults: s2s 12 GB, transcriber 4 GB, shim/bot 2 GB; override via `MEMORY_CAP_MB_<component>` in `local.env`. Telemetry is off unless `PUSHGATEWAY_PASSWORD_KEY` is set and never takes the ceiling down. The cap cannot be a plist key — `ResidentSetSize`/`RLIMIT_RSS` is a documented no-op on macOS — so the bound lives in the supervisor.
+
 ## v0.31.2
 
 - fix: the `sc-assistant` ServiceAccount now sets `imagePullSecrets: [docker]` — its pods pull from `docker.prod.nuke` and carried no pull credentials at all, which works only while that registry allows anonymous pulls. The `docker` secret is already present in the `star-citizen` namespace in both clusters (replicated by kubernetes-reflector), so this references an existing secret rather than creating a dangling one
