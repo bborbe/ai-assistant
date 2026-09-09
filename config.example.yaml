@@ -80,6 +80,10 @@ transcript_dir: ~/Documents/Obsidian/Personal/60 Periodic Notes/Transcripts
 #     cwd: ~/Documents/Obsidian/Boss
 #     claude_script: ~/Documents/workspaces/scripts/cc-boss
 #     chat_bridge_url: http://127.0.0.1:8101/chat
+#   bro:                         # matches brogrammers-assistant's IDENTITY=bro
+#     cwd: ~/Documents/Obsidian/BrogrammersAssistant
+#     claude_script: ~/Documents/workspaces/scripts/cc-discord-assistant-bro
+#     chat_bridge_url: http://127.0.0.1:8131/chat
 #
 # Still accepted, for a bot that has no IDENTITY set: an entry keyed by
 # Discord GUILD id instead, exactly as `v0.16.0` shipped it — the shim falls
