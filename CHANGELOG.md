@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.32.0
 
 - feat: `/bargein` toggles barge-in cancellation at runtime per conversation — with it off, the listener speaking mid-turn no longer ends the in-flight answer (`listener gone — interrupting turn` → `0 chars`); the turn runs to completion and the full answer still reaches the chat bridge/transcript. The flag lives on the shim (`/voice/barge`, keyed per conversation like the voice-only switch), is flipped from Discord via the new admin slash command, logs on flip (`-> BARGE IN [key] …`), and defaults to `on` (today's cancellation) until a smarter heuristic has a baseline. Voice-only: the command is not registered on text-only instances.
 - feat: supervised memory ceiling in the launchd launcher — `scripts/launchd-run.sh` now samples each component's `phys_footprint` (never `ps` RSS, which reads ~20× low for MPS/MLX) on an interval, TERMs a component past its per-component cap so launchd restarts it fresh, and pushes every sample to the nukeprod pushgateway (`ai_assistant_phys_footprint_bytes`). Defaults: s2s 12 GB, transcriber 4 GB, shim/bot 2 GB; override via `MEMORY_CAP_MB_<component>` in `local.env`. Telemetry is off unless `PUSHGATEWAY_PASSWORD_KEY` is set and never takes the ceiling down. The cap cannot be a plist key — `ResidentSetSize`/`RLIMIT_RSS` is a documented no-op on macOS — so the bound lives in the supervisor.
