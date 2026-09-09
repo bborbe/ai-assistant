@@ -184,8 +184,8 @@ async function setChatPosting(posting, sessionKey) {
 }
 
 /**
- * Toggle barge-in cancellation for a conversation — the /bargein command's
- * back-edge, same per-key flag the shim's turn loop reads.
+ * Toggle interrupt (barge-in cancellation) for a conversation — the /interrupt
+ * command's back-edge, same per-key flag the shim's turn loop reads.
  *
  * `cancel=true` is the normal state: the listener speaking mid-turn ends the
  * in-flight answer (`listener gone — interrupting turn` → `0 chars`).
@@ -200,10 +200,10 @@ async function setChatPosting(posting, sessionKey) {
  * Failure degrades toward cancellation staying ON — today's behaviour, and
  * the safe default until a smarter heuristic has a baseline.
  *
- * `cancel === null` is the query form (bare /bargein): no X-Barge-In header is
- * sent, and the shim reports the current posture without changing it.
+ * `cancel === null` is the query form (bare /interrupt): no X-Barge-In header
+ * is sent, and the shim reports the current posture without changing it.
  */
-async function setBargeIn(cancel, sessionKey) {
+async function setInterrupt(cancel, sessionKey) {
   try {
     const headers = {
       Authorization: `Bearer ${config.chatBridgeToken}`,
@@ -411,7 +411,7 @@ module.exports = {
   bindVoiceKey,
   setVoiceSolo,
   setChatPosting,
-  setBargeIn,
+  setInterrupt,
   setVoiceWake,
   availableSessions,
   sessionKeyFor,

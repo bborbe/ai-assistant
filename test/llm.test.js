@@ -345,12 +345,12 @@ test('setChatPosting distinguishes unsupported from broken', async () => {
   }
 });
 
-test('setBargeIn carries the posture and the conversation key', async () => {
-  // The /bargein slash command's back-edge. The shim's turn loop reads the
+test('setInterrupt carries the posture and the conversation key', async () => {
+  // The /interrupt slash command's back-edge. The shim's turn loop reads the
   // per-key flag at the moment the listener disappears, so the header has to
   // name the exact conversation — a missing or wrong X-Session-Key would
   // either be rejected by the route or flip a different conversation's turn.
-  const { setBargeIn } = require('../src/llm');
+  const { setInterrupt } = require('../src/llm');
   const realFetch = global.fetch;
   let captured;
   try {
@@ -358,23 +358,23 @@ test('setBargeIn carries the posture and the conversation key', async () => {
       captured = init;
       return { ok: true, status: 200, json: async () => ({ cancel: false }) };
     };
-    const off = await setBargeIn(false, 'voice:G1:personal');
+    const off = await setInterrupt(false, 'voice:G1:personal');
     assert.equal(captured.method, 'POST');
     assert.equal(captured.headers['X-Barge-In'], 'off');
     assert.equal(captured.headers['X-Session-Key'], 'voice:G1:personal');
     assert.deepEqual(off, { ok: true, cancel: false });
-    await setBargeIn(true, 'voice:G1:personal');
+    await setInterrupt(true, 'voice:G1:personal');
     assert.equal(captured.headers['X-Barge-In'], 'on');
   } finally {
     global.fetch = realFetch;
   }
 });
 
-test('setBargeIn query form sends no X-Barge-In and reads the state back', async () => {
-  // Bare /bargein (no option) is the query form: no posture header, and the
+test('setInterrupt query form sends no X-Barge-In and reads the state back', async () => {
+  // Bare /interrupt (no option) is the query form: no posture header, and the
   // returned `cancel` is the shim's current state — so the reply can say "it
   // is off" without a third round trip.
-  const { setBargeIn } = require('../src/llm');
+  const { setInterrupt } = require('../src/llm');
   const realFetch = global.fetch;
   let captured;
   try {
@@ -382,7 +382,7 @@ test('setBargeIn query form sends no X-Barge-In and reads the state back', async
       captured = init;
       return { ok: true, status: 200, json: async () => ({ cancel: true }) };
     };
-    const query = await setBargeIn(null, 'voice:G1:personal');
+    const query = await setInterrupt(null, 'voice:G1:personal');
     assert.equal(captured.headers['X-Barge-In'], undefined);
     assert.equal(captured.headers['X-Session-Key'], 'voice:G1:personal');
     assert.deepEqual(query, { ok: true, cancel: true });
@@ -391,24 +391,24 @@ test('setBargeIn query form sends no X-Barge-In and reads the state back', async
   }
 });
 
-test('setBargeIn distinguishes unsupported from broken', async () => {
+test('setInterrupt distinguishes unsupported from broken', async () => {
   // Same contract as setChatPosting: an endpoint without /voice/barge (any
   // stateless backend) must degrade gracefully — cancellation stays as it was
   // (ON, the default), the user gets told the backend does not support the
   // toggle, and nothing wedges.
-  const { setBargeIn } = require('../src/llm');
+  const { setInterrupt } = require('../src/llm');
   const realFetch = global.fetch;
   try {
     global.fetch = async () => ({ ok: false, status: 404 });
-    assert.deepEqual(await setBargeIn(false, 'voice:G1'), { ok: false, unsupported: true });
+    assert.deepEqual(await setInterrupt(false, 'voice:G1'), { ok: false, unsupported: true });
 
     global.fetch = async () => ({ ok: false, status: 500 });
-    assert.deepEqual(await setBargeIn(false, 'voice:G1'), { ok: false, error: 'endpoint 500' });
+    assert.deepEqual(await setInterrupt(false, 'voice:G1'), { ok: false, error: 'endpoint 500' });
 
     global.fetch = async () => {
       throw new Error('connect ECONNREFUSED');
     };
-    const down = await setBargeIn(false, 'voice:G1');
+    const down = await setInterrupt(false, 'voice:G1');
     assert.equal(down.retryable, true);
     assert.match(down.error, /ECONNREFUSED/);
   } finally {
