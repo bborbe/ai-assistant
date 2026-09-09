@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.34.1
 
 - fix: when the gateway reaches `ready` with zero guilds cached, log a warning (previously registration silently skipped) and report readiness 503 until the bot holds a guild — the hardening for the stale slash-command list that hid for a week behind a rejected gateway intent.
 
