@@ -80,12 +80,14 @@ function buildCommands({ voiceEnabled }) {
       // keyed per conversation, and can be set any time from the call's text
       // chat (bare invocation is the query form).
       new SlashCommandBuilder()
-        .setName('bargein')
-        .setDescription('Show or change whether speaking over me mid-turn cancels the answer')
+        .setName('interrupt')
+        .setDescription('Show or change whether speaking over me mid-turn interrupts the answer')
         .addStringOption((o) =>
           o
             .setName('mode')
-            .setDescription('on = speaking over me cuts the answer (default) · off = let it finish')
+            .setDescription(
+              'on = speaking over me interrupts the answer (default) · off = let it finish',
+            )
             .addChoices({ name: 'on', value: 'on' }, { name: 'off', value: 'off' }),
         ),
     );

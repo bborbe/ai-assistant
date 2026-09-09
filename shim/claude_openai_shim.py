@@ -2312,12 +2312,12 @@ class ClaudeProcess:
                 stop_timer()
                 if is_barge_in_off(self._key):
                     # Barge-in cancellation is OFF for this conversation (set
-                    # via /bargein): the listener speaking mid-turn must NOT
+                    # via /interrupt): the listener speaking mid-turn must NOT
                     # discard the in-flight answer. Stop speaking into the
                     # dead socket and stop the fillers, but let the turn run to
                     # completion — the full answer still reaches the chat
                     # bridge/transcript instead of dying at `0 chars`.
-                    print(f"  [{self._key}] listener gone — barge-in OFF, answer continues", flush=True)
+                    print(f"  [{self._key}] listener gone — interrupt OFF, answer continues", flush=True)
                 else:
                     print(f"  [{self._key}] listener gone — interrupting turn", flush=True)
                     self.interrupt()
@@ -2802,7 +2802,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(400, {"error": {"message": "missing X-Session-Key"}})
             raw = self.headers.get("X-Barge-In", "").strip().strip("\"'").lower()
             if not raw:
-                # Bare POST is the query form (from /bargein with no option):
+                # Bare POST is the query form (from /interrupt with no option):
                 # report the current posture without changing it.
                 off = is_barge_in_off(key)
                 return self._json(
@@ -2819,8 +2819,8 @@ class Handler(BaseHTTPRequestHandler):
                     {"error": {"message": f"bad X-Barge-In: {raw!r} (want on|off)"}},
                 )
             previous = set_barge_in_off(key, off)
-            state = "OFF (cancel disabled)" if off else "ON (cancel enabled)"
-            print(f"-> BARGE IN [{key}] {state} (was {previous})", flush=True)
+            state = "OFF (interrupt disabled)" if off else "ON (interrupt enabled)"
+            print(f"-> INTERRUPT [{key}] {state} (was {previous})", flush=True)
             return self._json(
                 200,
                 {"cancel": not off, "previous": not previous, "key": key},
