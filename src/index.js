@@ -8,7 +8,7 @@ const text = require('./text');
 const { sessionKeyFor, setChatPosting, setInterrupt } = require('./llm');
 const { buildCommands, VOICE_DISABLED_REPLY } = require('./slash-commands');
 const log = require('./log');
-const { startHealthServer } = require('./health');
+const { startHealthServer, isReady } = require('./health');
 const gchat = require('./gchat');
 
 const problems = config.check();
@@ -17,17 +17,29 @@ if (problems.length) {
   process.exit(2);
 }
 
-// Readiness = the gateway is actually connected. Liveness deliberately does
-// NOT check this: a Discord outage should drain traffic, not restart pods.
+// Readiness = the gateway is actually connected AND the bot holds a guild.
+// Liveness deliberately does NOT check either: a Discord outage should drain
+// traffic, not restart pods. The guild-count clause is the hardening for the
+// silent-skip failure (see the isReady doc block in health.js): a bot that
+// reached ready with an empty guild cache registers nothing and must not
+// report healthy.
 let gatewayReady = false;
 let draining = false;
 let gchatReady = false;
+let getGuildCount = () => 0;
 
 const health = startHealthServer({
   host: config.healthHost,
   port: config.healthPort,
   build: config.build,
-  isReady: () => gatewayReady && (!config.gchatEnabled || gchatReady) && !draining,
+  isReady: () =>
+    isReady({
+      gatewayReady,
+      guildCount: getGuildCount(),
+      gchatEnabled: config.gchatEnabled,
+      gchatReady,
+      draining,
+    }),
 });
 
 // Optional Google Chat transport. Started alongside the Discord client when
@@ -59,6 +71,10 @@ const client = new Client({
   ],
   partials: [Partials.Channel], // required to receive DMs
 });
+// Readiness reads the live cache size, not a snapshot: after a shard resume the
+// cache repopulates as guilds arrive, and a bot that was kicked everywhere must
+// not stay green on a stale count.
+getGuildCount = () => client.guilds.cache.size;
 
 client.once('clientReady', async () => {
   gatewayReady = true;
@@ -75,6 +91,14 @@ client.once('clientReady', async () => {
     version: config.build.version,
     chatBridge: Boolean(config.chatBridgeToken),
   });
+
+  // The empty-cache case is the exact failure that hid a week of stale slash
+  // commands: with a gateway intent rejected, discord.js delivers no guild
+  // objects and the registration loop below silently iterates nothing. Make it
+  // loud instead of invisible.
+  if (client.guilds.cache.size === 0) {
+    log.warn('ready with zero guilds — no commands registered');
+  }
 
   // A previous process may have died while in a voice channel, leaving the bot
   // visible there with nothing driving it. Clear that before anything else.
