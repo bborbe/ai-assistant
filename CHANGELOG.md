@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.34.0
 
 - feat: document the `bro` identity in `config.example.yaml` (cwd BrogrammersAssistant runtime vault, cc-discord-assistant-bro launcher, chat bridge on :8131) — the 5th laptop-hosted discord-assistant identity.
 
