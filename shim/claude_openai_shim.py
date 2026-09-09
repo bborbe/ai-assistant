@@ -769,6 +769,35 @@ def is_chat_off(key: str) -> bool:
         return _CHAT_OFF_BY_KEY.get(key, False)
 
 
+# ── barge-in switch ────────────────────────────────────────────────────────
+# "barge-in cancellation" is the behaviour where the listener speaking
+# mid-turn ends the in-flight answer (`listener gone — interrupting turn` →
+# `0 chars`). The flag below turns it OFF for a conversation: with it set,
+# speaking over the assistant no longer discards the reply already being
+# produced — the turn runs to completion and the full answer still reaches the
+# chat bridge/transcript. Per-key like the voice-only switch: the setting
+# describes this conversation, never the whole shim. Sticky (not one-shot),
+# and the DEFAULT is unset (cancellation ON) — today's behaviour stays the
+# safe baseline until a smarter heuristic has numbers to be judged against.
+_BARGE_IN_OFF_BY_KEY: dict[str, bool] = {}
+_BARGE_IN_OFF_LOCK = Lock()
+
+
+def set_barge_in_off(key: str, off: bool) -> bool:
+    """Set the barge-in-cancellation-off flag for a key. Returns the previous."""
+    with _BARGE_IN_OFF_LOCK:
+        previous = _BARGE_IN_OFF_BY_KEY.get(key, False)
+        _BARGE_IN_OFF_BY_KEY[key] = bool(off)
+    return previous
+
+
+def is_barge_in_off(key: str) -> bool:
+    """Look up barge-in-cancellation-off state by key. Unknown keys return
+    False — cancellation stays ON, exactly as before the switch existed."""
+    with _BARGE_IN_OFF_LOCK:
+        return _BARGE_IN_OFF_BY_KEY.get(key, False)
+
+
 def voice_key() -> str:
     with _VOICE_KEY_LOCK:
         return _VOICE_KEY
@@ -2256,8 +2285,17 @@ class ClaudeProcess:
             if gone and not interrupted:
                 interrupted = True
                 stop_timer()
-                print(f"  [{self._key}] listener gone — interrupting turn", flush=True)
-                self.interrupt()
+                if is_barge_in_off(self._key):
+                    # Barge-in cancellation is OFF for this conversation (set
+                    # via /bargein): the listener speaking mid-turn must NOT
+                    # discard the in-flight answer. Stop speaking into the
+                    # dead socket and stop the fillers, but let the turn run to
+                    # completion — the full answer still reaches the chat
+                    # bridge/transcript instead of dying at `0 chars`.
+                    print(f"  [{self._key}] listener gone — barge-in OFF, answer continues", flush=True)
+                else:
+                    print(f"  [{self._key}] listener gone — interrupting turn", flush=True)
+                    self.interrupt()
 
             line = self._readline()
             if line is None:
@@ -2708,6 +2746,58 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(
                 200,
                 {"posting": not off, "previous": not previous, "key": key},
+            )
+
+        # Runtime barge-in toggle, set by an admin over the bot's slash
+        # command. Sticky and per-key like /chat/posting: it describes this
+        # conversation's standing behaviour, not one turn.
+        #
+        # X-Barge-In: on | off. `off` DISABLES barge-in cancellation — the
+        # listener speaking mid-turn no longer ends the in-flight answer; the
+        # reply still completes and reaches the chat bridge/transcript. `on`
+        # restores today's behaviour (cancel on barge-in). The default is `on`
+        # — current behaviour stays the safe baseline until a smarter heuristic
+        # has numbers.
+        #
+        # ADMIN SURFACE, same as /chat/posting and /voice/wake: deciding that a
+        # turn may survive a barge-in is an operator call, not state the bot
+        # merely observes. Requires CHAT_BRIDGE_TOKEN and fails closed when it
+        # is unset.
+        if self.path.rstrip("/").endswith("/voice/barge"):
+            supplied = self.headers.get("Authorization", "")
+            expected = f"Bearer {CHAT_BRIDGE_TOKEN}"
+            if not CHAT_BRIDGE_TOKEN or not hmac.compare_digest(supplied, expected):
+                return self._json(401, {"error": {"message": "unauthorized"}})
+            key = self.headers.get("X-Session-Key", "").strip()
+            if not key:
+                # The bot always sends the key, mirroring /voice/solo — a
+                # missing one is a client bug, not something to fold into a
+                # default key.
+                return self._json(400, {"error": {"message": "missing X-Session-Key"}})
+            raw = self.headers.get("X-Barge-In", "").strip().strip("\"'").lower()
+            if not raw:
+                # Bare POST is the query form (from /bargein with no option):
+                # report the current posture without changing it.
+                off = is_barge_in_off(key)
+                return self._json(
+                    200,
+                    {"cancel": not off, "key": key},
+                )
+            if raw in ("on", "1", "true", "yes"):
+                off = False
+            elif raw in ("off", "0", "false", "no"):
+                off = True
+            else:
+                return self._json(
+                    400,
+                    {"error": {"message": f"bad X-Barge-In: {raw!r} (want on|off)"}},
+                )
+            previous = set_barge_in_off(key, off)
+            state = "OFF (cancel disabled)" if off else "ON (cancel enabled)"
+            print(f"-> BARGE IN [{key}] {state} (was {previous})", flush=True)
+            return self._json(
+                200,
+                {"cancel": not off, "previous": not previous, "key": key},
             )
 
         if self.path.rstrip("/").endswith("/sessions/reset"):

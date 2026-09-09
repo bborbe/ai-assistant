@@ -184,6 +184,49 @@ async function setChatPosting(posting, sessionKey) {
 }
 
 /**
+ * Toggle barge-in cancellation for a conversation — the /bargein command's
+ * back-edge, same per-key flag the shim's turn loop reads.
+ *
+ * `cancel=true` is the normal state: the listener speaking mid-turn ends the
+ * in-flight answer (`listener gone — interrupting turn` → `0 chars`).
+ * `cancel=false` turns cancellation OFF: speaking over the assistant no longer
+ * discards the reply already being produced — the turn runs to completion and
+ * the full answer still reaches the chat bridge/transcript.
+ *
+ * ADMIN SURFACE like `setVoiceWake`: deciding that a turn may survive a
+ * barge-in is an operator decision, so this is authenticated with the
+ * chat-bridge token — see the /voice/wake docstring for the reasoning.
+ *
+ * Failure degrades toward cancellation staying ON — today's behaviour, and
+ * the safe default until a smarter heuristic has a baseline.
+ *
+ * `cancel === null` is the query form (bare /bargein): no X-Barge-In header is
+ * sent, and the shim reports the current posture without changing it.
+ */
+async function setBargeIn(cancel, sessionKey) {
+  try {
+    const headers = {
+      Authorization: `Bearer ${config.chatBridgeToken}`,
+      'X-Session-Key': sessionKey,
+    };
+    if (cancel !== null) headers['X-Barge-In'] = cancel ? 'on' : 'off';
+    const res = await fetch(`${config.baseUrl}/voice/barge`, {
+      method: 'POST',
+      headers,
+    });
+    if (res.status === 404) return { ok: false, unsupported: true };
+    const body = res.ok ? await res.json().catch(() => null) : null;
+    if (res.ok && body && typeof body.cancel === 'boolean') {
+      return { ok: true, cancel: body.cancel };
+    }
+    if (res.ok) return { ok: true };
+    return { ok: false, error: `endpoint ${res.status}` };
+  } catch (e) {
+    return { ok: false, error: e.message, retryable: true };
+  }
+}
+
+/**
  * Set the runtime wake-phrase override for a voice key. `null` clears it.
  *
  * Same shape and same degrade contract as `setVoiceSolo` above: a 404 means the
@@ -368,6 +411,7 @@ module.exports = {
   bindVoiceKey,
   setVoiceSolo,
   setChatPosting,
+  setBargeIn,
   setVoiceWake,
   availableSessions,
   sessionKeyFor,

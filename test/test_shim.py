@@ -687,6 +687,51 @@ class VoiceOnlySwitch(unittest.TestCase):
         self.assertTrue(note.endswith("\n\n"), "note is ready to prepend to the prompt")
 
 
+class BargeInSwitch(unittest.TestCase):
+    """The barge-in switch: let a turn survive the listener speaking mid-turn.
+
+    Mirrors the voice-only switch — per-key, sticky, default off — because the
+    setting describes THIS conversation, not the whole shim. The failure
+    direction matters: an unknown key must default to cancellation ON (the
+    switch is opt-in per conversation, and nothing may change for everyone
+    else).
+    """
+
+    KEY = "voice:test"
+
+    def setUp(self):
+        self._previous = shim.is_barge_in_off(self.KEY)
+        shim.set_barge_in_off(self.KEY, False)
+
+    def tearDown(self):
+        shim.set_barge_in_off(self.KEY, self._previous)
+
+    def test_unknown_key_defaults_to_cancellation_on(self):
+        # The load-bearing direction: a key the switch never touched must behave
+        # exactly as before the feature existed — barge-in cancels the answer.
+        self.assertFalse(shim.is_barge_in_off("voice:never-seen"))
+
+    def test_set_barge_in_off_returns_the_previous_value(self):
+        self.assertFalse(shim.set_barge_in_off(self.KEY, True))
+        self.assertTrue(shim.set_barge_in_off(self.KEY, False))
+
+    def test_per_key_state_is_isolated_between_keys(self):
+        shim.set_barge_in_off("voice:111111", True)
+        shim.set_barge_in_off("voice:222222", False)
+        self.assertTrue(shim.is_barge_in_off("voice:111111"))
+        self.assertFalse(shim.is_barge_in_off("voice:222222"))
+        self.assertFalse(shim.is_barge_in_off("voice:999999"))
+
+    def test_the_gate_reads_the_flag_off_a_key(self):
+        # The shim's turn loop asks `is_barge_in_off(key)` at the exact moment
+        # the listener disappears. Turning the flag back on must restore the
+        # old behaviour for that key without affecting any other.
+        shim.set_barge_in_off(self.KEY, True)
+        self.assertTrue(shim.is_barge_in_off(self.KEY))
+        shim.set_barge_in_off(self.KEY, False)
+        self.assertFalse(shim.is_barge_in_off(self.KEY))
+
+
 class VoiceYieldHandover(unittest.TestCase):
     """LAST JOINER WINS: who gets asked to leave voice when the bind changes.
 
