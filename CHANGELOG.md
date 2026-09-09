@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: in voice-only mode a truncated reply no longer says "The details are in the chat." — the shim's `_MORE_LINE` pointed the listener at a channel that was deliberately silenced, so the spoken tail now names the transcript instead (`The details are in the transcript.`), driven by the same per-conversation `chat_off` flag the chat bridge already reads. Chat-posting mode is unchanged.
+
 ## v0.32.0
 
 - feat: `/bargein` toggles barge-in cancellation at runtime per conversation — with it off, the listener speaking mid-turn no longer ends the in-flight answer (`listener gone — interrupting turn` → `0 chars`); the turn runs to completion and the full answer still reaches the chat bridge/transcript. The flag lives on the shim (`/voice/barge`, keyed per conversation like the voice-only switch), is flipped from Discord via the new admin slash command, logs on flip (`-> BARGE IN [key] …`), and defaults to `on` (today's cancellation) until a smarter heuristic has a baseline. Voice-only: the command is not registered on text-only instances.

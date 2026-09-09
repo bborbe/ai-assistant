@@ -1562,6 +1562,23 @@ SPOKEN_MAX = setting("SHIM_SPOKEN_MAX", "voice.spoken_max", 2)
 # already in the channel by the time this is heard, so "if you want it" invited
 # the listener to ask for something they had already been given.
 _MORE_LINE = "The details are in the chat."
+# Voice-only variant: the chat channel is deliberately silenced, so pointing
+# there sends the listener to a place nothing was posted. The written copy is
+# the transcript instead. Kept parallel to _MORE_LINE so the spoken tail still
+# says where the rest went — dropping it entirely made the cut sound like a
+# fault (see the comment where _MORE_LINE is emitted in `push()`).
+_MORE_LINE_VOICE = "The details are in the transcript."
+
+
+def _more_line(voice_only: bool) -> str:
+    """The truncation notice, chosen by whether chat posting is silenced.
+
+    Module-level so the branch is unit-testable: `push()` lives inside `ask()`
+    and needs a live Claude subprocess, which no test wants to spawn.
+    """
+    return _MORE_LINE_VOICE if voice_only else _MORE_LINE
+
+
 # Two sentences each, for the same reason as _CHECK_LINES: speech-to-speech
 # releases a sentence only once the next has started, so a lone line would wait
 # for the answer and arrive just before it — useless.
@@ -2072,7 +2089,7 @@ class ClaudeProcess:
                 return line
 
     def ask(self, prompt: str, on_text=None, is_gone=None,
-            already_held=False) -> tuple[str, bool]:
+            already_held=False, voice_only=False) -> tuple[str, bool]:
         """Run one turn. `on_text` receives assistant text as it arrives.
 
         The `assistant` event carries the reply BEFORE `result` — measured 6.1s
@@ -2081,6 +2098,11 @@ class ClaudeProcess:
         therefore throws away speech-ready text; emitting on `assistant` lets
         TTS start earlier and lets the model say "let me check" while it works,
         which is exactly what the voice prompt asks for and never got.
+
+        `voice_only` selects the truncation notice: with the chat channel
+        silenced, "the details are in the chat" would send the listener to a
+        place nothing was posted, so the spoken tail points at the transcript
+        instead (see `_MORE_LINE_VOICE` in `push()`).
 
         Returns `(text, truncated)` — `truncated` is whether the SPOKEN_MAX cap
         actually cut something short (see `push()`), so a caller can tell "the
@@ -2161,7 +2183,10 @@ class ClaudeProcess:
                     mark_spoken()
                     return
                 truncated = True
-                part = _MORE_LINE
+                # Voice-only never posts to the channel, so the ordinary line
+                # would point the listener at a place nothing was written; the
+                # written copy is the transcript instead. See `_more_line()`.
+                part = _more_line(voice_only)
             try:
                 on_text(part)
             except ClientGone:
@@ -2392,7 +2417,7 @@ def drop_process(key: str) -> None:
 
 
 def ask_claude(key: str, system: str, prompt: str, on_text=None, is_gone=None,
-               already_held=False) -> tuple[str, bool, bool]:
+               already_held=False, voice_only=False) -> tuple[str, bool, bool]:
     """Ask over the persistent process, respawning once if it has died.
 
     Returns `(text, truncated, ok)`. `ok` is False on every error/timeout
@@ -2408,7 +2433,8 @@ def ask_claude(key: str, system: str, prompt: str, on_text=None, is_gone=None,
         began = time.monotonic()
         try:
             out, truncated = proc.ask(prompt, on_text=on_text, is_gone=is_gone,
-                                       already_held=already_held)
+                                       already_held=already_held,
+                                       voice_only=voice_only)
             mark_started(key)
             print(f"  [{key}] {time.monotonic() - began:.1f}s, {len(out)} chars", flush=True)
             return out, truncated, True
@@ -3056,7 +3082,8 @@ class Handler(BaseHTTPRequestHandler):
                     key, "\n\n".join(parts), prompt,
                     on_text=on_text if live else None,
                     is_gone=(lambda: peer_hung_up(self.connection)) if live else None,
-                    already_held=pre_spoken)
+                    already_held=pre_spoken,
+                    voice_only=chat_off)
         finally:
             stop_keepalive.set()
 
