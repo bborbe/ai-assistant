@@ -73,6 +73,21 @@ function buildCommands({ voiceEnabled }) {
               { name: 'auto', value: 'auto' },
             ),
         ),
+      // Voice-only for the same reason join/leave are: barge-in cancellation
+      // gates VOICE turns and nothing else, so on a text-only instance the
+      // command would advertise control over a gate that never runs. Unlike
+      // /wakephrase it does not need a live call — the flag lives on the shim,
+      // keyed per conversation, and can be set any time from the call's text
+      // chat (bare invocation is the query form).
+      new SlashCommandBuilder()
+        .setName('bargein')
+        .setDescription('Show or change whether speaking over me mid-turn cancels the answer')
+        .addStringOption((o) =>
+          o
+            .setName('mode')
+            .setDescription('on = speaking over me cuts the answer (default) · off = let it finish')
+            .addChoices({ name: 'on', value: 'on' }, { name: 'off', value: 'off' }),
+        ),
     );
   }
 

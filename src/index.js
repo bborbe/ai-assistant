@@ -5,7 +5,7 @@ const { Client, GatewayIntentBits, Partials, REST, Routes, MessageFlags } = requ
 const config = require('./config');
 const voice = require('./voice');
 const text = require('./text');
-const { sessionKeyFor, setChatPosting } = require('./llm');
+const { sessionKeyFor, setChatPosting, setBargeIn } = require('./llm');
 const { buildCommands, VOICE_DISABLED_REPLY } = require('./slash-commands');
 const log = require('./log');
 const { startHealthServer } = require('./health');
@@ -172,7 +172,10 @@ client.on('interactionCreate', async (i) => {
   // keeps a guild's previous command list until the new one is PUT, so an
   // instance restarted into text-only can still receive them for a moment.
   if (
-    (i.commandName === 'join' || i.commandName === 'leave' || i.commandName === 'wakephrase') &&
+    (i.commandName === 'join' ||
+      i.commandName === 'leave' ||
+      i.commandName === 'wakephrase' ||
+      i.commandName === 'bargein') &&
     !config.voiceEnabled
   ) {
     return i.reply({ content: VOICE_DISABLED_REPLY, flags: MessageFlags.Ephemeral });
@@ -274,6 +277,34 @@ client.on('interactionCreate', async (i) => {
     const mode = posting ? 'voice-text' : 'voice-only';
     return i.editReply(
       `This conversation is now **${mode}**: ${posting ? 'I speak and post to the channel' : 'I speak and never post to the channel'}.`,
+    );
+  }
+
+  if (i.commandName === 'bargein') {
+    // Same shape as /mode, deliberately not /wakephrase: the flag lives on the
+    // shim keyed per conversation, not on a live Session, so no call needs to
+    // be up to flip it. One localhost POST to the shim, far inside the 3s
+    // deadline — still deferred because it reaches the network, and still
+    // ephemeral so the reply is not written into the call's chat.
+    //
+    // Bare invocation is the query form: no `mode` option means the shim
+    // reports the current posture without changing it, so "is it off right
+    // now?" is answerable without a third command — same shape as /wakephrase.
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    const key = sessionKeyFor(i.channel, i.user.id);
+    const mode = i.options.getString('mode');
+    const result = await setBargeIn(mode === null ? null : mode === 'on', key);
+    if (!result.ok) {
+      const reason = result.unsupported
+        ? 'the backend does not support runtime barge-in toggles'
+        : result.error || 'the endpoint is unreachable';
+      return i.editReply(`Could not change it (${reason}). Barge-in cancellation stays as it was.`);
+    }
+    const cancel = result.cancel ?? mode !== 'off';
+    return i.editReply(
+      cancel
+        ? 'Barge-in cancellation is **on**: speaking over me mid-turn still cuts the answer off.'
+        : 'Barge-in cancellation is **off**: speaking over me no longer discards the answer I am producing — it still completes and reaches the chat.',
     );
   }
 

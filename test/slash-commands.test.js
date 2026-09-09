@@ -16,7 +16,7 @@ const names = (opts) => buildCommands(opts).map((c) => c.name);
 // list so adding a voice command means updating this in exactly one place —
 // `wakephrase` was added here after it shipped as the third member and the old
 // hard-coded `join`/`leave` filter turned it into a text-surface regression.
-const VOICE_ONLY = ['join', 'leave', 'wakephrase'];
+const VOICE_ONLY = ['join', 'leave', 'wakephrase', 'bargein'];
 
 test('voice enabled advertises the voice commands', () => {
   const n = names({ voiceEnabled: true });
@@ -46,6 +46,17 @@ test('disabling voice removes only the voice commands', () => {
   for (const n of ['status', 'new', 'sessions', 'switch', 'mode']) {
     assert.ok(disabled.includes(n), `${n} must survive with voice disabled`);
   }
+});
+
+test('/bargein advertises both on and off choices', () => {
+  // `on` and `off` are the only two postures the shim's flag takes: `on`
+  // (default) cancels the in-flight answer when the listener speaks mid-turn,
+  // `off` lets it finish. A choice silently dropping from the list is exactly
+  // the class of regression the other tests here exist to catch.
+  const bargein = buildCommands({ voiceEnabled: true }).find((c) => c.name === 'bargein');
+  assert.ok(bargein, '/bargein must be registered');
+  const choices = bargein.options[0].choices.map((c) => c.value);
+  assert.deepEqual(choices.sort(), ['off', 'on']);
 });
 
 test('/mode advertises both voice-only and voice-text choices', () => {
