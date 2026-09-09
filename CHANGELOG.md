@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.33.0
 
 - feat: the runtime barge-in toggle is now `/interrupt` (renamed from `/bargein`, v0.32.0) — same per-conversation `on|off` semantics and `/voice/barge` back-end, same bare-query form; user-facing log lines now read `-> INTERRUPT [key] …` and `listener gone — interrupt OFF, answer continues`.
 
