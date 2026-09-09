@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.35.0
 
 - feat: log progress-line emission in the shim with a monotonic timestamp — `shim.log` now shows when a spoken filler was actually handed to the voice path, so "generated but swallowed" and "never generated" are distinguishable on a slow turn (was indistinguishable before; the emission is keyed like the other `[key]` lines).
 
