@@ -2262,6 +2262,13 @@ class ClaudeProcess:
             try:
                 on_text(line)
                 mark_spoken()
+                # shim.log must show when a progress line was actually handed
+                # to the voice path — otherwise "generated but swallowed" and
+                # "never generated" are indistinguishable on a slow turn.
+                print(
+                    f"  [{self._key}] progress line emitted at {time.monotonic():.3f}s: {line!r}",
+                    flush=True,
+                )
             except ClientGone:
                 gone = True
             except Exception:
