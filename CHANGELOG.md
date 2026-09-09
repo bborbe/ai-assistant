@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.32.1
 
 - fix: in voice-only mode a truncated reply no longer says "The details are in the chat." — the shim's `_MORE_LINE` pointed the listener at a channel that was deliberately silenced, so the spoken tail now names the transcript instead (`The details are in the transcript.`), driven by the same per-conversation `chat_off` flag the chat bridge already reads. Chat-posting mode is unchanged.
 
