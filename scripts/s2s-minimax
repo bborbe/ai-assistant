@@ -96,7 +96,8 @@ export OPENAI_API_KEY="$MINIMAX_KEY"
 S2S_MODE="${S2S_MODE:-local}"
 MODE_ARGS=(--mode "$S2S_MODE")
 if [ "$S2S_MODE" = "realtime" ]; then
-  MODE_ARGS+=(--ws_host "${S2S_WS_HOST:-127.0.0.1}" --ws_port "${S2S_WS_PORT:-8765}")
+  # Upstream renamed the websocket bind args to --host/--port (RealtimeServerArguments).
+  MODE_ARGS+=(--host "${S2S_WS_HOST:-127.0.0.1}" --port "${S2S_WS_PORT:-8765}")
 fi
 
 LANG_ARGS=()
