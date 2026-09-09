@@ -176,6 +176,22 @@ async function handleVoiceRebindPost(req, send) {
  *   POST /voice/yield — LAST JOINER WINS handover (see handleVoiceYieldPost).
  *   POST /voice/rebind — shim restarted, re-announce live binds (see handleVoiceRebindPost).
  */
+/**
+ * Readiness predicate for startHealthServer. A bot is ready when the gateway
+ * is connected, it holds at least one guild, the optional gchat transport is
+ * up, and it is not draining.
+ *
+ * The guild-count clause is the hardening for the silent-skip failure that hid
+ * a week of stale slash commands: reaching `ready` with an empty guild cache
+ * (e.g. a rejected gateway intent) means the registration loop iterated
+ * nothing, and a bot that registers nothing must not report healthy. It lives
+ * in the readiness predicate, not /healthz, because readiness is the dependency
+ * check that is allowed to drain traffic — see the doc block above.
+ */
+function isReady({ gatewayReady, guildCount, gchatEnabled, gchatReady, draining }) {
+  return Boolean(gatewayReady && guildCount > 0 && (!gchatEnabled || gchatReady) && !draining);
+}
+
 function startHealthServer({ port, host, isReady, build }) {
   const server = http.createServer((req, res) => {
     const send = (code, body) => {
@@ -247,4 +263,4 @@ function startHealthServer({ port, host, isReady, build }) {
   return server;
 }
 
-module.exports = { startHealthServer };
+module.exports = { startHealthServer, isReady };

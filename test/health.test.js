@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { startHealthServer } = require('../src/health');
+const { startHealthServer, isReady } = require('../src/health');
 const config = require('../src/config');
 const voice = require('../src/voice');
 
@@ -47,6 +47,81 @@ test('readiness is 503 when draining, so k8s removes us from endpoints', async (
     assert.equal(res.status, 503);
     assert.deepEqual(await res.json(), { status: 'not-ready' });
   });
+});
+
+test('isReady is false with zero guilds even when the gateway is connected', () => {
+  assert.equal(
+    isReady({
+      gatewayReady: true,
+      guildCount: 0,
+      gchatEnabled: false,
+      gchatReady: false,
+      draining: false,
+    }),
+    false,
+  );
+});
+
+test('isReady is true with the gateway connected and at least one guild', () => {
+  assert.equal(
+    isReady({
+      gatewayReady: true,
+      guildCount: 1,
+      gchatEnabled: false,
+      gchatReady: false,
+      draining: false,
+    }),
+    true,
+  );
+});
+
+test('isReady is false while draining regardless of guild count', () => {
+  assert.equal(
+    isReady({
+      gatewayReady: true,
+      guildCount: 1,
+      gchatEnabled: false,
+      gchatReady: false,
+      draining: true,
+    }),
+    false,
+  );
+});
+
+test('isReady is false before the gateway connects even with guilds cached', () => {
+  assert.equal(
+    isReady({
+      gatewayReady: false,
+      guildCount: 1,
+      gchatEnabled: false,
+      gchatReady: false,
+      draining: false,
+    }),
+    false,
+  );
+});
+
+test('isReady requires gchatReady when gchat is enabled', () => {
+  assert.equal(
+    isReady({
+      gatewayReady: true,
+      guildCount: 1,
+      gchatEnabled: true,
+      gchatReady: false,
+      draining: false,
+    }),
+    false,
+  );
+  assert.equal(
+    isReady({
+      gatewayReady: true,
+      guildCount: 1,
+      gchatEnabled: true,
+      gchatReady: true,
+      draining: false,
+    }),
+    true,
+  );
 });
 
 // POST /chat — the shim's chat-bridge back-edge. Fails closed by default
