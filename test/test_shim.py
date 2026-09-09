@@ -687,6 +687,39 @@ class VoiceOnlySwitch(unittest.TestCase):
         self.assertTrue(note.endswith("\n\n"), "note is ready to prepend to the prompt")
 
 
+class MoreLine(unittest.TestCase):
+    """The truncation notice, chosen by whether chat posting is silenced.
+
+    The regression: in voice-only mode the SPOKEN_MAX cut still ended with
+    "The details are in the chat." — sending the listener to a channel that
+    was deliberately silenced. The branch is a module-level helper (`push()` is
+    a closure inside `ask()` and would need a live Claude subprocess).
+    """
+
+    def test_chat_mode_keeps_the_original_wording(self):
+        # The load-bearing direction: with posting on, nothing may change for
+        # the listener — the exact string everyone already recognises.
+        self.assertEqual(shim._more_line(False), "The details are in the chat.")
+
+    def test_voice_only_mode_points_at_the_transcript(self):
+        # Voice-only never posts to the channel, so the written copy is the
+        # transcript — the line must say so, not send the listener to a
+        # channel where nothing was written.
+        self.assertEqual(shim._more_line(True), "The details are in the transcript.")
+
+    def test_the_two_lines_are_not_identical(self):
+        # A no-op branch (both lines equal) would silently keep the bug alive
+        # while every test above still passes.
+        self.assertNotEqual(shim._more_line(True), shim._more_line(False))
+
+    def test_voice_only_line_still_names_a_place_the_detail_went(self):
+        # Dropping the line entirely made the cut sound like a fault (the
+        # comment at the emission site); the fix must keep pointing somewhere
+        # truthful. "transcript" is that place in voice-only mode.
+        self.assertIn("transcript", shim._more_line(True).lower())
+        self.assertNotIn("chat", shim._more_line(True).lower())
+
+
 class BargeInSwitch(unittest.TestCase):
     """The barge-in switch: let a turn survive the listener speaking mid-turn.
 
