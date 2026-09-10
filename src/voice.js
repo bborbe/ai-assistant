@@ -712,7 +712,7 @@ class Session {
           // to show WHICH surface asked, matching the "(typed) " marker
           // already put on the user's turn.
           this.transcript?.writeText(
-            config.botName,
+            config.assistantLabel,
             this.typedReplyPending ? `(typed→spoken) ${e.transcript}` : e.transcript,
           );
           this.typedReplyPending = false;
@@ -774,7 +774,7 @@ class Session {
             ?.send(`Voice slot is already in use by another identity — leaving (${reason}).`)
             .catch(() => {});
           this.transcript?.writeText(
-            config.botName,
+            config.assistantLabel,
             `(voice: left — slot in use elsewhere: ${reason})`,
           );
           leave(this.guildId);
@@ -806,7 +806,7 @@ class Session {
         // ignored are the same event: silence. Both surfaces the busy path
         // already writes to (src/text.js) get the reason, so whichever one a
         // reader looks at says why nothing was spoken.
-        this.transcript?.writeText(config.botName, `(voice reply failed: ${reason})`);
+        this.transcript?.writeText(config.assistantLabel, `(voice reply failed: ${reason})`);
         this.channel?.send(`Could not answer that out loud (${reason}).`).catch(() => {});
         break;
       }
@@ -1363,7 +1363,7 @@ async function postToChannel(text, { voiceOnly = false } = {}) {
       // full answer — same write postToChannel always does — but the channel
       // stays quiet. The write and the post are deliberately NOT entangled
       // here: silencing one surface must not silence the record.
-      session.transcript?.writeText(config.botName, text);
+      session.transcript?.writeText(config.assistantLabel, text);
       log.info('chat bridge: wrote transcript, channel silenced (voice-only)', {
         channel: session.channelId,
         chars: text.length,
@@ -1371,7 +1371,7 @@ async function postToChannel(text, { voiceOnly = false } = {}) {
       return { posted: false, reason: 'voice-only', channel: session.channelId };
     }
     for (const part of chunk(text)) await session.channel.send(part);
-    session.transcript?.writeText(config.botName, text);
+    session.transcript?.writeText(config.assistantLabel, text);
     log.info('chat bridge: posted to channel', { channel: session.channelId, chars: text.length });
     return { posted: true, channel: session.channelId };
   } catch (e) {
@@ -1405,7 +1405,7 @@ async function yieldVoice(newIdentity) {
       : 'Another identity is taking over voice here — stepping aside.';
     await session.channel?.send(notice).catch(() => {});
     session.transcript?.writeText(
-      config.botName,
+      config.assistantLabel,
       `(voice: yielded to ${newIdentity || 'another identity'})`,
     );
     leave(guildId);

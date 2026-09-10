@@ -70,6 +70,24 @@ test('identity is read verbatim from IDENTITY, trimmed', () => {
   delete process.env.IDENTITY;
 });
 
+// The transcript label must reproduce today's format when IDENTITY is unset —
+// a single-identity install upgrading onto this sees no change at all.
+test('assistantLabel falls back to the bot name when IDENTITY is unset', () => {
+  delete process.env.IDENTITY;
+  delete process.env.BOT_NAME;
+  delete require.cache[require.resolve('../src/config')];
+  assert.equal(require('../src/config').assistantLabel, 'Assistant');
+});
+
+test('assistantLabel is the identity when set, even if BOT_NAME differs', () => {
+  process.env.IDENTITY = 'sc';
+  process.env.BOT_NAME = 'Assistant';
+  delete require.cache[require.resolve('../src/config')];
+  assert.equal(require('../src/config').assistantLabel, 'sc');
+  delete process.env.IDENTITY;
+  delete process.env.BOT_NAME;
+});
+
 // The admin tier is a SUBSET of the allowlist, and both fail closed. The two
 // directions matter independently: an empty ADMIN_USER_IDS must not mean
 // "everyone is an admin" (the failure that hands session control to a guest),

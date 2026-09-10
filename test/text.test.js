@@ -138,7 +138,7 @@ test('a refused speak() is reported in the channel and recorded in the transcrip
   // transcript before routing is even decided — this asserts the NEW
   // failure-reason write lands alongside it, not that it is the only entry.
   assert.deepEqual(live._transcriptWrites.at(-1), {
-    speaker: config.botName,
+    speaker: config.assistantLabel,
     t: '(voice reply failed: busy)',
   });
   assert.equal(msg._sent.length, 1);

@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: transcript speaker label for the bot's own lines is now the `IDENTITY` when set (e.g. `personal`/`sc`/`boss`), so two identities sharing one channel are distinguishable from the transcript alone; falls back to `BOT_NAME`/`Assistant` unchanged when no `IDENTITY` is set.
+
 ## v0.35.1
 
 - fix: `scripts/s2s-minimax` realtime mode passes `--host`/`--port` instead of the removed `--ws_host`/`--ws_port` — upstream speech-to-speech renamed the websocket bind args in `RealtimeServerArguments`, and the old names made s2s fail to start after a fork/main merge.
