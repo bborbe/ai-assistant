@@ -1215,3 +1215,50 @@ class HedgeConsult(unittest.TestCase):
         ):
             with self.subTest(reply=reply):
                 self.assertFalse(shim._HEDGE.search(reply))
+
+
+class ControlRouteAuth(unittest.TestCase):
+    """The shared check on every shim route that mutates state.
+
+    Before 2026-09-10 only three admin routes (/voice/wake, /chat/posting,
+    /voice/barge) authenticated with CHAT_BRIDGE_TOKEN; the other mutating
+    routes — sessions/reset, sessions/bind, voice/bind, voice/solo,
+    turns/typed, chat/completions — accepted any local caller. One check
+    (`control_authorized`) now guards every route in do_POST, and the DoD for
+    the task requires all four cases pinned: valid token, wrong token, absent
+    token, and the empty-token refusal.
+    """
+
+    def setUp(self):
+        self._previous_token = shim.CHAT_BRIDGE_TOKEN
+        shim.CHAT_BRIDGE_TOKEN = "test-token"
+
+    def tearDown(self):
+        shim.CHAT_BRIDGE_TOKEN = self._previous_token
+
+    def test_valid_token_is_authorized(self):
+        self.assertTrue(shim.control_authorized("Bearer test-token"))
+
+    def test_wrong_token_is_refused(self):
+        self.assertFalse(shim.control_authorized("Bearer not-the-token"))
+
+    def test_absent_token_is_refused(self):
+        self.assertFalse(shim.control_authorized(""))
+
+    def test_empty_configured_token_refuses_everything(self):
+        # Fail-closed is the point: a shim that lost its secret must refuse
+        # every mutating route, not admit anyone. Even a "correct" bearer is
+        # refused when the configured token is empty.
+        shim.CHAT_BRIDGE_TOKEN = ""
+        self.assertFalse(shim.control_authorized("Bearer test-token"))
+
+    def test_handler_wires_the_check_to_the_authorization_header(self):
+        # The handler method reads the raw Authorization header into the same
+        # check — the wiring is what makes the guard reach every route.
+        handler = shim.Handler.__new__(shim.Handler)
+        handler.headers = {"Authorization": "Bearer test-token"}
+        self.assertTrue(handler._control_authorized())
+        handler.headers = {"Authorization": "Bearer nope"}
+        self.assertFalse(handler._control_authorized())
+        handler.headers = {}
+        self.assertFalse(handler._control_authorized())
