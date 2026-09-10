@@ -16,7 +16,7 @@ const names = (opts) => buildCommands(opts).map((c) => c.name);
 // list so adding a voice command means updating this in exactly one place —
 // `wakephrase` was added here after it shipped as the third member and the old
 // hard-coded `join`/`leave` filter turned it into a text-surface regression.
-const VOICE_ONLY = ['join', 'leave', 'wakephrase', 'interrupt'];
+const VOICE_ONLY = ['join', 'leave', 'wakephrase', 'interrupt', 'transcribe'];
 
 test('voice enabled advertises the voice commands', () => {
   const n = names({ voiceEnabled: true });
@@ -56,6 +56,20 @@ test('/interrupt advertises both on and off choices', () => {
   const interrupt = buildCommands({ voiceEnabled: true }).find((c) => c.name === 'interrupt');
   assert.ok(interrupt, '/interrupt must be registered');
   const choices = interrupt.options[0].choices.map((c) => c.value);
+  assert.deepEqual(choices.sort(), ['off', 'on']);
+});
+
+test('/transcribe advertises both on and off choices', () => {
+  // `on` and `off` are the only two postures the flag takes: `on` (default)
+  // writes every speaker down, `off` stops writing this call. A choice
+  // silently dropping from the list is exactly the class of regression the
+  // other tests here exist to catch. Unlike /wakephrase there is no third
+  // `auto` value: a fresh call falls back to the TRANSCRIBE default because
+  // join clears any stale override.
+  const transcribe = buildCommands({ voiceEnabled: true }).find((c) => c.name === 'transcribe');
+  assert.ok(transcribe, '/transcribe must be registered');
+  assert.equal(transcribe.options[0].required, false, 'bare invocation is the query form');
+  const choices = transcribe.options[0].choices.map((c) => c.value);
   assert.deepEqual(choices.sort(), ['off', 'on']);
 });
 

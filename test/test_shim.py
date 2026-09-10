@@ -765,6 +765,53 @@ class BargeInSwitch(unittest.TestCase):
         self.assertFalse(shim.is_barge_in_off(self.KEY))
 
 
+class TranscribeSwitch(unittest.TestCase):
+    """The transcription switch: stop the bot writing THIS conversation down.
+
+    Mirrors the other per-key switches — per-key, sticky, default off — because
+    the setting describes THIS conversation, not the whole shim. Unlike the
+    barge-in and voice-only flags the shim never CONSUMES this one (the bot is
+    the writer), but the store still lives here so the posture is queryable
+    without a live call and both sides agree on one source. The failure
+    direction matters: an unknown key must default to transcription ON (nothing
+    changes for anyone who never toggles it).
+    """
+
+    KEY = "voice:test"
+
+    def setUp(self):
+        self._previous = shim.is_transcribe_off(self.KEY)
+        shim.set_transcribe_off(self.KEY, False)
+
+    def tearDown(self):
+        shim.set_transcribe_off(self.KEY, self._previous)
+
+    def test_unknown_key_defaults_to_transcription_on(self):
+        # The load-bearing direction: a key the switch never touched must behave
+        # exactly as before the feature existed — the call is written down.
+        self.assertFalse(shim.is_transcribe_off("voice:never-seen"))
+
+    def test_set_transcribe_off_returns_the_previous_value(self):
+        self.assertFalse(shim.set_transcribe_off(self.KEY, True))
+        self.assertTrue(shim.set_transcribe_off(self.KEY, False))
+
+    def test_per_key_state_is_isolated_between_keys(self):
+        shim.set_transcribe_off("voice:111111", True)
+        shim.set_transcribe_off("voice:222222", False)
+        self.assertTrue(shim.is_transcribe_off("voice:111111"))
+        self.assertFalse(shim.is_transcribe_off("voice:222222"))
+        self.assertFalse(shim.is_transcribe_off("voice:999999"))
+
+    def test_the_gate_reads_the_flag_off_a_key(self):
+        # The /transcribe route reads `is_transcribe_off(key)` for both the
+        # query form and the set. Flipping off then on must round-trip for that
+        # key without affecting any other.
+        shim.set_transcribe_off(self.KEY, True)
+        self.assertTrue(shim.is_transcribe_off(self.KEY))
+        shim.set_transcribe_off(self.KEY, False)
+        self.assertFalse(shim.is_transcribe_off(self.KEY))
+
+
 class VoiceYieldHandover(unittest.TestCase):
     """LAST JOINER WINS: who gets asked to leave voice when the bind changes.
 

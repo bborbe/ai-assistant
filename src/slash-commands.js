@@ -90,6 +90,28 @@ function buildCommands({ voiceEnabled }) {
             )
             .addChoices({ name: 'on', value: 'on' }, { name: 'off', value: 'off' }),
         ),
+      // Voice-only for the same reason join/leave are: transcription writes
+      // down VOICE turns and nothing else, so on a text-only instance the
+      // command would advertise control over a surface that never runs. The
+      // flag lives on the shim keyed per conversation, so — like /interrupt —
+      // it can be set any time from the call's text chat; the actual gate is
+      // the bot's own transcript writer, which only matters while a call is
+      // up. Unlike /wakephrase and /interrupt, transcription's default
+      // (`TRANSCRIBE`, normally on) is reachable WITHOUT a third `auto`
+      // value: a fresh call falls back to it because `join` clears any stale
+      // override, so the two options on|off plus the bare query form are the
+      // whole surface.
+      new SlashCommandBuilder()
+        .setName('transcribe')
+        .setDescription('Show or change whether this call is being written down')
+        .addStringOption((o) =>
+          o
+            .setName('mode')
+            .setDescription(
+              'on = write every speaker down (default) · off = stop writing this call',
+            )
+            .addChoices({ name: 'on', value: 'on' }, { name: 'off', value: 'off' }),
+        ),
     );
   }
 

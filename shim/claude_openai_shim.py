@@ -813,6 +813,33 @@ def is_barge_in_off(key: str) -> bool:
         return _BARGE_IN_OFF_BY_KEY.get(key, False)
 
 
+# ── transcription switch ───────────────────────────────────────────────────
+# `/transcribe off` stops the BOT writing this conversation down for the rest
+# of the call; `/transcribe on` resumes it. Per-key like the other switches:
+# the setting describes THIS conversation, never the whole shim, so other
+# channels and identities are unaffected. Sticky (not one-shot), and the
+# DEFAULT is unset (transcription ON) — today's behaviour stays the baseline.
+# Recording other people is a consent matter, so turning it OFF must always be
+# possible, but nothing changes for anyone who never toggles it.
+_TRANSCRIBE_OFF_BY_KEY: dict[str, bool] = {}
+_TRANSCRIBE_OFF_LOCK = Lock()
+
+
+def set_transcribe_off(key: str, off: bool) -> bool:
+    """Set the transcription-off flag for a conversation key. Returns the previous."""
+    with _TRANSCRIBE_OFF_LOCK:
+        previous = _TRANSCRIBE_OFF_BY_KEY.get(key, False)
+        _TRANSCRIBE_OFF_BY_KEY[key] = bool(off)
+    return previous
+
+
+def is_transcribe_off(key: str) -> bool:
+    """Look up transcription-off state by key. Unknown keys return False —
+    transcription stays ON, exactly as before the switch existed."""
+    with _TRANSCRIBE_OFF_LOCK:
+        return _TRANSCRIBE_OFF_BY_KEY.get(key, False)
+
+
 def voice_key() -> str:
     with _VOICE_KEY_LOCK:
         return _VOICE_KEY
@@ -2863,6 +2890,54 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(
                 200,
                 {"cancel": not off, "previous": not previous, "key": key},
+            )
+
+        # Runtime transcription toggle, set by an admin over the bot's slash
+        # command. Sticky and per-key like /voice/barge: it describes this
+        # conversation's standing behaviour, not one turn. Unlike the other
+        # switches the shim does not CONSUME this flag — the bot writes the
+        # transcripts — but the store still lives here so the posture is
+        # queryable without a live call and both sides agree on one source.
+        #
+        # X-Transcribe: on | off. `off` stops the bot writing this call down;
+        # `on` restores the default. Bare POST (no header) is the query form:
+        # report the current posture without changing it.
+        #
+        # ADMIN SURFACE, same as the other three: deciding what gets written
+        # down is an operator call, not state the bot merely observes. Guarded
+        # by the shared control-plane check at the top of do_POST (the same
+        # CHAT_BRIDGE_TOKEN the shim's chat-bridge posts carry).
+        if self.path.rstrip("/").endswith("/voice/transcribe"):
+            key = self.headers.get("X-Session-Key", "").strip()
+            if not key:
+                # The bot always sends the key, mirroring the sibling routes —
+                # a missing one is a client bug, not something to fold into a
+                # default key.
+                return self._json(400, {"error": {"message": "missing X-Session-Key"}})
+            raw = self.headers.get("X-Transcribe", "").strip().strip("\"'").lower()
+            if not raw:
+                # Bare POST is the query form (from /transcribe with no option):
+                # report the current posture without changing it.
+                off = is_transcribe_off(key)
+                return self._json(
+                    200,
+                    {"transcribe": not off, "key": key},
+                )
+            if raw in ("on", "1", "true", "yes"):
+                off = False
+            elif raw in ("off", "0", "false", "no"):
+                off = True
+            else:
+                return self._json(
+                    400,
+                    {"error": {"message": f"bad X-Transcribe: {raw!r} (want on|off)"}},
+                )
+            previous = set_transcribe_off(key, off)
+            state = "OFF (not writing down)" if off else "ON (writing down)"
+            print(f"-> TRANSCRIBE [{key}] {state} (was {previous})", flush=True)
+            return self._json(
+                200,
+                {"transcribe": not off, "previous": not previous, "key": key},
             )
 
         if self.path.rstrip("/").endswith("/sessions/reset"):

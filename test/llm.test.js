@@ -415,3 +415,74 @@ test('setInterrupt distinguishes unsupported from broken', async () => {
     global.fetch = realFetch;
   }
 });
+
+test('setTranscribe carries the posture and the conversation key', async () => {
+  // The /transcribe slash command's back-edge. The shim's per-key store is the
+  // authoritative posture, so the header has to name the exact conversation —
+  // a missing or wrong X-Session-Key would either be rejected by the route or
+  // flip a different conversation's transcription.
+  const { setTranscribe } = require('../src/llm');
+  const realFetch = global.fetch;
+  let captured;
+  try {
+    global.fetch = async (_url, init) => {
+      captured = init;
+      return { ok: true, status: 200, json: async () => ({ transcribe: true }) };
+    };
+    const off = await setTranscribe(false, 'voice:G1:personal');
+    assert.equal(captured.method, 'POST');
+    assert.equal(captured.headers['X-Transcribe'], 'off');
+    assert.equal(captured.headers['X-Session-Key'], 'voice:G1:personal');
+    assert.deepEqual(off, { ok: true, transcribe: true });
+    await setTranscribe(true, 'voice:G1:personal');
+    assert.equal(captured.headers['X-Transcribe'], 'on');
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
+test('setTranscribe query form sends no X-Transcribe and reads the state back', async () => {
+  // Bare /transcribe (no option) is the query form: no posture header, and the
+  // returned `transcribe` is the shim's current state — so the reply can say
+  // "we are being written down" without a third round trip.
+  const { setTranscribe } = require('../src/llm');
+  const realFetch = global.fetch;
+  let captured;
+  try {
+    global.fetch = async (_url, init) => {
+      captured = init;
+      return { ok: true, status: 200, json: async () => ({ transcribe: false }) };
+    };
+    const query = await setTranscribe(null, 'voice:G1:personal');
+    assert.equal(captured.headers['X-Transcribe'], undefined);
+    assert.equal(captured.headers['X-Session-Key'], 'voice:G1:personal');
+    assert.deepEqual(query, { ok: true, transcribe: false });
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
+test('setTranscribe distinguishes unsupported from broken', async () => {
+  // Same contract as setInterrupt: an endpoint without /voice/transcribe (any
+  // stateless backend) must degrade gracefully — transcription stays as it
+  // was (ON, the default), the user gets told the backend does not support the
+  // toggle, and nothing wedges.
+  const { setTranscribe } = require('../src/llm');
+  const realFetch = global.fetch;
+  try {
+    global.fetch = async () => ({ ok: false, status: 404 });
+    assert.deepEqual(await setTranscribe(false, 'voice:G1'), { ok: false, unsupported: true });
+
+    global.fetch = async () => ({ ok: false, status: 500 });
+    assert.deepEqual(await setTranscribe(false, 'voice:G1'), { ok: false, error: 'endpoint 500' });
+
+    global.fetch = async () => {
+      throw new Error('connect ECONNREFUSED');
+    };
+    const down = await setTranscribe(false, 'voice:G1');
+    assert.equal(down.retryable, true);
+    assert.match(down.error, /ECONNREFUSED/);
+  } finally {
+    global.fetch = realFetch;
+  }
+});

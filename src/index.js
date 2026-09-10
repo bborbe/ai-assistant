@@ -5,7 +5,7 @@ const { Client, GatewayIntentBits, Partials, REST, Routes, MessageFlags } = requ
 const config = require('./config');
 const voice = require('./voice');
 const text = require('./text');
-const { sessionKeyFor, setChatPosting, setInterrupt } = require('./llm');
+const { sessionKeyFor, setChatPosting, setInterrupt, setTranscribe } = require('./llm');
 const { buildCommands, VOICE_DISABLED_REPLY } = require('./slash-commands');
 const log = require('./log');
 const { startHealthServer, isReady } = require('./health');
@@ -199,7 +199,8 @@ client.on('interactionCreate', async (i) => {
     (i.commandName === 'join' ||
       i.commandName === 'leave' ||
       i.commandName === 'wakephrase' ||
-      i.commandName === 'interrupt') &&
+      i.commandName === 'interrupt' ||
+      i.commandName === 'transcribe') &&
     !config.voiceEnabled
   ) {
     return i.reply({ content: VOICE_DISABLED_REPLY, flags: MessageFlags.Ephemeral });
@@ -329,6 +330,38 @@ client.on('interactionCreate', async (i) => {
       cancel
         ? 'Interrupt is **on**: speaking over me mid-turn still cuts the answer off.'
         : 'Interrupt is **off**: speaking over me no longer discards the answer I am producing — it still completes and reaches the chat.',
+    );
+  }
+
+  if (i.commandName === 'transcribe') {
+    // Same shape as /interrupt, deliberately not /wakephrase: the flag lives on
+    // the shim keyed per conversation, so no call needs to be up to flip it —
+    // but the GATE is this bot's own transcript writer, so a live session gets
+    // its local mirror updated only after the shim took the change.
+    //
+    // Bare invocation is the query form: no `mode` option means the shim
+    // reports the current posture without changing it, so "are we being
+    // written down right now?" is answerable without a third command.
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    const key = sessionKeyFor(i.channel, i.user.id);
+    const mode = i.options.getString('mode');
+    const result = await setTranscribe(mode === null ? null : mode === 'on', key);
+    if (!result.ok) {
+      const reason = result.unsupported
+        ? 'the backend does not support runtime transcription toggles'
+        : result.error || 'the endpoint is unreachable';
+      return i.editReply(`Could not change it (${reason}). Transcription stays as it is.`);
+    }
+    // Adopt locally only if the shim took it. No live session (e.g. bare query
+    // from the call's text chat after the call already ended) simply leaves
+    // the store authoritative for the next join, which clears it anyway.
+    const session = voice.sessions.get(i.guildId);
+    if (session && !session.closed) session.setTranscribing(result.transcribe);
+    const writing = result.transcribe;
+    return i.editReply(
+      writing
+        ? 'Transcription is **on**: every speaker is written down again.'
+        : 'Transcription is **off**: nothing more is written down for this call.',
     );
   }
 
