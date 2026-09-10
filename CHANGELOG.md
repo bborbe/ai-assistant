@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: shim control-route refusals are now logged, not silent — an unset `CHAT_BRIDGE_TOKEN` prints `control route: CHAT_BRIDGE_TOKEN not set — refusing every mutating route` and a wrong/missing token prints `control route: missing or wrong token — refused` (mirroring the chat-bridge guard's "not set — skipping post"), so a fail-closed shim is diagnosable from `shim.log` instead of indistinguishable from a broken route.
+
 ## v0.36.0
 
 - feat: add `/transcribe on|off` slash command to toggle transcription mid-call, per conversation, without restarting the bot — the last env-only knob in the runtime-toggle family. The shim holds a per-key store behind an authenticated `/voice/transcribe` route (bare invocation is the query form); the bot mirrors the state into the live call's session, where it gates every transcript write. A fresh call falls back to the `TRANSCRIBE` env default.
