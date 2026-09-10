@@ -196,6 +196,19 @@ class Session {
 
     // Transcript path — EVERY speaker, independent of the command allowlist.
     // Buffers here are flushed on each speaker's silence boundary.
+    //
+    // `transcript` doubles as the runtime transcription toggle: it is null
+    // while this call is NOT being written down (either the TRANSCRIBE env
+    // default was off at join, or an admin ran /transcribe off mid-call), and
+    // non-null while it is. Every write path and the non-allowlisted-speaker
+    // subscription guard already branch on `this.transcript`, so a toggle is
+    // just constructing or dropping the session — no separate flag to drift.
+    // The names are kept so /transcribe on can construct one mid-call.
+    this.guildName = guildName;
+    this.channelName = channelName;
+    // The stable holder across a toggle-off, so a call paused then resumed
+    // stays ONE transcript session (no second `## session` header mid-call).
+    this.transcriptSession = null;
     this.transcript = config.transcribe ? new TranscriptSession(guildName, channelName) : null;
     this.utterance = new Map(); // userId -> Buffer (48k stereo, as captured)
     this.flushTimers = new Map(); // userId -> pending flush
@@ -222,6 +235,29 @@ class Session {
     // SILENCE. Without this fixed-rate pump sending silence between utterances
     // the turn never ends and no reply is ever produced.
     this.pump = setInterval(() => this.tick(), TICK_MS);
+  }
+
+  /**
+   * Flip whether THIS call is written down, mid-call.
+   *
+   * Called by the /transcribe handler AFTER the shim's per-key store took the
+   * change — the bot mirrors the shim, it never leads it. (A fresh call's
+   * starting posture is set directly from the TRANSCRIBE env default in the
+   * constructor, not through here.) Enabling reuses the session captured by a
+   * previous disable, so a call toggled off then on stays ONE transcript
+   * rather than fragmenting into a second `## session` header; disabling
+   * drops `this.transcript`, which makes every existing guard — writes, flush
+   * scheduling, and the non-allowlisted speaker subscription decision — go
+   * quiet with no separate flag to keep in sync.
+   */
+  setTranscribing(on) {
+    if (on && !this.transcript) {
+      this.transcript =
+        this.transcriptSession ?? new TranscriptSession(this.guildName, this.channelName);
+    } else if (!on && this.transcript) {
+      this.transcriptSession = this.transcript;
+      this.transcript = null;
+    }
   }
 
   listen(userId) {
@@ -1052,6 +1088,18 @@ async function join(channel) {
     // purpose: a shim with no /voice/wake route has no override to clear.
     log.warn('voice: could not clear a previous call’s wake override', {
       error: cleared.error,
+      voiceKey,
+    });
+  }
+  // Same deal for transcription: the fresh Session above already starts from
+  // the TRANSCRIBE env default, and clearing the shim's per-key store here is
+  // what keeps the two sides from disagreeing — without it, a bare
+  // `/transcribe` query in this call would report the previous call's posture
+  // while the bot is writing (or not) per the env default.
+  const transcribeCleared = await llm.setTranscribe(null, voiceKey);
+  if (!transcribeCleared.ok && !transcribeCleared.unsupported) {
+    log.warn('voice: could not clear a previous call’s transcription override', {
+      error: transcribeCleared.error,
       voiceKey,
     });
   }

@@ -49,15 +49,18 @@ const llm = require('../src/llm');
 const realMarkTypedTurn = llm.markTypedTurn;
 const realSetVoiceSolo = llm.setVoiceSolo;
 const realSetVoiceWake = llm.setVoiceWake;
+const realSetTranscribe = llm.setTranscribe;
 let typedTurnCalls = [];
 let voiceSoloCalls = [];
 let voiceWakeCalls = [];
+let transcribeCalls = [];
 
 test.beforeEach(() => {
   voice.sessions.clear();
   typedTurnCalls = [];
   voiceSoloCalls = [];
   voiceWakeCalls = [];
+  transcribeCalls = [];
   llm.markTypedTurn = async (key, typed = true) => {
     typedTurnCalls.push({ key, typed });
     return true;
@@ -70,12 +73,17 @@ test.beforeEach(() => {
     voiceWakeCalls.push({ value, key });
     return { ok: true };
   };
+  llm.setTranscribe = async (value, key) => {
+    transcribeCalls.push({ value, key });
+    return { ok: true };
+  };
 });
 
 test.after(() => {
   llm.markTypedTurn = realMarkTypedTurn;
   llm.setVoiceSolo = realSetVoiceSolo;
   llm.setVoiceWake = realSetVoiceWake;
+  llm.setTranscribe = realSetTranscribe;
 });
 
 // speak() awaits the typed-turn hint BEFORE touching the socket, so the two
@@ -1425,3 +1433,66 @@ function makeChannel({ humans, bots = 0 }) {
   ];
   return { members: fakeMembers(users) };
 }
+
+test('setTranscribing(false) drops the transcript so nothing more is written', () => {
+  // The /transcribe toggle's gate: with the session dropped, every existing
+  // `if (this.transcript)` guard — segment writes, text writes, flush
+  // scheduling — goes quiet. No separate flag to keep in sync.
+  const session = Object.create(Session.prototype);
+  session.guildName = 'TestGuild';
+  session.channelName = 'TestChannel';
+  session.transcript = { write: () => 'file', writeText: () => 'file' };
+  session.setTranscribing(false);
+  assert.equal(session.transcript, null);
+});
+
+test('setTranscribing(true) constructs a live transcript when none exists', () => {
+  // Toggled on mid-call from a `TRANSCRIBE=0` join: the session starts with no
+  // transcript (null), and /transcribe on must build one so writes resume.
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'transcribe-toggle-'));
+  const originalDir = config.transcriptDir;
+  config.transcriptDir = dir;
+  try {
+    const session = Object.create(Session.prototype);
+    session.guildName = 'TestGuild';
+    session.channelName = 'TestChannel';
+    session.transcript = null;
+    session.setTranscribing(true);
+    assert.ok(session.transcript, 'on must construct a transcript session');
+    // ~420ms of 48k stereo PCM — above the 400ms click/breath floor, so the
+    // write must land on disk.
+    const file = session.transcript.write('u1', 'Alice', Buffer.alloc(80000));
+    assert.ok(file, 'a write while on must produce a segment');
+    assert.ok(fs.existsSync(file), 'and the segment must exist on disk');
+  } finally {
+    config.transcriptDir = originalDir;
+  }
+});
+
+test('setTranscribing toggling off and on keeps one transcript, not fragments', () => {
+  // Toggled off then on again mid-call must resume in the SAME session (same
+  // folder), so the transcript reads as one call rather than two sessions.
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'transcribe-toggle-'));
+  const originalDir = config.transcriptDir;
+  config.transcriptDir = dir;
+  try {
+    const session = Object.create(Session.prototype);
+    session.guildName = 'TestGuild';
+    session.channelName = 'TestChannel';
+    session.transcript = null;
+    session.setTranscribing(true);
+    const first = session.transcript;
+    session.setTranscribing(false);
+    assert.equal(session.transcript, null);
+    session.setTranscribing(true);
+    assert.equal(session.transcript, first, 're-enable must reuse the same session');
+  } finally {
+    config.transcriptDir = originalDir;
+  }
+});
