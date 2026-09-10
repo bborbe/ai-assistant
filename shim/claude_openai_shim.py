@@ -2657,7 +2657,17 @@ class Handler(BaseHTTPRequestHandler):
         # the control-plane token is refused before any route runs, and an
         # unset token refuses everything (fail-closed). GET routes stay open —
         # they only observe. See `control_authorized` for the contract.
+        #
+        # The refusal is logged, not silent — an unset token must be
+        # distinguishable from a broken route (same reason the chat-bridge
+        # guard prints "not set — skipping post"). Two lines because the
+        # diagnosis differs: an unset token is a config gap (nothing on this
+        # side can fix it), a wrong/missing header is a caller bug.
         if not self._control_authorized():
+            if not CHAT_BRIDGE_TOKEN:
+                print("  control route: CHAT_BRIDGE_TOKEN not set — refusing every mutating route", flush=True)
+            else:
+                print("  control route: missing or wrong token — refused", flush=True)
             return self._json(401, {"error": {"message": "unauthorized"}})
 
         if self.path.rstrip("/").endswith("/sessions/bind"):

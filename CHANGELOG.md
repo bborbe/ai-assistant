@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: shim control-route refusals are now logged, not silent — an unset `CHAT_BRIDGE_TOKEN` prints `control route: CHAT_BRIDGE_TOKEN not set — refusing every mutating route` and a wrong/missing token prints `control route: missing or wrong token — refused` (mirroring the chat-bridge guard's "not set — skipping post"), so a fail-closed shim is diagnosable from `shim.log` instead of indistinguishable from a broken route.
+
 ## v0.35.3
 
 - fix: require `CHAT_BRIDGE_TOKEN` on every shim route that mutates state — `sessions/reset`, `sessions/bind`, `voice/bind`, `voice/solo`, `turns/typed`, `chat/completions` (and the three already-guarded admin routes `/voice/wake`, `/chat/posting`, `/voice/barge`) now share one fail-closed check at the top of `do_POST`. GET routes stay open. The bot sends the control token on all mutating routes (was `OPENAI_API_KEY`, whose default is the literal `not-needed`), and the launchd launcher resolves the token for the s2s component too, since `speech-to-speech` reaches the shim's `/chat/completions` directly.

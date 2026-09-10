@@ -1262,3 +1262,42 @@ class ControlRouteAuth(unittest.TestCase):
         self.assertFalse(handler._control_authorized())
         handler.headers = {}
         self.assertFalse(handler._control_authorized())
+
+    def test_do_POST_refuses_without_a_token(self):
+        # The guard runs before any route logic, so a refused request must
+        # return 401 without touching any route — even with no body and no
+        # session store. Also pins the refusal LOG LINE (the task's SC3
+        # evidence): a missing token must be diagnosable from shim.log, not
+        # indistinguishable from a broken route.
+        handler = shim.Handler.__new__(shim.Handler)
+        handler.path = "/v1/sessions/reset"
+        handler.headers = {}
+        handler.rfile = io.BytesIO(b"")
+        handler.wfile = io.BytesIO()
+        handler.requestline = "POST /v1/sessions/reset HTTP/1.1"
+        handler.request_version = "HTTP/1.1"
+        handler.command = "POST"
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            handler.do_POST()
+        self.assertEqual(handler.wfile.getvalue().split(b" ")[1], b"401")
+        self.assertIn("missing or wrong token — refused", captured.getvalue())
+
+    def test_do_POST_refusal_logs_the_unset_token_reason(self):
+        # SC3: an unset token refuses with a DISTINGUISHABLE log line — a
+        # config gap (nothing on the shim side can fix it) reads differently
+        # from a caller sending a wrong/missing header.
+        shim.CHAT_BRIDGE_TOKEN = ""
+        handler = shim.Handler.__new__(shim.Handler)
+        handler.path = "/v1/sessions/reset"
+        handler.headers = {}
+        handler.rfile = io.BytesIO(b"")
+        handler.wfile = io.BytesIO()
+        handler.requestline = "POST /v1/sessions/reset HTTP/1.1"
+        handler.request_version = "HTTP/1.1"
+        handler.command = "POST"
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            handler.do_POST()
+        self.assertEqual(handler.wfile.getvalue().split(b" ")[1], b"401")
+        self.assertIn("CHAT_BRIDGE_TOKEN not set — refusing every mutating route", captured.getvalue())
