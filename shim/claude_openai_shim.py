@@ -209,6 +209,21 @@ CHAT_BRIDGE_URL = setting("SHIM_CHAT_BRIDGE_URL", "chat_bridge.url", "http://127
 CHAT_BRIDGE_TOKEN = os.environ.get("CHAT_BRIDGE_TOKEN", "").strip()
 CHAT_BRIDGE_TIMEOUT = setting("SHIM_CHAT_BRIDGE_TIMEOUT", "chat_bridge.timeout", 5.0)
 
+
+def control_authorized(supplied: str) -> bool:
+    """True iff `supplied` (the raw `Authorization` header value) matches the
+    shared control-plane token.
+
+    The one check that gates every shim route mutating state (see `do_POST`).
+    The bot and the shim authenticate to each other with the same
+    `CHAT_BRIDGE_TOKEN`, exactly like the chat-bridge back-edge. Fail-closed on
+    an empty token: a shim that lost its secret must refuse every mutating
+    route rather than admit anyone who can merely reach the port.
+    """
+    if not CHAT_BRIDGE_TOKEN:
+        return False
+    return hmac.compare_digest(supplied, f"Bearer {CHAT_BRIDGE_TOKEN}")
+
 # The model has no tool for this and makes no decision about it — the posting
 # is done here, in code. But it still has to know the channel is reachable,
 # because otherwise it truthfully reports the old limitation: caught on a live
@@ -2628,6 +2643,17 @@ class Handler(BaseHTTPRequestHandler):
         # is whatever the bot last bound for voice, not a fixed default.
         return self.headers.get("X-Session-Key") or voice_key()
 
+    def _control_authorized(self) -> bool:
+        """The one shared check for every route that mutates state.
+
+        Same token the chat-bridge back-edge uses, read the same way (see
+        `control_authorized`): a request without the right `Authorization:
+        Bearer <CHAT_BRIDGE_TOKEN>` is refused, and an unset token refuses
+        everything. Kept a one-liner so the guard reads identically at every
+        call site and cannot drift from the module-level contract.
+        """
+        return control_authorized(self.headers.get("Authorization", ""))
+
     def do_GET(self):
         path = self.path.rstrip("/")
         if path.endswith("/models"):
@@ -2651,6 +2677,16 @@ class Handler(BaseHTTPRequestHandler):
         self._json(404, {"error": {"message": "not found"}})
 
     def do_POST(self):
+        # Every route in this handler mutates state — sessions, voice bindings,
+        # wake/solo/typing flags, chat-posting posture, and /chat/completions
+        # (which drives a Claude Code session with the assistant's full tool
+        # allowlist). One shared check guards all of them: a request without
+        # the control-plane token is refused before any route runs, and an
+        # unset token refuses everything (fail-closed). GET routes stay open —
+        # they only observe. See `control_authorized` for the contract.
+        if not self._control_authorized():
+            return self._json(401, {"error": {"message": "unauthorized"}})
+
         if self.path.rstrip("/").endswith("/sessions/bind"):
             key = self._key()
             try:
@@ -2714,18 +2750,13 @@ class Handler(BaseHTTPRequestHandler):
         #
         # ADMIN SURFACE: this route carries the decision the bot's
         # config.isAdmin gate makes, so it must not be settable by whatever can
-        # merely reach the port. Bot and shim authenticate to each other with
-        # CHAT_BRIDGE_TOKEN (the same secret the shim's chat-bridge posts carry,
-        # validated on the bot side in src/health.js). Fail closed when it is
-        # unset, mirroring the chat-bridge guard. The sibling sticky routes
-        # (/voice/solo, /voice/bind) stay unauthenticated exactly as they were
-        # before this route existed — they carry state the bot itself writes,
-        # not an operator decision.
+        # merely reach the port. Guarded by the shared control-plane check at
+        # the top of do_POST (the same CHAT_BRIDGE_TOKEN the shim's chat-bridge
+        # posts carry, validated on the bot side in src/health.js). Since the
+        # top-level guard covers EVERY mutating route, /voice/solo and
+        # /voice/bind are now equally protected — the original "siblings stay
+        # unauthenticated" carve-out was the hole this task closes.
         if self.path.rstrip("/").endswith("/voice/wake"):
-            supplied = self.headers.get("Authorization", "")
-            expected = f"Bearer {CHAT_BRIDGE_TOKEN}"
-            if not CHAT_BRIDGE_TOKEN or not hmac.compare_digest(supplied, expected):
-                return self._json(401, {"error": {"message": "unauthorized"}})
             key = self.headers.get("X-Session-Key", "").strip()
             if not key:
                 # Same contract as /voice/solo: the bot always sends the key, so
@@ -2783,14 +2814,9 @@ class Handler(BaseHTTPRequestHandler):
         # ADMIN SURFACE, same as /voice/wake: silencing the channel is an
         # operator decision, not state the bot merely observes and reports.
         # Whatever can reach the port must not be able to turn the assistant's
-        # chat off, so this route requires CHAT_BRIDGE_TOKEN and fails closed
-        # when it is unset — mirroring /voice/wake's guard, not the
-        # unauthenticated /voice/solo sibling.
+        # chat off — guarded by the shared control-plane check at the top of
+        # do_POST, same as every other mutating route.
         if self.path.rstrip("/").endswith("/chat/posting"):
-            supplied = self.headers.get("Authorization", "")
-            expected = f"Bearer {CHAT_BRIDGE_TOKEN}"
-            if not CHAT_BRIDGE_TOKEN or not hmac.compare_digest(supplied, expected):
-                return self._json(401, {"error": {"message": "unauthorized"}})
             key = self.headers.get("X-Session-Key", "").strip()
             if not key:
                 # The bot always sends the key, mirroring /voice/solo — a
@@ -2821,13 +2847,9 @@ class Handler(BaseHTTPRequestHandler):
         #
         # ADMIN SURFACE, same as /chat/posting and /voice/wake: deciding that a
         # turn may survive a barge-in is an operator call, not state the bot
-        # merely observes. Requires CHAT_BRIDGE_TOKEN and fails closed when it
-        # is unset.
+        # merely observes. Guarded by the shared control-plane check at the top
+        # of do_POST, same as every other mutating route.
         if self.path.rstrip("/").endswith("/voice/barge"):
-            supplied = self.headers.get("Authorization", "")
-            expected = f"Bearer {CHAT_BRIDGE_TOKEN}"
-            if not CHAT_BRIDGE_TOKEN or not hmac.compare_digest(supplied, expected):
-                return self._json(401, {"error": {"message": "unauthorized"}})
             key = self.headers.get("X-Session-Key", "").strip()
             if not key:
                 # The bot always sends the key, mirroring /voice/solo — a
@@ -2872,13 +2894,10 @@ class Handler(BaseHTTPRequestHandler):
         # report the current posture without changing it.
         #
         # ADMIN SURFACE, same as the other three: deciding what gets written
-        # down is an operator call, not state the bot merely observes.
-        # Requires CHAT_BRIDGE_TOKEN and fails closed when it is unset.
+        # down is an operator call, not state the bot merely observes. Guarded
+        # by the shared control-plane check at the top of do_POST (the same
+        # CHAT_BRIDGE_TOKEN the shim's chat-bridge posts carry).
         if self.path.rstrip("/").endswith("/voice/transcribe"):
-            supplied = self.headers.get("Authorization", "")
-            expected = f"Bearer {CHAT_BRIDGE_TOKEN}"
-            if not CHAT_BRIDGE_TOKEN or not hmac.compare_digest(supplied, expected):
-                return self._json(401, {"error": {"message": "unauthorized"}})
             key = self.headers.get("X-Session-Key", "").strip()
             if not key:
                 # The bot always sends the key, mirroring the sibling routes —

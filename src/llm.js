@@ -3,6 +3,22 @@
 const config = require('./config');
 
 /**
+ * The Authorization header for the shim's control plane.
+ *
+ * Every shim route that mutates state — /chat/completions included — requires
+ * CHAT_BRIDGE_TOKEN, the shared secret the bot and shim authenticate to each
+ * other with (the same value health.js validates on the shim's back-edge
+ * posts). `config.apiKey` (OPENAI_API_KEY, default literal `not-needed`) is
+ * what an OpenAI-compatible backend like MiniMax expects instead, so the
+ * control token is preferred when configured and the api key is the fallback:
+ * a shim deployment always has CHAT_BRIDGE_TOKEN set (the launcher resolves it
+ * from TeamVault), and a backend-only deployment keeps working unchanged.
+ */
+function controlAuth() {
+  return `Bearer ${config.chatBridgeToken || config.apiKey}`;
+}
+
+/**
  * Minimal OpenAI chat-completions client.
  *
  * Deliberately assumes NOTHING about server statefulness: it sends the full
@@ -20,7 +36,7 @@ async function chat(messages, { sessionKey, signal } = {}) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.apiKey}`,
+      Authorization: controlAuth(),
       ...(sessionKey ? { 'X-Session-Key': sessionKey } : {}),
       // Stated rather than inferred. A voice channel's text chat shares the
       // SPOKEN session, so the key can no longer tell the shim which kind of
@@ -60,7 +76,7 @@ async function markTypedTurn(sessionKey, typed = true) {
     const res = await fetch(`${config.baseUrl}/turns/typed`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${config.apiKey}`,
+        Authorization: controlAuth(),
         ...(sessionKey ? { 'X-Session-Key': sessionKey } : {}),
         'X-Turn-Typed': typed ? 'true' : 'false',
       },
@@ -88,7 +104,7 @@ async function bindVoiceKey(sessionKey) {
     const res = await fetch(`${config.baseUrl}/voice/bind`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${config.apiKey}`,
+        Authorization: controlAuth(),
         'X-Session-Key': sessionKey,
       },
     });
@@ -131,7 +147,7 @@ async function setVoiceSolo(solo, sessionKey) {
     const res = await fetch(`${config.baseUrl}/voice/solo`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${config.apiKey}`,
+        Authorization: controlAuth(),
         'X-Voice-Solo': solo ? 'true' : 'false',
         'X-Session-Key': sessionKey,
       },
@@ -311,7 +327,7 @@ async function resetSession(sessionKey) {
     method: 'POST',
     headers: {
       'X-Session-Key': sessionKey,
-      Authorization: `Bearer ${config.apiKey}`,
+      Authorization: controlAuth(),
     },
   });
   if (!res.ok) throw new Error(`endpoint ${res.status} — does it support sessions?`);
@@ -325,7 +341,7 @@ async function bindSession(sessionKey, id) {
     headers: {
       'Content-Type': 'application/json',
       'X-Session-Key': sessionKey,
-      Authorization: `Bearer ${config.apiKey}`,
+      Authorization: controlAuth(),
     },
     body: JSON.stringify({ id }),
   });
