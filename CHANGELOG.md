@@ -12,9 +12,12 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 - fix: shim control-route refusals are now logged, not silent — an unset `CHAT_BRIDGE_TOKEN` prints `control route: CHAT_BRIDGE_TOKEN not set — refusing every mutating route` and a wrong/missing token prints `control route: missing or wrong token — refused` (mirroring the chat-bridge guard's "not set — skipping post"), so a fail-closed shim is diagnosable from `shim.log` instead of indistinguishable from a broken route.
 
-## v0.35.3
+## v0.36.0
 
 - feat: add `/transcribe on|off` slash command to toggle transcription mid-call, per conversation, without restarting the bot — the last env-only knob in the runtime-toggle family. The shim holds a per-key store behind an authenticated `/voice/transcribe` route (bare invocation is the query form); the bot mirrors the state into the live call's session, where it gates every transcript write. A fresh call falls back to the `TRANSCRIBE` env default.
+
+## v0.35.3
+
 - fix: require `CHAT_BRIDGE_TOKEN` on every shim route that mutates state — `sessions/reset`, `sessions/bind`, `voice/bind`, `voice/solo`, `turns/typed`, `chat/completions` (and the three already-guarded admin routes `/voice/wake`, `/chat/posting`, `/voice/barge`) now share one fail-closed check at the top of `do_POST`. GET routes stay open. The bot sends the control token on all mutating routes (was `OPENAI_API_KEY`, whose default is the literal `not-needed`), and the launchd launcher resolves the token for the s2s component too, since `speech-to-speech` reaches the shim's `/chat/completions` directly.
 
 ## v0.35.2
