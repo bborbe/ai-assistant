@@ -160,6 +160,12 @@ const config = {
   transcriptDir: process.env.TRANSCRIPT_DIR || `${__dirname}/../transcripts`,
   // How the bot labels itself in transcripts.
   botName: process.env.BOT_NAME || 'Assistant',
+  // The speaker label for the bot's own lines in a transcript: the identity
+  // this process IS when one is set — so two identities sharing a channel are
+  // distinguishable from the record alone — else the bot's visible name,
+  // which is exactly today's label for any single-identity install. The
+  // transcript is the only consumer; botName stays the bot's visible name.
+  assistantLabel: (process.env.IDENTITY || '').trim() || process.env.BOT_NAME || 'Assistant',
   // Announce in-channel on join, so recording is never silent.
   announceTranscription: flag(process.env.ANNOUNCE_TRANSCRIPTION, true),
 
