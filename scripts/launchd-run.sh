@@ -276,10 +276,12 @@ set +a
 # in local.env, which put it in every checkout of a public repo. It now follows
 # the same key-id rule as everything else, resolved from CHAT_BRIDGE_TOKEN_KEY.
 #
-# It is still the one secret TWO components share: the bot and the shim
-# authenticate to each other with it. s2s and transcriber need it for nothing,
-# so they never resolve it — that is the isolation, and it is now enforced by
-# not fetching rather than by unsetting after the fact.
+# It is now the one secret THREE components share: the bot and the shim
+# authenticate to each other with it, and s2s must send it to the shim's
+# /chat/completions (every mutating shim route is guarded by it). transcriber
+# still needs it for nothing, so it never resolves it — that is the isolation,
+# and it is now enforced by not fetching rather than by unsetting after the
+# fact.
 #
 # Unset unconditionally first: an operator's shell (or a stale local.env) can
 # still export the literal, and inheriting it would silently defeat both the
@@ -287,7 +289,7 @@ set +a
 inherited_chat_bridge_token="${CHAT_BRIDGE_TOKEN:-}"
 unset CHAT_BRIDGE_TOKEN
 case "$component" in
-bot | shim)
+bot | shim | s2s)
   if [ -n "${CHAT_BRIDGE_TOKEN_KEY:-}" ]; then
     command -v teamvault-cli >/dev/null 2>&1 || die_config "teamvault-cli not on PATH"
     resolve_secret "$CHAT_BRIDGE_TOKEN_KEY" CHAT_BRIDGE_TOKEN_KEY
@@ -334,14 +336,22 @@ s2s)
   # it, not by any check.
   #
   # Overrides come from local.env, so voice and text cannot drift onto
-  # different endpoints. `not-needed` is a literal, not a secret, so passing it
-  # in argv leaks nothing — unlike the MiniMax key, which s2s-minimax
-  # deliberately exports rather than passes as a flag.
+  # different endpoints.
+  #
+  # The api key here is the CONTROL-PLANE token, not OPENAI_API_KEY: the shim's
+  # /chat/completions now requires CHAT_BRIDGE_TOKEN (the shared secret the
+  # bot and shim authenticate to each other with — every mutating shim route
+  # is guarded by it). The old default `${OPENAI_API_KEY:-not-needed}` was a
+  # literal the shim ignored; it is exactly the hole this guard closes. Passed
+  # in argv like any api key because it IS one (the SDK sends it as the
+  # Authorization header); CHAT_BRIDGE_TOKEN itself is resolved from TeamVault
+  # above, never from a literal in local.env.
   [ -n "${OPENAI_BASE_URL:-}" ] || die_config "OPENAI_BASE_URL unset in local.env — voice would silently fall back to MiniMax"
   [ -n "${OPENAI_MODEL:-}" ] || die_config "OPENAI_MODEL unset in local.env — voice would silently fall back to MiniMax"
+  [ -n "${CHAT_BRIDGE_TOKEN:-}" ] || die_config "CHAT_BRIDGE_TOKEN unset — the shim's /chat/completions fails closed without it"
   run_server "$launcher" \
     --responses_api_base_url "$OPENAI_BASE_URL" \
-    --responses_api_api_key "${OPENAI_API_KEY:-not-needed}" \
+    --responses_api_api_key "$CHAT_BRIDGE_TOKEN" \
     --model_name "$OPENAI_MODEL"
   ;;
 
