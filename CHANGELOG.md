@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.35.2
 
 - fix: transcript speaker label for the bot's own lines is now the `IDENTITY` when set (e.g. `personal`/`sc`/`boss`), so two identities sharing one channel are distinguishable from the transcript alone; falls back to `BOT_NAME`/`Assistant` unchanged when no `IDENTITY` is set.
 
