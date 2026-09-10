@@ -243,6 +243,52 @@ async function setInterrupt(cancel, sessionKey) {
 }
 
 /**
+ * Toggle transcription for a conversation — the /transcribe command's back-edge,
+ * backed by the shim's per-key store.
+ *
+ * `transcribe=true` is the normal state: the bot writes every speaker down.
+ * `transcribe=false` stops the bot writing this conversation down for the rest
+ * of the call. The flag lives on the shim keyed per conversation (the same
+ * shape as the /interrupt and /mode toggles) so the posture is queryable
+ * without a live call, but unlike those the shim never CONSUMES it — the bot
+ * is the writer — so the bot mirrors the returned state into its live Session
+ * and that mirror is the gate on every transcript write.
+ *
+ * ADMIN SURFACE like `setVoiceWake`: deciding what gets written down is an
+ * operator decision, so this is authenticated with the chat-bridge token — see
+ * the /voice/wake docstring for the reasoning.
+ *
+ * Failure degrades toward transcription staying ON — today's behaviour, and
+ * the safe default: nothing stops being written down because the endpoint
+ * hiccuped.
+ *
+ * `transcribe === null` is the query form (bare /transcribe): no X-Transcribe
+ * header is sent, and the shim reports the current posture without changing it.
+ */
+async function setTranscribe(transcribe, sessionKey) {
+  try {
+    const headers = {
+      Authorization: `Bearer ${config.chatBridgeToken}`,
+      'X-Session-Key': sessionKey,
+    };
+    if (transcribe !== null) headers['X-Transcribe'] = transcribe ? 'on' : 'off';
+    const res = await fetch(`${config.baseUrl}/voice/transcribe`, {
+      method: 'POST',
+      headers,
+    });
+    if (res.status === 404) return { ok: false, unsupported: true };
+    const body = res.ok ? await res.json().catch(() => null) : null;
+    if (res.ok && body && typeof body.transcribe === 'boolean') {
+      return { ok: true, transcribe: body.transcribe };
+    }
+    if (res.ok) return { ok: true };
+    return { ok: false, error: `endpoint ${res.status}` };
+  } catch (e) {
+    return { ok: false, error: e.message, retryable: true };
+  }
+}
+
+/**
  * Set the runtime wake-phrase override for a voice key. `null` clears it.
  *
  * Same shape and same degrade contract as `setVoiceSolo` above: a 404 means the
@@ -428,6 +474,7 @@ module.exports = {
   setVoiceSolo,
   setChatPosting,
   setInterrupt,
+  setTranscribe,
   setVoiceWake,
   availableSessions,
   sessionKeyFor,
