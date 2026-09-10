@@ -600,7 +600,7 @@ test('onEvent marks a typed-triggered reply distinctly in the transcript', () =>
     }),
   );
   assert.deepEqual(fake._transcriptWrites, [
-    { speaker: config.botName, text: '(typed→spoken) here is your answer' },
+    { speaker: config.assistantLabel, text: '(typed→spoken) here is your answer' },
   ]);
   assert.equal(fake.typedReplyPending, false, 'consumed once written');
 });
@@ -611,7 +611,9 @@ test('onEvent marks an ordinary spoken reply with no typed marker', () => {
     fake,
     JSON.stringify({ type: 'response.output_audio_transcript.done', transcript: 'hello there' }),
   );
-  assert.deepEqual(fake._transcriptWrites, [{ speaker: config.botName, text: 'hello there' }]);
+  assert.deepEqual(fake._transcriptWrites, [
+    { speaker: config.assistantLabel, text: 'hello there' },
+  ]);
 });
 
 test('postToChannel chunks long text across multiple sends', async () => {

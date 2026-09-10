@@ -11,6 +11,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 ## Unreleased
 
 - feat: add `/transcribe on|off` slash command to toggle transcription mid-call, per conversation, without restarting the bot — the last env-only knob in the runtime-toggle family. The shim holds a per-key store behind an authenticated `/voice/transcribe` route (bare invocation is the query form); the bot mirrors the state into the live call's session, where it gates every transcript write. A fresh call falls back to the `TRANSCRIBE` env default.
+- fix: transcript speaker label for the bot's own lines is now the `IDENTITY` when set (e.g. `personal`/`sc`/`boss`), so two identities sharing one channel are distinguishable from the transcript alone; falls back to `BOT_NAME`/`Assistant` unchanged when no `IDENTITY` is set.
 
 ## v0.35.1
 
