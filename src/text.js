@@ -302,7 +302,10 @@ function register(client) {
         });
         // Recorded so a reader of the transcript sees why a typed line has no
         // answer following it, rather than assuming it was ignored.
-        liveCall.transcript?.writeText(config.botName, `(voice reply failed: ${result.reason})`);
+        liveCall.transcript?.writeText(
+          config.assistantLabel,
+          `(voice reply failed: ${result.reason})`,
+        );
         await target
           .send(`Could not speak that right now (${result.reason}). Try again in a moment.`)
           .catch(() => {});
@@ -339,7 +342,7 @@ function register(client) {
       // threads, see conversationChannel), so its id matches the live
       // session's channelId.
       const replyTranscript = voice.transcriptFor(msg.guild?.id, target.id);
-      if (replyTranscript) replyTranscript.writeText(config.botName, answer);
+      if (replyTranscript) replyTranscript.writeText(config.assistantLabel, answer);
     } catch (e) {
       log.error('text error', { error: e.message });
       await target
