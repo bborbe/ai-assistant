@@ -8,10 +8,13 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## v0.40.1
+## Unreleased
 
 - feat: measure and log the mic turn's stall — the bot now handles `input_audio_buffer.speech_stopped`, the earliest signal it receives that an answer is owed, and logs the gap from there to the first audio frame on every spoken turn (`voice: mic turn start-to-audio`), flagging it `detected` once it crosses `VOICE_STALL_THRESHOLD_MS` (default 8000). Warm turns run ~5.7s end-to-end and the cold-start-after-idle stall measured 25.6s, so the threshold sits between them; an unaddressed utterance is disarmed at the transcription verdict rather than narrated.
 - feat: speak a cached filler into a stalled turn — once the gap crosses the threshold the bot plays `src/stall-clip.pcm` (rendered by `tools/make-stall-clip.py` from the same Qwen3 CustomVoice "Aiden" model the launcher resolves to) straight into its raw-audio pump, bypassing the LLM and the TTS entirely, because those are the stages that are slow. The clip is queued ahead of the answer, so the answer waits for it only when it arrives mid-clip (~2.8s bound) and not at all on the long stalls this exists for; a missing clip logs a warning and leaves stalls silent rather than failing the boot.
+
+## v0.40.1
+
 - fix: `/status` drops the per-flag ✅/❌ from the three toggle lines, leaving the label icon as the only glyph — `👂 wake: off (default)` rather than `👂 ❌ wake: off (default)`. The tick was doing work the name and value already did, and it made these three lines a different shape from every other line in the report. The split into one line per toggle, and the icons themselves, are unchanged.
 
 ## v0.40.0
