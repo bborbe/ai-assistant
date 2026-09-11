@@ -131,6 +131,30 @@ const STALL_CLIP = (() => {
   }
 })();
 
+/**
+ * What the clip says, so the call transcript records it.
+ *
+ * Read from the sidecar the generator writes rather than pasted in here: the
+ * PCM and the text have to agree, and two copies of a spoken line diverge the
+ * first time one of them is edited. The shim's `_PROGRESS_LINES` fillers reach
+ * the transcript by riding the normal TTS path (`response.output_audio_
+ * transcript.done`); this clip bypasses TTS entirely, so without this it would
+ * be the one filler nobody could find in the record afterwards.
+ *
+ * Empty when the sidecar is missing, which drops the transcript line but still
+ * plays the clip — the same degrade-don't-fail posture as the clip itself.
+ */
+const STALL_CLIP_TEXT = (() => {
+  try {
+    return fs.readFileSync(path.join(__dirname, 'stall-clip.txt'), 'utf8').trim();
+  } catch (e) {
+    log.warn('voice: stall clip text unavailable, the filler will go unrecorded', {
+      error: e.message,
+    });
+    return '';
+  }
+})();
+
 /** One live voice session: Discord audio <-> speech-to-speech. */
 class Session {
   constructor(connection, guildId, guildName, channelName, channelId, channel) {
@@ -1013,6 +1037,12 @@ class Session {
     this.outQueue = Buffer.concat([this.outQueue, STALL_CLIP]);
     this.player.play(createAudioResource(this.audio, { inputType: StreamType.Raw }));
     this.outTick = setInterval(() => this.pumpOut(), TICK_MS);
+    // Recorded under the assistant's own label, exactly as a spoken reply is —
+    // the listener heard the assistant say it, so the transcript should read
+    // that way. Written at play time rather than when the stall was detected,
+    // because this is the moment the words are actually in the call, and the
+    // segment filename carries the timestamp that places it in the wait.
+    if (STALL_CLIP_TEXT) this.transcript?.writeText(config.assistantLabel, STALL_CLIP_TEXT);
     log.info('  voice: stall clip playing', {
       clipMs: Math.round(STALL_CLIP.length / ((DISCORD_RATE * DISCORD_CH * 2) / 1000)),
       waitedMs: Date.now() - this.stallStartedAt,
