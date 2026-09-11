@@ -135,7 +135,13 @@ async function report(client, hereKey) {
     // An unbound key is the one failure a live call cannot show you: it answers
     // normally, into another server's conversation.
     const unbound = s.voiceKeyBound === false ? ' ⚠️ session key NOT bound' : '';
-    return `${g?.name ?? guildId}${s.transcript ? ' (transcribing)' : ''}${unbound}`;
+    // Explicit posture, not an implicit marker: `transcript` is null both when
+    // the TRANSCRIBE env default was off at join and when an admin ran
+    // /transcribe off mid-call. A marker that silently vanishes reads as "not
+    // applicable"; naming the off state makes the toggle's effect readable in
+    // the status line without a separate /transcribe query.
+    const transcription = s.transcript ? ' (transcribing)' : ' (transcription off)';
+    return `${g?.name ?? guildId}${transcription}${unbound}`;
   });
 
   let transcriptOk = false;

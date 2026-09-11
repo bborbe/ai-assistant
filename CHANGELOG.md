@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: `/status` names the transcription posture for each live voice session — `(transcribing)` when the call is written down, `(transcription off)` when the `TRANSCRIBE` default was off at join or an admin ran `/transcribe off` mid-call, so the toggle's effect is readable in the status line without a separate bare `/transcribe` query.
+
 ## v0.36.1
 
 - fix: shim control-route refusals are now logged, not silent — an unset `CHAT_BRIDGE_TOKEN` prints `control route: CHAT_BRIDGE_TOKEN not set — refusing every mutating route` and a wrong/missing token prints `control route: missing or wrong token — refused` (mirroring the chat-bridge guard's "not set — skipping post"), so a fail-closed shim is diagnosable from `shim.log` instead of indistinguishable from a broken route.
