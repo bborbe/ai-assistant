@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.39.1
 
 - fix: `/status` toggle line gives each flag its own ✅/❌ tick — the grouped `⚙️ wake/posting/interrupt` line previously carried no per-flag icon and read differently from every other ticked status line (transcription, gateway, endpoint).
 
