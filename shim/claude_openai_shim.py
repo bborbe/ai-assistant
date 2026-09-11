@@ -3227,6 +3227,15 @@ class Handler(BaseHTTPRequestHandler):
             nonlocal dead
             if dead:
                 return
+            # text-only: THIS function is the wire — the `writer.chunk` below is
+            # the SSE delta speech-to-speech synthesises. `push()` already
+            # returns before reaching here for the streamed answer, but the
+            # holding and progress fillers call `on_text` DIRECTLY, so gating
+            # each of those callers would leave the next filler added to leak
+            # again. The guard belongs at the one point every spoken path
+            # funnels through, and silence here is the whole mode.
+            if speech_off:
+                return
             spoken = strip_markdown(part).strip()
             if not spoken:
                 return

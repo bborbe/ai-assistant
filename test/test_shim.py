@@ -9,6 +9,7 @@ notice — classification and key routing — not the HTTP or subprocess plumbin
 Run: python3 -m unittest discover -s test -p 'test_*.py'
 """
 
+import ast
 import contextlib
 import io
 import json
@@ -23,6 +24,23 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "shim"))
 
 import claude_openai_shim as shim  # noqa: E402
+
+
+def _function_source(name):
+    """The source of a function by name, nested or not.
+
+    Some of the invariants worth pinning live inside closures in `do_POST` —
+    `on_text` is the whole spoken wire — and there is no seam to call them
+    through without standing up an HTTP request, a model call and a live
+    writer. Reading the function's own source is the honest way to assert
+    "this guard is here and it comes first"; the alternative is a test that
+    proves the guard works by never exercising the path that bypasses it.
+    """
+    src = pathlib.Path(shim.__file__).read_text()
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return ast.get_source_segment(src, node)
+    return None
 
 
 class IsVoiceTurn(unittest.TestCase):
@@ -745,6 +763,35 @@ class TextOnlySwitch(unittest.TestCase):
         shim._apply_chat_switch("okay you can write in the chat again", self.KEY)
         self.assertFalse(shim.is_chat_off(self.KEY))
         self.assertFalse(shim.is_speech_off(self.KEY))
+
+    def test_on_text_refuses_the_wire_in_text_only(self):
+        # THE INVARIANT, and the one the first cut of this feature missed.
+        # `on_text` IS the wire — the `writer.chunk` inside it is the SSE delta
+        # speech-to-speech synthesises. `push()` returns before reaching it for
+        # the streamed answer, but `speak_holding_line` and
+        # `speak_progress_line` call `on_text` DIRECTLY, so a guard on those two
+        # callers leaves the leak open for the next filler anyone adds. The
+        # guard has to sit in `on_text`, and ahead of the write.
+        body = _function_source("on_text")
+        self.assertIsNotNone(body, "on_text not found — did it move or get renamed?")
+        self.assertIn("if speech_off:", body, "on_text must refuse to write in text-only")
+        self.assertLess(
+            body.index("if speech_off:"),
+            body.index("writer.chunk("),
+            "the guard must precede the wire write, not follow it",
+        )
+
+    def test_the_fillers_reach_the_wire_only_through_on_text(self):
+        # What makes the single guard above sufficient. If a filler grows its
+        # own `writer.chunk`, `on_text` no longer covers it and text-only speaks
+        # again — silently, on exactly the slow turns the filler exists for.
+        for name in ("speak_holding_line", "speak_progress_line"):
+            body = _function_source(name)
+            self.assertIsNotNone(body, f"{name} not found — did it move or get renamed?")
+            self.assertIn("on_text(", body, f"{name} must route through on_text")
+            self.assertNotIn(
+                "writer.chunk(", body, f"{name} must not write to the wire directly"
+            )
 
     def test_modes_is_the_validated_set(self):
         # do_POST rejects anything outside MODES, so this tuple is the contract
