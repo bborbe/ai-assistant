@@ -112,6 +112,14 @@ def main() -> int:
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(pcm)
+
+    # The line goes to a sidecar beside the PCM, and that sidecar — not a copy
+    # pasted into src/voice.js — is what the bot writes into the call transcript
+    # when the clip plays. One source, so what is heard and what is recorded
+    # cannot drift; a second copy in the bot would diverge the first time this
+    # line changed, and the divergence would be silent.
+    out_path.with_suffix(".txt").write_text(LINE + "\n", encoding="utf-8")
+
     peak = int(np.abs(audio).max())
     print(f"wrote {out_path} — {len(pcm)} bytes, {len(audio) / SAMPLE_RATE:.2f}s @ {SAMPLE_RATE} Hz")
     # Printed every run, and it is the number to check: speech peaks well below

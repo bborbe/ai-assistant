@@ -740,6 +740,36 @@ test('speakStallClip is a no-op once playback is already live', () => {
   );
 });
 
+// The clip bypasses the TTS path, so nothing else writes it down. The shim's
+// `_PROGRESS_LINES` fillers ride `on_text` into `response.output_audio_
+// transcript.done` and land in the record that way; without this the stall
+// filler would be the one thing said in a call that the transcript omits.
+test('speakStallClip records the filler in the transcript, under the assistant label', () => {
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now() - 8100 });
+  Session.prototype.speakStallClip.call(fake);
+  const written = fake._transcriptWrites.filter((w) => w.text.includes('getting the audio ready'));
+  assert.equal(written.length, 1, 'the clip is spoken, so the record must show it');
+  assert.equal(
+    written[0].speaker,
+    config.assistantLabel,
+    'the listener heard the assistant say it',
+  );
+  Session.prototype.stopAudio.call(fake);
+});
+
+test('speakStallClip writes no transcript line when playback never starts', () => {
+  const fake = fakeOnEventTarget({
+    stallStartedAt: Date.now() - 8100,
+    audio: { end: () => {} }, // an answer is already playing
+  });
+  Session.prototype.speakStallClip.call(fake);
+  assert.deepEqual(
+    fake._transcriptWrites,
+    [],
+    'nothing was said, so nothing may be recorded as said',
+  );
+});
+
 // The stall gate has TWO halves, and this pair is why: the threshold alone is
 // not enough to know an answer is owed. The addressing verdict arrives with the
 // transcription, which on a stalled turn lands after the threshold fires — the
