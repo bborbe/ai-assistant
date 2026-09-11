@@ -172,6 +172,13 @@ class Session {
     // otherwise — the safe direction, since being wrong the other way means
     // answering every sentence of a conversation held with someone else.
     this.solo = false;
+    // Whether the shim will synthesise anything this turn — the bot-side half
+    // of text-only mode. Also mirrors the shim, re-read per utterance rather
+    // than tracked locally: /mode is set out of band, so a local copy would
+    // drift the moment the shim restarted or another client flipped it. FALSE
+    // until proven otherwise, which is the shim's own default (speech on) and
+    // so keeps a failed probe from silently disabling the filler everywhere.
+    this.speechOff = false;
     // Runtime override of `config.voiceAlwaysWake` for THIS call, set by an
     // admin over /wakephrase. Tri-state, matching the shim's own store: true forces
     // the phrase, false relaxes to head-count behaviour, null means no override
@@ -945,6 +952,20 @@ class Session {
    */
   startStallClock() {
     this.clearStallClock();
+    // Refresh the speech posture here, not at the threshold: the answer is not
+    // needed for another `voiceStallThresholdMs`, so the probe rides along with
+    // a wait that is already happening and costs the turn nothing. Fired and
+    // forgotten deliberately — a probe that is slow enough to miss the
+    // threshold leaves the previous answer in place, which is the same value
+    // the default would have been.
+    llm
+      .getVoiceState(llm.voiceKeyFor(this.guildId))
+      .then((s) => {
+        this.speechOff = s.ok && s.speech === false;
+      })
+      .catch(() => {
+        this.speechOff = false;
+      });
     this.stallStartedAt = Date.now();
     // The DETECTOR, distinct from the measurement in reportStall(). unref'd so
     // a pending stall can never hold the process open through a teardown.
@@ -975,6 +996,11 @@ class Session {
     log.info('  voice: stall — no audio yet', {
       waitedMs: Date.now() - this.stallStartedAt,
       thresholdMs: config.voiceStallThresholdMs,
+      // text-only: no audio is ever coming, so this crossing is the mode
+      // working rather than a fault. Reported rather than suppressed — it is
+      // the one place the log shows a turn produced no speech on purpose — but
+      // read the flag before reading the line as a problem.
+      speechOff: this.speechOff,
     });
     if (this.answering) this.speakStallClip();
   }
@@ -1031,6 +1057,14 @@ class Session {
   speakStallClip() {
     // Playback is already live, so the wait this was going to fill is over.
     if (this.audio || !STALL_CLIP.length) return;
+    // text-only: the shim will never send audio, so the stall this clip exists
+    // to cover never ends — it is the mode, not a slow turn. Speaking into it
+    // would put the only sound of the call into a conversation that asked for
+    // none, and it lands AFTER the answer has already been posted to the
+    // channel, so the listener hears a filler for a reply they have read.
+    // Gated here rather than at the two call sites: this is the one function
+    // both of them reach, so a third caller cannot reintroduce the leak.
+    if (this.speechOff) return;
     this.audio = new PassThrough();
     this.ending = false;
     this.speaking = true;

@@ -582,6 +582,10 @@ function fakeOnEventTarget(overrides = {}) {
     // because the transcription handler reads it to decide `answering`, and
     // that verdict is what disarms the clock for an unaddressed utterance.
     solo: false,
+    // The bot-side half of text-only. Default FALSE, matching the constructor:
+    // a failed probe must leave the filler behaving as it did before the mode
+    // existed rather than silently muting it everywhere.
+    speechOff: false,
     stallStartedAt: null,
     stallTimer: null,
     stallDetected: false,
@@ -768,6 +772,90 @@ test('speakStallClip writes no transcript line when playback never starts', () =
     [],
     'nothing was said, so nothing may be recorded as said',
   );
+});
+
+// text-only, bot side. The shim will never send audio in this mode, so the
+// stall is not a slow turn — it is the mode working — and the clip would be the
+// ONE sound of a call that asked for none. It also lands AFTER the answer has
+// been posted to the channel, so the listener hears a filler for a reply they
+// have already read. Observed live 2026-09-11: chat post at 15:38:22, clip at
+// 15:38:26, 8002ms after speech stopped.
+test('speakStallClip stays silent in text-only mode', () => {
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now() - 8100, speechOff: true });
+  let played = false;
+  fake.player = {
+    play: () => {
+      played = true;
+    },
+    stop: () => {},
+  };
+  Session.prototype.speakStallClip.call(fake);
+  assert.equal(fake.outQueue.length, 0, 'no clip may be queued');
+  assert.equal(fake.audio, null, 'no pump may be opened — that is what lights the ring');
+  assert.equal(played, false, 'the player must not be started');
+});
+
+test('speakStallClip still plays when speech is on', () => {
+  // The positive control. A guard that muted the filler in every mode would
+  // pass the test above and break the feature it exists for.
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now() - 8100, speechOff: false });
+  Session.prototype.speakStallClip.call(fake);
+  assert.ok(fake.outQueue.length > 0, 'the clip must still be queued in the speaking modes');
+  Session.prototype.stopAudio.call(fake); // never leave a live interval behind
+});
+
+test('startStallClock refreshes the speech posture from the shim', async () => {
+  // Re-read per utterance rather than tracked locally: /mode is set out of
+  // band, so a local copy would drift the moment the shim restarted. The probe
+  // rides the 8s wait the clock is starting, so it costs the turn nothing.
+  const llm = require('../src/llm');
+  const realState = llm.getVoiceState;
+  const realKeyFor = llm.voiceKeyFor;
+  llm.voiceKeyFor = () => 'voice:G1';
+  llm.getVoiceState = async () => ({ ok: true, speech: false });
+  try {
+    const fake = fakeOnEventTarget({ guildId: 'G1' });
+    Session.prototype.startStallClock.call(fake);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(fake.speechOff, true, 'the shim said text-only, so the bot must know');
+    Session.prototype.clearStallClock.call(fake);
+  } finally {
+    llm.getVoiceState = realState;
+    llm.voiceKeyFor = realKeyFor;
+  }
+});
+
+test('a failed speech probe leaves the filler speaking, not muted', async () => {
+  // Fail-open, and deliberately: the default (speech on) is the absence of an
+  // override, so an unreachable shim must not silently disable the filler in
+  // every mode. The cost of being wrong is a filler in a text-only call during
+  // a shim outage; the cost the other way is a broken feature everywhere.
+  const llm = require('../src/llm');
+  const realState = llm.getVoiceState;
+  const realKeyFor = llm.voiceKeyFor;
+  llm.voiceKeyFor = () => 'voice:G1';
+  llm.getVoiceState = async () => ({ ok: false, error: 'endpoint 500' });
+  try {
+    const fake = fakeOnEventTarget({ guildId: 'G1', speechOff: true });
+    Session.prototype.startStallClock.call(fake);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(fake.speechOff, false, 'an unreadable posture must not mute the filler');
+    Session.prototype.clearStallClock.call(fake);
+  } finally {
+    llm.getVoiceState = realState;
+    llm.voiceKeyFor = realKeyFor;
+  }
+});
+
+test('the stall log carries the speech posture, so a text-only crossing reads as expected', () => {
+  // "stall — no audio yet" fires on every text-only turn, where it is the mode
+  // working rather than a fault. The flag is what separates the two readings
+  // without suppressing the one line that shows a turn produced no speech.
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now() - 8100, speechOff: true });
+  const lines = captureInfo(() => Session.prototype.onStallThreshold.call(fake));
+  const stall = lines.find((l) => l.msg.includes('stall — no audio yet'));
+  assert.ok(stall, 'the crossing is still reported');
+  assert.equal(stall.fields.speechOff, true);
 });
 
 // The stall gate has TWO halves, and this pair is why: the threshold alone is
