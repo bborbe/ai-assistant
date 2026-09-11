@@ -9,6 +9,12 @@ const assert = require('node:assert');
 // per-conversation toggles, so a regression in the report shape (not just the
 // underlying flag logic) is caught.
 //
+// The three toggles get one line each, prefixed by their own icon and carrying
+// their own tick, so the toggle assertions are anchored to whole lines: an
+// `interrupt: off` appearing mid-line in a re-joined
+// `wake: … · posting: … · interrupt: off` must fail, because that run-on line
+// is the shape this guards.
+//
 // `report()` is exercised end-to-end: only the network is faked (a global
 // fetch that answers the /voice/state probe and fails the /models probe, and
 // an unreachable s2s port), so the real `getVoiceState` wiring and the real
@@ -60,13 +66,15 @@ test('idle status shows the toggle defaults', async () => {
   try {
     const out = await report(client(), 'channel:1');
     assert.match(out, /transcription: enabled \(default\)/);
-    assert.match(out, /⚙️ ✅ wake: on \(default\) · ✅ posting: voice-text · ✅ interrupt: on/);
+    assert.match(out, /^👂 ✅ wake: on \(default\)$/m);
+    assert.match(out, /^💬 ✅ posting: voice-text$/m);
+    assert.match(out, /^✋ ✅ interrupt: on$/m);
   } finally {
     restore();
   }
 });
 
-test('a live call with transcription and interrupt off is reflected', async () => {
+test('a live call with every toggle flipped is reflected', async () => {
   voice.sessions.set('guild-1', {
     guildId: 'guild-1',
     voiceKey: 'voice:1',
@@ -77,16 +85,18 @@ test('a live call with transcription and interrupt off is reflected', async () =
   });
   const restore = stubFetch({
     key: 'voice:1',
-    wake: true,
-    wake_override: null,
-    posting: true,
+    wake: false,
+    wake_override: false,
+    posting: false,
     interrupt: false,
     transcribe: false,
   });
   try {
     const out = await report(client(), 'channel:1');
     assert.match(out, /transcription: disabled/);
-    assert.match(out, /❌ interrupt: off/, 'an off toggle must carry its own ❌ tick');
+    assert.match(out, /^👂 ❌ wake: off \(override\)$/m);
+    assert.match(out, /^💬 ❌ posting: voice-only$/m);
+    assert.match(out, /^✋ ❌ interrupt: off$/m, 'an off toggle must carry its own ❌ tick');
   } finally {
     restore();
   }
