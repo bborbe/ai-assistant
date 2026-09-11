@@ -97,9 +97,12 @@ def main() -> int:
     # whole time — the measured peak was *exactly* 1.000 full scale, which is
     # what clamping looks like and is not what speech looks like.
     audio = np.concatenate([np.asarray(c).reshape(-1) for c in chunks])
-    if not np.issubdtype(audio.dtype, np.integer):
+    # Exactly 2-byte, not merely "some integer": the conversion below is
+    # `astype("<i2")`, which WRAPS an int32 rather than refusing it. A guard
+    # that accepts a dtype the next line would silently mangle is not a guard.
+    if not (np.issubdtype(audio.dtype, np.integer) and audio.dtype.itemsize == 2):
         print(
-            f"unexpected chunk dtype {audio.dtype} — expected an integer PCM type; "
+            f"unexpected chunk dtype {audio.dtype} — expected 2-byte integer PCM; "
             "refusing to guess a scale (see the note above)",
             file=sys.stderr,
         )
