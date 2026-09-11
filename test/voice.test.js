@@ -585,6 +585,12 @@ function fakeOnEventTarget(overrides = {}) {
     stallStartedAt: null,
     stallTimer: null,
     stallDetected: false,
+    // Playback surface speakStallClip() drives. The player is a stub because
+    // these tests are about what gets queued, not about Discord's player.
+    outQueue: Buffer.alloc(0),
+    outTick: null,
+    ending: false,
+    player: { play: () => {}, stop: () => {} },
     ...overrides,
   });
 }
@@ -706,6 +712,50 @@ test('reportStall logs nothing when no utterance armed the clock', () => {
   const fake = fakeOnEventTarget();
   const lines = captureInfo(() => Session.prototype.reportStall.call(fake));
   assert.deepEqual(lines, [], 'a typed turn must not produce a mic-turn measurement');
+});
+
+// The filler itself. It has to start the pump on its own — at stall time no
+// real audio has arrived, so nothing else has created the stream yet.
+test('speakStallClip starts the pump with the clip queued for it', () => {
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now() - 8100 });
+  Session.prototype.speakStallClip.call(fake);
+  assert.notEqual(fake.audio, null, 'the clip needs a live stream, since no real audio exists yet');
+  assert.equal(fake.speaking, true, 'the ring must be lit, and barge-in must be able to cut it');
+  assert.ok(fake.outQueue.length > 0, 'the clip PCM must be queued for the pump');
+  Session.prototype.stopAudio.call(fake); // clears outTick — never leave a live interval
+  assert.equal(fake.outTick, null);
+});
+
+test('speakStallClip is a no-op once playback is already live', () => {
+  const fake = fakeOnEventTarget({
+    stallStartedAt: Date.now() - 8100,
+    audio: { end: () => {} }, // the answer is already playing
+    outQueue: Buffer.alloc(0),
+  });
+  Session.prototype.speakStallClip.call(fake);
+  assert.equal(
+    fake.outQueue.length,
+    0,
+    'a live answer must not have a filler spliced in front of it',
+  );
+});
+
+// Regression guard for the ordering inside pushAudio: the clip makes
+// `this.audio` non-null BEFORE any real audio arrives, so a guard-first
+// ordering silently drops the measurement on exactly the stalled turns it
+// exists to record.
+test('pushAudio still reports the gap when the stall clip already started the pump', () => {
+  const fake = fakeOnEventTarget({
+    stallStartedAt: Date.now() - 12000,
+    stallDetected: true,
+    audio: { write: () => {} }, // the clip owns the stream
+    outQueue: Buffer.alloc(0),
+  });
+  const lines = captureInfo(() => Session.prototype.pushAudio.call(fake, Buffer.alloc(320)));
+  const line = lines.find((l) => l.msg.includes('start-to-audio'));
+  assert.ok(line, 'the measurement must survive the clip having started playback');
+  assert.ok(line.fields.gapMs >= 12000, `gapMs ${line.fields.gapMs} must be at least 12000`);
+  assert.equal(line.fields.detected, true);
 });
 
 test('onEvent marks a typed-triggered reply distinctly in the transcript', () => {

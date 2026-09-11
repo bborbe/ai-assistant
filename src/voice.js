@@ -14,6 +14,8 @@ const {
 } = require('@discordjs/voice');
 const prism = require('prism-media');
 const { PassThrough } = require('stream');
+const fs = require('fs');
+const path = require('path');
 const WebSocket = require('ws');
 const config = require('./config');
 const log = require('./log');
@@ -107,6 +109,27 @@ function up(buf) {
   }
   return out;
 }
+
+/**
+ * The stall filler, pre-rendered by tools/make-stall-clip.py and committed.
+ *
+ * Converted to Discord's 48 kHz stereo once, here, so playing it is a buffer
+ * write and never a decode. That is the whole point: it has to cost nothing at
+ * the moment it is needed, when the stages that would normally produce audio
+ * are the ones that are slow.
+ *
+ * A missing or unreadable file yields an empty buffer rather than throwing.
+ * The filler improves a slow turn; a bot that refuses to start because a
+ * courtesy clip is absent has traded a cosmetic gap for an outage.
+ */
+const STALL_CLIP = (() => {
+  try {
+    return up(fs.readFileSync(path.join(__dirname, 'stall-clip.pcm')));
+  } catch (e) {
+    log.warn('voice: stall clip unavailable, stalls will stay silent', { error: e.message });
+    return Buffer.alloc(0);
+  }
+})();
 
 /** One live voice session: Discord audio <-> speech-to-speech. */
 class Session {
@@ -904,6 +927,7 @@ class Session {
         waitedMs: Date.now() - this.stallStartedAt,
         thresholdMs: config.voiceStallThresholdMs,
       });
+      this.speakStallClip();
     }, config.voiceStallThresholdMs);
     this.stallTimer.unref?.();
   }
@@ -943,6 +967,36 @@ class Session {
   }
 
   /**
+   * Speak the cached filler while the stall is still in progress.
+   *
+   * Written straight into the same pump real audio uses, so it bypasses the
+   * LLM and the TTS — the two stages that are slow. Nothing here calls a model,
+   * and that is the point: routing the filler through `speak()` would put a
+   * generation round-trip in front of a turn that is already late, and its
+   * output would then queue behind the same stalled TTS it was meant to cover.
+   *
+   * The clip is enqueued AHEAD of any answer, so an answer arriving mid-clip
+   * waits for it — bounded by the clip's own length (~2.8s), and zero on the
+   * long stalls this exists for, where the clip finished long before audio
+   * arrived. Cutting it off instead would remove that bound but land mid-word,
+   * which reads as a fault rather than as a courtesy.
+   */
+  speakStallClip() {
+    // Playback is already live, so the wait this was going to fill is over.
+    if (this.audio || !STALL_CLIP.length) return;
+    this.audio = new PassThrough();
+    this.ending = false;
+    this.speaking = true;
+    this.outQueue = Buffer.concat([this.outQueue, STALL_CLIP]);
+    this.player.play(createAudioResource(this.audio, { inputType: StreamType.Raw }));
+    this.outTick = setInterval(() => this.pumpOut(), TICK_MS);
+    log.info('  voice: stall clip playing', {
+      clipMs: Math.round(STALL_CLIP.length / ((DISCORD_RATE * DISCORD_CH * 2) / 1000)),
+      waitedMs: Date.now() - this.stallStartedAt,
+    });
+  }
+
+  /**
    * Start playback on the FIRST audio chunk, not when the response completes.
    *
    * Waiting for `response.output_audio.done` buffers the whole reply and plays
@@ -958,12 +1012,16 @@ class Session {
    */
   pushAudio(chunk) {
     this.outQueue = Buffer.concat([this.outQueue, up(chunk)]);
-    if (this.audio) return;
 
-    // First frame of the turn: the wait is over. Reported before the playback
-    // bookkeeping below so the number is when audio ARRIVED, not when the
-    // player got around to starting.
+    // First frame of the turn: the wait is over. Reported BEFORE the guard
+    // below, not after it — once the stall clip has started the pump,
+    // `this.audio` is already non-null, so a guard-first ordering would skip
+    // the measurement on exactly the stalled turns it exists to record.
+    // Reported before the playback bookkeeping too, so the number is when audio
+    // ARRIVED rather than when the player got around to starting.
     this.reportStall();
+
+    if (this.audio) return;
 
     this.audio = new PassThrough();
     this.ending = false;
