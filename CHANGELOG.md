@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.38.0
 
 - feat: `/status` replaces the `transcripts — writable` line with the transcription state — `transcription: enabled|disabled` (live posture during a call, `TRANSCRIBE` default marked `(default)` when idle), so "are we being written down?" is answerable from the status line; the writable check survives only as a failure suffix so a broken transcript dir stays diagnosable.
 
