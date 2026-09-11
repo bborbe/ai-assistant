@@ -315,9 +315,9 @@ async function setTranscribe(transcribe, sessionKey) {
  * which validates the shim's posts against the same value.
  */
 async function setVoiceWake(value, sessionKey) {
-  // `auto` is the CLEAR, not a third boolean — it removes the override so the
-  // shim falls back to its VOICE_ALWAYS_WAKE default.
-  const mode = value === null ? 'auto' : value ? 'on' : 'off';
+  // `default` is the CLEAR, not a third boolean — it removes the override so
+  // the shim falls back to its VOICE_ALWAYS_WAKE default.
+  const mode = value === null ? 'default' : value ? 'on' : 'off';
   try {
     const res = await fetch(`${config.baseUrl}/voice/wake`, {
       method: 'POST',

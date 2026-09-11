@@ -957,7 +957,7 @@ class FlagClearSetters(unittest.TestCase):
     """The setter-level clear contract behind the uniform default paths.
 
     Each per-key flag store pops on None (mirroring `set_wake_override`), so
-    the route's `default`/`auto`/`clear` values fall back to the configured
+    the route's `default`/`clear` values fall back to the configured
     default rather than storing an explicit False — the distinction that makes
     `default` a real restore and not a synonym for `off`.
     """
@@ -1214,7 +1214,7 @@ class SoloGate(unittest.TestCase):
 
     def test_wake_override_absent_defers_to_the_env_default(self):
         # The third state. No override means the key follows ALWAYS_WAKE, which
-        # is what makes `/wakephrase auto` a real restore rather than a synonym for
+        # is what makes `/wakephrase default` a real restore rather than a synonym for
         # `off`.
         self.assertIsNone(shim.wake_override(self.KEY))
         prev = shim.ALWAYS_WAKE
@@ -1242,7 +1242,7 @@ class SoloGate(unittest.TestCase):
             shim.ALWAYS_WAKE = prev
 
     def test_clearing_the_override_restores_the_default(self):
-        # `/wakephrase auto`. Without the clear, the configured default is unreachable
+        # `/wakephrase default`. Without the clear, the configured default is unreachable
         # for the life of the process once the command is used at all.
         prev = shim.ALWAYS_WAKE
         try:
@@ -1622,7 +1622,7 @@ class FlagClearPaths(unittest.TestCase):
     The flag standardization task gives all four per-conversation toggles
     (`/wakephrase`, `/interrupt`, `/transcribe`, `/mode`) one on/off/default
     contract. `/voice/wake` already had the clear path; these tests pin the
-    same `default`/`auto`/`clear` → pop-the-override behaviour on the other
+    same `default`/`clear` → pop-the-override behaviour on the other
     routes, and prove the cleared state shows up on the /voice/state back-edge
     (the SC2 verification hook).
     """
@@ -1680,14 +1680,19 @@ class FlagClearPaths(unittest.TestCase):
         self.assertFalse(shim.is_barge_in_off(self.KEY))
         self.assertTrue(self._state()["interrupt"])
 
-    def test_barge_auto_and_clear_are_legacy_spellings(self):
+    def test_barge_clear_is_a_synonym_and_auto_is_rejected(self):
+        # `clear` is accepted alongside `default`; the legacy `/wakephrase auto`
+        # spelling was REMOVED by the follow-up — `auto` must reject, not clear.
         shim.set_barge_in_off(self.KEY, True)
-        for spelling in ("auto", "clear"):
-            body = self._post("/v1/voice/barge",
-                              {"X-Session-Key": self.KEY, "X-Barge-In": spelling})
-            self.assertTrue(body["cleared"], f"{spelling} must clear")
-            self.assertFalse(shim.is_barge_in_off(self.KEY))
-            shim.set_barge_in_off(self.KEY, True)
+        body = self._post("/v1/voice/barge",
+                          {"X-Session-Key": self.KEY, "X-Barge-In": "clear"})
+        self.assertTrue(body["cleared"])
+        self.assertFalse(shim.is_barge_in_off(self.KEY))
+        shim.set_barge_in_off(self.KEY, True)
+        body = self._post("/v1/voice/barge",
+                          {"X-Session-Key": self.KEY, "X-Barge-In": "auto"})
+        self.assertEqual(body["error"]["message"], "bad X-Barge-In: 'auto' (want on|off|default)")
+        self.assertTrue(shim.is_barge_in_off(self.KEY), "rejected value must not mutate")
 
     def test_transcribe_default_clears_the_override_and_reports_on(self):
         shim.set_transcribe_off(self.KEY, True)
@@ -1716,12 +1721,14 @@ class FlagClearPaths(unittest.TestCase):
         self.assertTrue(state["posting"])
         self.assertTrue(state["speech"])
 
-    def test_mode_auto_and_clear_are_legacy_spellings(self):
-        for spelling in ("auto", "clear"):
-            shim.set_mode(self.KEY, "voice-only")
-            body = self._post("/v1/mode", {"X-Session-Key": self.KEY, "X-Mode": spelling})
-            self.assertTrue(body["cleared"], f"{spelling} must clear")
-            self.assertTrue(self._state()["posting"])
+    def test_mode_clear_is_a_synonym_and_auto_is_rejected(self):
+        shim.set_mode(self.KEY, "voice-only")
+        body = self._post("/v1/mode", {"X-Session-Key": self.KEY, "X-Mode": "clear"})
+        self.assertTrue(body["cleared"])
+        self.assertTrue(self._state()["posting"])
+        body = self._post("/v1/mode", {"X-Session-Key": self.KEY, "X-Mode": "auto"})
+        self.assertIn("unknown mode", body["error"]["message"])
+        self.assertTrue(self._state()["posting"], "rejected value must not mutate")
 
     def test_bare_barge_post_is_still_the_query_form(self):
         # SC3: the query form survives the clear path — a headerless POST

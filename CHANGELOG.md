@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: `/wakephrase auto` is removed — `default` is the only clear spelling. The legacy `auto` value is rejected by the handler and every shim route (`/voice/wake`, `/voice/barge`, `/voice/transcribe`, `/chat/posting`, `/mode`); `default` (and the `clear` header synonym) clears the per-key override.
+
 ## v0.42.0
 
 - feat: the four per-conversation flag toggles now speak one uniform on/off/default contract — `/wakephrase`, `/interrupt` and `/transcribe` offer `on`/`off`/`default` (the old `/wakephrase auto` stays accepted as a legacy spelling), and `/mode` gains `on`/`off`/`default` aliases on top of its `voice-only`/`voice-text`/`text-only` states, plus a bare query form that reports the current mode. `default` CLEARS the per-key override on every route (`/voice/wake`, `/voice/barge`, `/voice/transcribe`, `/chat/posting`, `/mode`) so the configured default is in force again — previously `/interrupt off` and `/transcribe off` were sticky until restart. The shim setters pop on a clear value (mirroring `/voice/wake`), and the `/voice/state` back-edge shows the cleared field restored.

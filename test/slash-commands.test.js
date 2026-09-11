@@ -73,8 +73,8 @@ test('/transcribe advertises the on/off/default choices', () => {
 
 test('/wakephrase advertises the on/off/default choices', () => {
   // The uniform contract replaces the old `auto` picker choice with `default`.
-  // `auto` is still accepted by the handler as a legacy spelling (the shim
-  // keeps accepting it too), but the picker offers the one uniform value.
+  // `auto` was removed entirely by the follow-up (handler + shim reject it) —
+  // `default` is the one clear spelling.
   const wakephrase = buildCommands({ voiceEnabled: true }).find((c) => c.name === 'wakephrase');
   assert.ok(wakephrase, '/wakephrase must be registered');
   assert.equal(wakephrase.options[0].required, false, 'bare invocation is the query form');
