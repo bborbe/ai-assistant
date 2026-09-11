@@ -400,6 +400,26 @@ test('setInterrupt query form sends no X-Barge-In and reads the state back', asy
   }
 });
 
+test('setInterrupt default form sends X-Barge-In: default (the clear)', async () => {
+  // `/interrupt default` is the clear form, deliberately distinct from the
+  // bare-command query (which sends no header at all): the header carries
+  // `default`, and the shim pops the per-key override.
+  const { setInterrupt } = require('../src/llm');
+  const realFetch = global.fetch;
+  let captured;
+  try {
+    global.fetch = async (_url, init) => {
+      captured = init;
+      return { ok: true, status: 200, json: async () => ({ cancel: true }) };
+    };
+    await setInterrupt('default', 'voice:G1:personal');
+    assert.equal(captured.headers['X-Barge-In'], 'default');
+    assert.equal(captured.headers['X-Session-Key'], 'voice:G1:personal');
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
 test('setInterrupt distinguishes unsupported from broken', async () => {
   // Same contract as setChatPosting: an endpoint without /voice/barge (any
   // stateless backend) must degrade gracefully — cancellation stays as it was
@@ -445,6 +465,26 @@ test('setTranscribe carries the posture and the conversation key', async () => {
     assert.deepEqual(off, { ok: true, transcribe: true });
     await setTranscribe(true, 'voice:G1:personal');
     assert.equal(captured.headers['X-Transcribe'], 'on');
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
+test('setTranscribe default form sends X-Transcribe: default (the clear)', async () => {
+  // `/transcribe default` is the clear form, deliberately distinct from the
+  // bare-command query (which sends no header at all): the header carries
+  // `default`, and the shim pops the per-key override.
+  const { setTranscribe } = require('../src/llm');
+  const realFetch = global.fetch;
+  let captured;
+  try {
+    global.fetch = async (_url, init) => {
+      captured = init;
+      return { ok: true, status: 200, json: async () => ({ transcribe: true }) };
+    };
+    await setTranscribe('default', 'voice:G1:personal');
+    assert.equal(captured.headers['X-Transcribe'], 'default');
+    assert.equal(captured.headers['X-Session-Key'], 'voice:G1:personal');
   } finally {
     global.fetch = realFetch;
   }

@@ -770,11 +770,15 @@ _CHAT_OFF_BY_KEY: dict[str, bool] = {}
 _CHAT_OFF_LOCK = Lock()
 
 
-def set_chat_off(key: str, off: bool) -> bool:
-    """Set the voice-only flag for a conversation key. Returns the previous."""
+def set_chat_off(key: str, off: bool | None) -> bool:
+    """Set the voice-only flag for a conversation key. None clears it (falls
+    back to the configured default). Returns the previous."""
     with _CHAT_OFF_LOCK:
         previous = _CHAT_OFF_BY_KEY.get(key, False)
-        _CHAT_OFF_BY_KEY[key] = bool(off)
+        if off is None:
+            _CHAT_OFF_BY_KEY.pop(key, None)
+        else:
+            _CHAT_OFF_BY_KEY[key] = bool(off)
     return previous
 
 
@@ -834,6 +838,20 @@ def set_mode(key: str, mode: str) -> tuple[bool, bool]:
     return prev_chat, prev_speech
 
 
+def clear_mode(key: str) -> tuple[bool, bool]:
+    """Clear BOTH per-conversation mode flags, restoring voice-text (the default).
+
+    Same single-writer contract as `set_mode`: the pair is popped together so
+    `(chat_off, speech_off) = (True, True)` stays unreachable. Unknown keys are
+    a no-op (they already follow the default).
+    """
+    with _CHAT_OFF_LOCK:
+        prev_chat = _CHAT_OFF_BY_KEY.pop(key, False)
+    with _SPEECH_OFF_LOCK:
+        prev_speech = _SPEECH_OFF_BY_KEY.pop(key, False)
+    return prev_chat, prev_speech
+
+
 # ── barge-in switch ────────────────────────────────────────────────────────
 # "barge-in cancellation" is the behaviour where the listener speaking
 # mid-turn ends the in-flight answer (`listener gone — interrupting turn` →
@@ -848,11 +866,15 @@ _BARGE_IN_OFF_BY_KEY: dict[str, bool] = {}
 _BARGE_IN_OFF_LOCK = Lock()
 
 
-def set_barge_in_off(key: str, off: bool) -> bool:
-    """Set the barge-in-cancellation-off flag for a key. Returns the previous."""
+def set_barge_in_off(key: str, off: bool | None) -> bool:
+    """Set the barge-in-cancellation-off flag for a key. None clears it (falls
+    back to the configured default, cancellation ON). Returns the previous."""
     with _BARGE_IN_OFF_LOCK:
         previous = _BARGE_IN_OFF_BY_KEY.get(key, False)
-        _BARGE_IN_OFF_BY_KEY[key] = bool(off)
+        if off is None:
+            _BARGE_IN_OFF_BY_KEY.pop(key, None)
+        else:
+            _BARGE_IN_OFF_BY_KEY[key] = bool(off)
     return previous
 
 
@@ -875,11 +897,15 @@ _TRANSCRIBE_OFF_BY_KEY: dict[str, bool] = {}
 _TRANSCRIBE_OFF_LOCK = Lock()
 
 
-def set_transcribe_off(key: str, off: bool) -> bool:
-    """Set the transcription-off flag for a conversation key. Returns the previous."""
+def set_transcribe_off(key: str, off: bool | None) -> bool:
+    """Set the transcription-off flag for a conversation key. None clears it
+    (falls back to the configured default, transcription ON). Returns previous."""
     with _TRANSCRIBE_OFF_LOCK:
         previous = _TRANSCRIBE_OFF_BY_KEY.get(key, False)
-        _TRANSCRIBE_OFF_BY_KEY[key] = bool(off)
+        if off is None:
+            _TRANSCRIBE_OFF_BY_KEY.pop(key, None)
+        else:
+            _TRANSCRIBE_OFF_BY_KEY[key] = bool(off)
     return previous
 
 
@@ -2931,11 +2957,26 @@ class Handler(BaseHTTPRequestHandler):
         # pair — see `set_mode` for why (chat_off, speech_off) = (True, True)
         # must stay unreachable. The /chat/posting route below remains for the
         # SPOKEN instruction path, which knows about chat only.
+        #
+        # X-Mode also accepts `default`/`auto`/`clear` (mirroring /voice/wake
+        # and the other flag routes): CLEAR both per-key overrides, restoring
+        # the configured default (voice-text). The on|off aliases are mapped on
+        # the BOT side (`on` → voice-text, `off` → voice-only) before the mode
+        # reaches this route, so MODES stays the canonical value space.
         if self.path.rstrip("/").endswith("/mode"):
             key = self.headers.get("X-Session-Key", "").strip()
             if not key:
                 return self._json(400, {"error": {"message": "missing X-Session-Key"}})
             mode = self.headers.get("X-Mode", "").strip().strip("\"'").lower()
+            if mode in ("auto", "default", "clear"):
+                prev_chat, prev_speech = clear_mode(key)
+                print(f"-> MODE  [{key}] default (was chat_off={prev_chat}, "
+                      f"speech_off={prev_speech})", flush=True)
+                return self._json(
+                    200,
+                    {"mode": "voice-text", "posting": True, "speech": True,
+                     "key": key, "cleared": True},
+                )
             if mode not in MODES:
                 return self._json(
                     400,
@@ -2964,6 +3005,17 @@ class Handler(BaseHTTPRequestHandler):
                 # of the 2026-08-18 cross-call leak).
                 return self._json(400, {"error": {"message": "missing X-Session-Key"}})
             posting = self.headers.get("X-Chat-Posting", "").strip().strip("\"'").lower()
+            if posting in ("auto", "default", "clear"):
+                # Same clear contract as /voice/wake, /voice/barge and
+                # /voice/transcribe: pop the per-key override so the configured
+                # default (posting ON) is in force again.
+                previous = set_chat_off(key, None)
+                state = "DEFAULT (voice-text)"
+                print(f"-> CHAT POSTING [{key}] {state} (was {previous})", flush=True)
+                return self._json(
+                    200,
+                    {"posting": True, "previous": not previous, "key": key, "cleared": True},
+                )
             off = posting not in ("1", "true", "yes", "on")
             previous = set_chat_off(key, off)
             state = "OFF (voice-only)" if off else "ON (voice-text)"
@@ -2977,12 +3029,14 @@ class Handler(BaseHTTPRequestHandler):
         # command. Sticky and per-key like /chat/posting: it describes this
         # conversation's standing behaviour, not one turn.
         #
-        # X-Barge-In: on | off. `off` DISABLES barge-in cancellation — the
-        # listener speaking mid-turn no longer ends the in-flight answer; the
-        # reply still completes and reaches the chat bridge/transcript. `on`
-        # restores today's behaviour (cancel on barge-in). The default is `on`
-        # — current behaviour stays the safe baseline until a smarter heuristic
-        # has numbers.
+        # X-Barge-In: on | off | default. `off` DISABLES barge-in cancellation —
+        # the listener speaking mid-turn no longer ends the in-flight answer;
+        # the reply still completes and reaches the chat bridge/transcript. `on`
+        # restores today's behaviour (cancel on barge-in). `default` (also
+        # accepted as `auto`/`clear`, mirroring /voice/wake) CLEARS the per-key
+        # override, so the configured default is in force again. The default is
+        # `on` — current behaviour stays the safe baseline until a smarter
+        # heuristic has numbers.
         #
         # ADMIN SURFACE, same as /chat/posting and /voice/wake: deciding that a
         # turn may survive a barge-in is an operator call, not state the bot
@@ -3008,10 +3062,18 @@ class Handler(BaseHTTPRequestHandler):
                 off = False
             elif raw in ("off", "0", "false", "no"):
                 off = True
+            elif raw in ("auto", "default", "clear"):
+                previous = set_barge_in_off(key, None)
+                state = "DEFAULT (interrupt enabled)"
+                print(f"-> INTERRUPT [{key}] {state} (was {previous})", flush=True)
+                return self._json(
+                    200,
+                    {"cancel": True, "previous": not previous, "key": key, "cleared": True},
+                )
             else:
                 return self._json(
                     400,
-                    {"error": {"message": f"bad X-Barge-In: {raw!r} (want on|off)"}},
+                    {"error": {"message": f"bad X-Barge-In: {raw!r} (want on|off|default)"}},
                 )
             previous = set_barge_in_off(key, off)
             state = "OFF (interrupt disabled)" if off else "ON (interrupt enabled)"
@@ -3028,9 +3090,11 @@ class Handler(BaseHTTPRequestHandler):
         # transcripts — but the store still lives here so the posture is
         # queryable without a live call and both sides agree on one source.
         #
-        # X-Transcribe: on | off. `off` stops the bot writing this call down;
-        # `on` restores the default. Bare POST (no header) is the query form:
-        # report the current posture without changing it.
+        # X-Transcribe: on | off | default. `off` stops the bot writing this
+        # call down; `on` restores it. `default` (also accepted as `auto`/
+        # `clear`, mirroring /voice/wake) CLEARS the per-key override, so the
+        # configured default is in force again. Bare POST (no header) is the
+        # query form: report the current posture without changing it.
         #
         # ADMIN SURFACE, same as the other three: deciding what gets written
         # down is an operator call, not state the bot merely observes. Guarded
@@ -3056,10 +3120,18 @@ class Handler(BaseHTTPRequestHandler):
                 off = False
             elif raw in ("off", "0", "false", "no"):
                 off = True
+            elif raw in ("auto", "default", "clear"):
+                previous = set_transcribe_off(key, None)
+                state = "DEFAULT (writing down)"
+                print(f"-> TRANSCRIBE [{key}] {state} (was {previous})", flush=True)
+                return self._json(
+                    200,
+                    {"transcribe": True, "previous": not previous, "key": key, "cleared": True},
+                )
             else:
                 return self._json(
                     400,
-                    {"error": {"message": f"bad X-Transcribe: {raw!r} (want on|off)"}},
+                    {"error": {"message": f"bad X-Transcribe: {raw!r} (want on|off|default)"}},
                 )
             previous = set_transcribe_off(key, off)
             state = "OFF (not writing down)" if off else "ON (writing down)"

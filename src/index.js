@@ -5,7 +5,7 @@ const { Client, GatewayIntentBits, Partials, REST, Routes, MessageFlags } = requ
 const config = require('./config');
 const voice = require('./voice');
 const text = require('./text');
-const { sessionKeyFor, setMode, setInterrupt, setTranscribe } = require('./llm');
+const { sessionKeyFor, setMode, setInterrupt, setTranscribe, getVoiceState } = require('./llm');
 const { buildCommands, VOICE_DISABLED_REPLY } = require('./slash-commands');
 const log = require('./log');
 const { startHealthServer, isReady } = require('./health');
@@ -216,9 +216,11 @@ client.on('interactionCreate', async (i) => {
     }
 
     const mode = i.options.getString('mode');
-    const describe = (override) =>
+    const describe = (override, cleared = false) =>
       override === null
-        ? `auto (following VOICE_ALWAYS_WAKE, currently **${config.voiceAlwaysWake ? 'on' : 'off'}**)`
+        ? cleared
+          ? `the default (following VOICE_ALWAYS_WAKE, currently **${config.voiceAlwaysWake ? 'on' : 'off'}**)`
+          : `auto (following VOICE_ALWAYS_WAKE, currently **${config.voiceAlwaysWake ? 'on' : 'off'}**)`
         : `**${override ? 'on' : 'off'}**`;
 
     // Bare invocation is the query form — report, change nothing.
@@ -232,9 +234,10 @@ client.on('interactionCreate', async (i) => {
     }
 
     // The POST reaches the shim, so it can outlast the 3s interaction deadline
-    // if the endpoint is exactly what is unwell.
+    // if the endpoint is exactly what is unwell. `default` and the legacy
+    // `auto` both clear the override; `on`/`off` set it.
     await i.deferReply({ flags: MessageFlags.Ephemeral });
-    const value = mode === 'auto' ? null : mode === 'on';
+    const value = mode === 'auto' || mode === 'default' ? null : mode === 'on';
     const res = await voice.setWakeOverride(i.guildId, value);
     if (!res.ok) {
       return i.editReply(
@@ -244,7 +247,7 @@ client.on('interactionCreate', async (i) => {
       );
     }
     return i.editReply(
-      `Wake phrase: ${describe(value)}. ` +
+      `Wake phrase: ${describe(value, mode === 'default')}. ` +
         `I ${res.solo ? 'now answer unprompted while you are alone' : 'need the wake phrase to answer'}.`,
     );
   }
@@ -292,13 +295,6 @@ client.on('interactionCreate', async (i) => {
     await i.deferReply({ flags: MessageFlags.Ephemeral });
     const key = sessionKeyFor(i.channel, i.user.id);
     const mode = i.options.getString('mode');
-    const result = await setMode(mode, key);
-    if (!result.ok) {
-      const reason = result.unsupported
-        ? 'the backend does not support per-conversation modes'
-        : result.error || 'the endpoint is unreachable';
-      return i.editReply(`Could not switch mode (${reason}). Mode stays as it was.`);
-    }
     // One sentence per mode, phrased as what the conversation now does. The
     // three modes are one pair of flags, so describing them flag-by-flag
     // ("posting on, speech off") would read as two settings rather than one.
@@ -307,7 +303,34 @@ client.on('interactionCreate', async (i) => {
       'voice-text': 'I speak and post to the channel',
       'text-only': 'I post to the channel and never speak',
     };
-    return i.editReply(`This conversation is now **${mode}**: ${describes[mode]}.`);
+    // Bare invocation is the query form — report the current posture without
+    // changing it, like the other three toggles.
+    if (mode === null) {
+      const state = await getVoiceState(key);
+      if (!state.ok) {
+        const reason = state.error || 'the endpoint is unreachable';
+        return i.editReply(`Could not read the mode (${reason}).`);
+      }
+      const current = !state.posting ? 'voice-only' : !state.speech ? 'text-only' : 'voice-text';
+      return i.editReply(`This conversation is currently **${current}**: ${describes[current]}.`);
+    }
+    // The uniform on|off|default aliases. `on`/`off` are spelled as the modes
+    // they mean; `default` stays `default` so the shim clears both per-key
+    // overrides and the configured default (voice-text) is in force again.
+    const mapped = mode === 'on' ? 'voice-text' : mode === 'off' ? 'voice-only' : mode;
+    const result = await setMode(mapped, key);
+    if (!result.ok) {
+      const reason = result.unsupported
+        ? 'the backend does not support per-conversation modes'
+        : result.error || 'the endpoint is unreachable';
+      return i.editReply(`Could not switch mode (${reason}). Mode stays as it was.`);
+    }
+    if (mode === 'default') {
+      return i.editReply(
+        `This conversation is back to the default mode (**voice-text**): ${describes['voice-text']}.`,
+      );
+    }
+    return i.editReply(`This conversation is now **${mapped}**: ${describes[mapped]}.`);
   }
 
   if (i.commandName === 'interrupt') {
@@ -323,7 +346,11 @@ client.on('interactionCreate', async (i) => {
     await i.deferReply({ flags: MessageFlags.Ephemeral });
     const key = sessionKeyFor(i.channel, i.user.id);
     const mode = i.options.getString('mode');
-    const result = await setInterrupt(mode === null ? null : mode === 'on', key);
+    // `default` is the clear form, distinct from the bare-command query (`null`).
+    const result = await setInterrupt(
+      mode === null ? null : mode === 'default' ? 'default' : mode === 'on',
+      key,
+    );
     if (!result.ok) {
       const reason = result.unsupported
         ? 'the backend does not support runtime interrupt toggles'
@@ -332,9 +359,11 @@ client.on('interactionCreate', async (i) => {
     }
     const cancel = result.cancel ?? mode !== 'off';
     return i.editReply(
-      cancel
-        ? 'Interrupt is **on**: speaking over me mid-turn still cuts the answer off.'
-        : 'Interrupt is **off**: speaking over me no longer discards the answer I am producing — it still completes and reaches the chat.',
+      mode === 'default'
+        ? 'Interrupt is back to the default (**on**): speaking over me mid-turn still cuts the answer off.'
+        : cancel
+          ? 'Interrupt is **on**: speaking over me mid-turn still cuts the answer off.'
+          : 'Interrupt is **off**: speaking over me no longer discards the answer I am producing — it still completes and reaches the chat.',
     );
   }
 
@@ -350,7 +379,11 @@ client.on('interactionCreate', async (i) => {
     await i.deferReply({ flags: MessageFlags.Ephemeral });
     const key = sessionKeyFor(i.channel, i.user.id);
     const mode = i.options.getString('mode');
-    const result = await setTranscribe(mode === null ? null : mode === 'on', key);
+    // `default` is the clear form, distinct from the bare-command query (`null`).
+    const result = await setTranscribe(
+      mode === null ? null : mode === 'default' ? 'default' : mode === 'on',
+      key,
+    );
     if (!result.ok) {
       const reason = result.unsupported
         ? 'the backend does not support runtime transcription toggles'
@@ -364,9 +397,11 @@ client.on('interactionCreate', async (i) => {
     if (session && !session.closed) session.setTranscribing(result.transcribe);
     const writing = result.transcribe;
     return i.editReply(
-      writing
-        ? 'Transcription is **on**: every speaker is written down again.'
-        : 'Transcription is **off**: nothing more is written down for this call.',
+      mode === 'default'
+        ? 'Transcription is back to the default (**on**): every speaker is written down again.'
+        : writing
+          ? 'Transcription is **on**: every speaker is written down again.'
+          : 'Transcription is **off**: nothing more is written down for this call.',
     );
   }
 

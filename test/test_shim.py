@@ -944,6 +944,68 @@ class TranscribeSwitch(unittest.TestCase):
         shim.set_transcribe_off(self.KEY, False)
         self.assertFalse(shim.is_transcribe_off(self.KEY))
 
+    def test_set_transcribe_off_none_clears_the_override(self):
+        # `/transcribe default`: None pops the per-key entry so the configured
+        # default (transcription ON) is in force again — not a stored False.
+        shim.set_transcribe_off(self.KEY, True)
+        previous = shim.set_transcribe_off(self.KEY, None)
+        self.assertTrue(previous, "clear returns the value it replaced")
+        self.assertFalse(shim.is_transcribe_off(self.KEY))
+
+
+class FlagClearSetters(unittest.TestCase):
+    """The setter-level clear contract behind the uniform default paths.
+
+    Each per-key flag store pops on None (mirroring `set_wake_override`), so
+    the route's `default`/`auto`/`clear` values fall back to the configured
+    default rather than storing an explicit False — the distinction that makes
+    `default` a real restore and not a synonym for `off`.
+    """
+
+    KEY = "voice:test"
+
+    def setUp(self):
+        self._prev = (
+            shim.is_chat_off(self.KEY),
+            shim.is_barge_in_off(self.KEY),
+            shim.is_transcribe_off(self.KEY),
+        )
+        shim.set_chat_off(self.KEY, False)
+        shim.set_barge_in_off(self.KEY, False)
+        shim.set_transcribe_off(self.KEY, False)
+
+    def tearDown(self):
+        shim.set_chat_off(self.KEY, self._prev[0])
+        shim.set_barge_in_off(self.KEY, self._prev[1])
+        shim.set_transcribe_off(self.KEY, self._prev[2])
+
+    def test_chat_off_none_clears_the_override(self):
+        shim.set_chat_off(self.KEY, True)
+        previous = shim.set_chat_off(self.KEY, None)
+        self.assertTrue(previous)
+        self.assertFalse(shim.is_chat_off(self.KEY))
+
+    def test_barge_in_off_none_clears_the_override(self):
+        shim.set_barge_in_off(self.KEY, True)
+        previous = shim.set_barge_in_off(self.KEY, None)
+        self.assertTrue(previous)
+        self.assertFalse(shim.is_barge_in_off(self.KEY))
+
+    def test_clear_mode_restores_voice_text(self):
+        shim.set_mode(self.KEY, "text-only")
+        prev_chat, prev_speech = shim.clear_mode(self.KEY)
+        self.assertFalse(prev_chat, "text-only leaves chat posting on")
+        self.assertTrue(prev_speech, "text-only sets speech off")
+        self.assertFalse(shim.is_chat_off(self.KEY))
+        self.assertFalse(shim.is_speech_off(self.KEY))
+
+    def test_clear_mode_on_an_untouched_key_is_a_noop(self):
+        prev_chat, prev_speech = shim.clear_mode("voice:never-seen")
+        self.assertFalse(prev_chat)
+        self.assertFalse(prev_speech)
+        self.assertFalse(shim.is_chat_off("voice:never-seen"))
+        self.assertFalse(shim.is_speech_off("voice:never-seen"))
+
 
 class VoiceYieldHandover(unittest.TestCase):
     """LAST JOINER WINS: who gets asked to leave voice when the bind changes.
@@ -1552,3 +1614,134 @@ class VoiceStateRoute(unittest.TestCase):
         self.assertTrue(state["posting"])
         self.assertTrue(state["interrupt"])
         self.assertTrue(state["transcribe"])
+
+
+class FlagClearPaths(unittest.TestCase):
+    """The uniform clear path on every per-key flag route.
+
+    The flag standardization task gives all four per-conversation toggles
+    (`/wakephrase`, `/interrupt`, `/transcribe`, `/mode`) one on/off/default
+    contract. `/voice/wake` already had the clear path; these tests pin the
+    same `default`/`auto`/`clear` → pop-the-override behaviour on the other
+    routes, and prove the cleared state shows up on the /voice/state back-edge
+    (the SC2 verification hook).
+    """
+
+    KEY = "voice:test"
+
+    def setUp(self):
+        self._prev_token = shim.CHAT_BRIDGE_TOKEN
+        shim.CHAT_BRIDGE_TOKEN = "test-token"
+        self._prev = (
+            shim.is_chat_off(self.KEY),
+            shim.is_barge_in_off(self.KEY),
+            shim.is_transcribe_off(self.KEY),
+        )
+        shim.set_chat_off(self.KEY, False)
+        shim.set_barge_in_off(self.KEY, False)
+        shim.set_transcribe_off(self.KEY, False)
+        shim.clear_mode(self.KEY)
+
+    def tearDown(self):
+        shim.set_chat_off(self.KEY, self._prev[0])
+        shim.set_barge_in_off(self.KEY, self._prev[1])
+        shim.set_transcribe_off(self.KEY, self._prev[2])
+        shim.CHAT_BRIDGE_TOKEN = self._prev_token
+
+    def _post(self, path, headers):
+        handler = shim.Handler.__new__(shim.Handler)
+        handler.path = path
+        handler.headers = dict(headers, Authorization="Bearer test-token")
+        handler.rfile = io.BytesIO(b"")
+        handler.wfile = io.BytesIO()
+        handler.requestline = f"POST {path} HTTP/1.1"
+        handler.request_version = "HTTP/1.1"
+        handler.command = "POST"
+        handler.do_POST()
+        body = handler.wfile.getvalue().split(b"\r\n\r\n")[-1]
+        return json.loads(body)
+
+    def _state(self):
+        handler = shim.Handler.__new__(shim.Handler)
+        handler.path = "/v1/voice/state"
+        handler.headers = {"X-Session-Key": self.KEY}
+        handler.wfile = io.BytesIO()
+        handler.requestline = "GET /v1/voice/state HTTP/1.1"
+        handler.request_version = "HTTP/1.1"
+        handler.command = "GET"
+        handler.do_GET()
+        return json.loads(handler.wfile.getvalue().split(b"\r\n\r\n")[-1])
+
+    def test_barge_default_clears_the_override_and_reports_cancel_on(self):
+        shim.set_barge_in_off(self.KEY, True)
+        body = self._post("/v1/voice/barge", {"X-Session-Key": self.KEY, "X-Barge-In": "default"})
+        self.assertTrue(body["cancel"])
+        self.assertTrue(body["cleared"])
+        self.assertFalse(shim.is_barge_in_off(self.KEY))
+        self.assertTrue(self._state()["interrupt"])
+
+    def test_barge_auto_and_clear_are_legacy_spellings(self):
+        shim.set_barge_in_off(self.KEY, True)
+        for spelling in ("auto", "clear"):
+            body = self._post("/v1/voice/barge",
+                              {"X-Session-Key": self.KEY, "X-Barge-In": spelling})
+            self.assertTrue(body["cleared"], f"{spelling} must clear")
+            self.assertFalse(shim.is_barge_in_off(self.KEY))
+            shim.set_barge_in_off(self.KEY, True)
+
+    def test_transcribe_default_clears_the_override_and_reports_on(self):
+        shim.set_transcribe_off(self.KEY, True)
+        body = self._post("/v1/voice/transcribe",
+                          {"X-Session-Key": self.KEY, "X-Transcribe": "default"})
+        self.assertTrue(body["transcribe"])
+        self.assertTrue(body["cleared"])
+        self.assertFalse(shim.is_transcribe_off(self.KEY))
+        self.assertTrue(self._state()["transcribe"])
+
+    def test_chat_posting_default_clears_the_override_and_reports_posting(self):
+        shim.set_chat_off(self.KEY, True)
+        body = self._post("/v1/chat/posting",
+                          {"X-Session-Key": self.KEY, "X-Chat-Posting": "default"})
+        self.assertTrue(body["posting"])
+        self.assertTrue(body["cleared"])
+        self.assertFalse(shim.is_chat_off(self.KEY))
+        self.assertTrue(self._state()["posting"])
+
+    def test_mode_default_clears_both_flags_and_reports_voice_text(self):
+        shim.set_mode(self.KEY, "text-only")
+        body = self._post("/v1/mode", {"X-Session-Key": self.KEY, "X-Mode": "default"})
+        self.assertEqual(body["mode"], "voice-text")
+        self.assertTrue(body["cleared"])
+        state = self._state()
+        self.assertTrue(state["posting"])
+        self.assertTrue(state["speech"])
+
+    def test_mode_auto_and_clear_are_legacy_spellings(self):
+        for spelling in ("auto", "clear"):
+            shim.set_mode(self.KEY, "voice-only")
+            body = self._post("/v1/mode", {"X-Session-Key": self.KEY, "X-Mode": spelling})
+            self.assertTrue(body["cleared"], f"{spelling} must clear")
+            self.assertTrue(self._state()["posting"])
+
+    def test_bare_barge_post_is_still_the_query_form(self):
+        # SC3: the query form survives the clear path — a headerless POST
+        # reports the posture without changing it.
+        shim.set_barge_in_off(self.KEY, True)
+        body = self._post("/v1/voice/barge", {"X-Session-Key": self.KEY})
+        self.assertFalse(body["cancel"])
+        self.assertTrue(shim.is_barge_in_off(self.KEY), "query form must not mutate")
+
+    def test_bare_transcribe_post_is_still_the_query_form(self):
+        shim.set_transcribe_off(self.KEY, True)
+        body = self._post("/v1/voice/transcribe", {"X-Session-Key": self.KEY})
+        self.assertFalse(body["transcribe"])
+        self.assertTrue(shim.is_transcribe_off(self.KEY), "query form must not mutate")
+
+    def test_bad_values_still_reject_with_the_new_contract_in_the_message(self):
+        body = self._post("/v1/voice/barge",
+                          {"X-Session-Key": self.KEY, "X-Barge-In": "sometimes"})
+        self.assertEqual(body["error"]["message"], "bad X-Barge-In: 'sometimes' (want on|off|default)")
+        body = self._post("/v1/voice/transcribe",
+                          {"X-Session-Key": self.KEY, "X-Transcribe": "maybe"})
+        self.assertEqual(body["error"]["message"],
+                         "bad X-Transcribe: 'maybe' (want on|off|default)")
