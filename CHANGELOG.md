@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.41.1
 
 - fix: `tools/make-stall-clip.py` no longer re-scales the TTS output — the Qwen3 handler already converts to int16 before yielding, so the script's extra `clip(-1, 1) * 32767` clamped every sample to full scale and rendered a harsh, ~5×-too-loud square wave. Heard in a live call before it was caught; the giveaway was in the first measurement, where the peak read _exactly_ 1.000 full scale. The clip is regenerated (crest factor 15.8 dB, no samples at full scale) and the script now refuses a non-integer chunk dtype and prints the peak on every run.
 - fix: the stall filler is now written to the call transcript, under the assistant's label — the clip is raw PCM written straight to the audio pump, so it never passes through the TTS path and nothing wrote it down. The shim's `_PROGRESS_LINES` fillers reach the transcript by riding `response.output_audio_transcript.done`; without this the stall filler was the one thing said in a call that the record omitted. The text is read from `src/stall-clip.txt`, which `tools/make-stall-clip.py` writes beside the PCM, so the spoken line and the recorded line cannot drift apart.
