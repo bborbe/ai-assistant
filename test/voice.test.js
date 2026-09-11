@@ -558,7 +558,12 @@ test('speak resolves no-socket immediately when connectS2S tears down the socket
 // `this.audio` (endAudio() no-ops when null) and `this.transcript`.
 function fakeOnEventTarget(overrides = {}) {
   const transcriptWrites = [];
-  return {
+  // Prototype-backed, not a bare object literal: onEvent dispatches to real
+  // Session methods, and on a plain object every one of those is a TypeError
+  // rather than a no-op — which is how the stall clock's clearStallClock()
+  // call broke eight unrelated tests the moment it was added. Own properties
+  // below still shadow the prototype, so the explicit stubs keep winning.
+  return Object.assign(Object.create(Session.prototype), {
     audio: null,
     speaking: false,
     typedReplyPending: false,
@@ -573,8 +578,39 @@ function fakeOnEventTarget(overrides = {}) {
     // Wait state for the "slot already in use" retry deadline — see
     // Session.prototype.onSlotFreed and the 'error' handler in onEvent.
     slotWaitStartedAt: null,
+    // Stall clock — see Session.prototype.startStallClock. `solo` is here
+    // because the transcription handler reads it to decide `answering`, and
+    // that verdict is what disarms the clock for an unaddressed utterance.
+    solo: false,
+    stallStartedAt: null,
+    stallTimer: null,
+    stallDetected: false,
     ...overrides,
-  };
+  });
+}
+
+// reportStall's entire output is a log line, so asserting on it means reading
+// that line. voice.js holds the same module object this returns, so patching
+// the property here is what its `log.info` call resolves to — no seam needed.
+function captureInfo(fn) {
+  const log = require('../src/log');
+  const real = log.info;
+  const lines = [];
+  log.info = (msg, fields) => lines.push({ msg, fields });
+  try {
+    fn();
+  } finally {
+    log.info = real;
+  }
+  return lines;
+}
+
+// An armed-but-not-fired timer. unref'd so a failing assertion that skips the
+// cleanup cannot leave node:test holding the process open for a minute.
+function armedTimer() {
+  const t = setTimeout(() => {}, 60000);
+  t.unref();
+  return t;
 }
 
 test('onEvent sets inResponse on response.created, for any trigger', () => {
@@ -588,6 +624,88 @@ test('onEvent clears inResponse and typedReplyPending on response.done', () => {
   Session.prototype.onEvent.call(fake, JSON.stringify({ type: 'response.done' }));
   assert.equal(fake.inResponse, false);
   assert.equal(fake.typedReplyPending, false);
+});
+
+// The stall clock — SC1's measurement. `speech_stopped` is the only event that
+// can start it on a mic turn: `response.created` is suppressed on that path
+// (see `answering` in the constructor) and `speech_started` fires while the
+// user is still mid-sentence.
+test('onEvent arms the stall clock on speech_stopped', () => {
+  const fake = fakeOnEventTarget();
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({ type: 'input_audio_buffer.speech_stopped' }),
+  );
+  assert.notEqual(
+    fake.stallStartedAt,
+    null,
+    'speech_stopped is the earliest signal the bot gets that an answer is owed',
+  );
+  assert.notEqual(fake.stallTimer, null);
+  Session.prototype.clearStallClock.call(fake); // never leave a live 8s timer behind
+  assert.equal(fake.stallTimer, null);
+});
+
+test('an unaddressed utterance disarms the stall clock, because silence is not a wait', () => {
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now(), stallTimer: armedTimer() });
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({
+      type: 'conversation.item.input_audio_transcription.completed',
+      transcript: 'did you see the game last night',
+    }),
+  );
+  assert.equal(fake.answering, false);
+  assert.equal(fake.stallStartedAt, null);
+  assert.equal(
+    fake.stallTimer,
+    null,
+    'the timer must be cleared, not left to fire on a turn nobody is waiting for',
+  );
+});
+
+test('an addressed utterance leaves the stall clock running', () => {
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now(), stallTimer: armedTimer() });
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({
+      type: 'conversation.item.input_audio_transcription.completed',
+      transcript: 'hey bot, what is the disk usage',
+    }),
+  );
+  assert.equal(fake.answering, true);
+  assert.notEqual(fake.stallStartedAt, null, 'an answer is coming, so the wait is still measured');
+  Session.prototype.clearStallClock.call(fake);
+});
+
+test('reportStall logs the utterance-to-audio gap and clears the clock', () => {
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now() - 12345 });
+  const lines = captureInfo(() => Session.prototype.reportStall.call(fake));
+  const line = lines.find((l) => l.msg.includes('start-to-audio'));
+  assert.ok(line, 'expected a start-to-audio line');
+  assert.ok(
+    line.fields.gapMs >= 12345,
+    `gapMs ${line.fields.gapMs} must be at least the 12345ms already elapsed`,
+  );
+  assert.equal(line.fields.detected, false, 'a fast turn is measured but not a stall');
+  assert.equal(
+    fake.stallStartedAt,
+    null,
+    'cleared so the next turn measures from its own utterance, not this one',
+  );
+});
+
+test('reportStall reports detected once the threshold timer has fired', () => {
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now() - 9000, stallDetected: true });
+  const lines = captureInfo(() => Session.prototype.reportStall.call(fake));
+  const line = lines.find((l) => l.msg.includes('start-to-audio'));
+  assert.equal(line.fields.detected, true);
+});
+
+test('reportStall logs nothing when no utterance armed the clock', () => {
+  const fake = fakeOnEventTarget();
+  const lines = captureInfo(() => Session.prototype.reportStall.call(fake));
+  assert.deepEqual(lines, [], 'a typed turn must not produce a mic-turn measurement');
 });
 
 test('onEvent marks a typed-triggered reply distinctly in the transcript', () => {

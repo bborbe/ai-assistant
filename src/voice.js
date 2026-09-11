@@ -193,6 +193,20 @@ class Session {
     // the event is skipped. So a spoken turn needs its own signal, and the
     // earliest honest one is the user's utterance being transcribed.
     this.answering = false;
+    // The mic turn's stall clock: set when the user stops speaking, cleared
+    // when audio arrives or the turn is abandoned. `speech_stopped` is the
+    // earliest signal the bot gets that an answer is owed — `response.created`
+    // never arrives for a mic turn (see `answering` above), and
+    // `speech_started` fires while the user is still mid-sentence. So the gap
+    // measured from here IS the wait the listener experiences.
+    this.stallStartedAt = null;
+    // Fires when that gap crosses config.voiceStallThresholdMs. Kept separate
+    // from the measurement: every turn reports its gap, but only one slow
+    // enough to be worth speaking into trips this.
+    this.stallTimer = null;
+    // Latched by the timer above and read by reportStall(). A flag rather than
+    // inferring from `stallTimer === null`, which clearStallClock() also sets.
+    this.stallDetected = false;
 
     // Transcript path — EVERY speaker, independent of the command allowlist.
     // Buffers here are flushed on each speaker's silence boundary.
@@ -683,6 +697,19 @@ class Session {
           this.stopAudio();
         }
         break;
+      // The mic turn's clock starts here, and this is the only event that can
+      // start it: `response.created` is suppressed on this path (see
+      // `answering` in the constructor), and `speech_started` fires while the
+      // user is still mid-sentence. Speech END is the first moment an answer
+      // is owed, so it is the first moment a listener can be waiting.
+      //
+      // Armed on EVERY utterance, addressed or not — the server emits this
+      // unconditionally (`handlers/audio.py:150`) and the bot cannot yet tell
+      // whether this one was for it. That verdict arrives seconds later with
+      // the transcription, which disarms the clock when the answer is silence.
+      case 'input_audio_buffer.speech_stopped':
+        this.startStallClock();
+        break;
       case 'conversation.item.input_audio_transcription.completed':
         if (e.transcript) log.info(`  voice YOU: ${e.transcript}`);
         // The mic turn's "an answer is coming" signal — the user has finished
@@ -712,6 +739,10 @@ class Session {
         // them costs a typing indicator with no answer behind it. One source
         // (the room) posted to the shim and kept here is what keeps them level.
         this.answering = this.solo || config.isAddressed(e.transcript);
+        // Not addressed → the endpoint answers with silence → there is no wait
+        // to narrate. Disarmed HERE rather than at `response.done`, which such
+        // a turn never sends (see the flag notes below).
+        if (!this.answering) this.clearStallClock();
         if (this.answering) this.showTyping();
         else log.debug('  voice: not addressed, no typing indicator');
         break;
@@ -763,6 +794,9 @@ class Session {
         this.typedReplyPending = false;
         this.inResponse = false;
         this.answering = false;
+        // A no-op once audio played (reportStall already cleared it) — this is
+        // the backstop for a response that ends without ever producing a frame.
+        this.clearStallClock();
         this.endAudio();
         break;
       case 'error': {
@@ -837,6 +871,7 @@ class Session {
         this.typedReplyPending = false;
         this.inResponse = false;
         this.answering = false;
+        this.clearStallClock();
         this.endAudio();
         // From inside Discord, a failed answer and an utterance the wake gate
         // ignored are the same event: silence. Both surfaces the busy path
@@ -847,6 +882,64 @@ class Session {
         break;
       }
     }
+  }
+
+  /**
+   * Start the mic turn's stall clock — the user has stopped speaking and an
+   * answer is now owed.
+   *
+   * Re-armed per utterance, never accumulated: a second utterance while the
+   * first is still unanswered restarts the wait, because that is what the
+   * listener experiences (they spoke again, and are waiting from there).
+   */
+  startStallClock() {
+    this.clearStallClock();
+    this.stallStartedAt = Date.now();
+    // The DETECTOR, distinct from the measurement in reportStall(). unref'd so
+    // a pending stall can never hold the process open through a teardown.
+    this.stallTimer = setTimeout(() => {
+      this.stallTimer = null;
+      this.stallDetected = true;
+      log.info('  voice: stall — no audio yet', {
+        waitedMs: Date.now() - this.stallStartedAt,
+        thresholdMs: config.voiceStallThresholdMs,
+      });
+    }, config.voiceStallThresholdMs);
+    this.stallTimer.unref?.();
+  }
+
+  /**
+   * Disarm the stall clock without reporting it — the wait ended for a reason
+   * that is not an answer (unaddressed utterance, failed response, teardown).
+   */
+  clearStallClock() {
+    if (this.stallTimer) {
+      clearTimeout(this.stallTimer);
+      this.stallTimer = null;
+    }
+    this.stallStartedAt = null;
+    this.stallDetected = false;
+  }
+
+  /**
+   * Report the mic turn's wait, end-of-utterance to first audio frame.
+   *
+   * Logged on EVERY mic turn, not only the stalled ones. A threshold with no
+   * distribution behind it cannot be reviewed, and the premise of this change
+   * is that the fast turn is the normal one — so the fast turn has to be in
+   * the log for the slow one to mean anything. `gapMs` is the number SC1 asks
+   * for; `detected` says whether it also crossed the threshold.
+   */
+  reportStall() {
+    if (!this.stallStartedAt) return;
+    const gapMs = Date.now() - this.stallStartedAt;
+    const detected = this.stallDetected;
+    this.clearStallClock();
+    log.info('  voice: mic turn start-to-audio', {
+      gapMs,
+      thresholdMs: config.voiceStallThresholdMs,
+      detected,
+    });
   }
 
   /**
@@ -866,6 +959,11 @@ class Session {
   pushAudio(chunk) {
     this.outQueue = Buffer.concat([this.outQueue, up(chunk)]);
     if (this.audio) return;
+
+    // First frame of the turn: the wait is over. Reported before the playback
+    // bookkeeping below so the number is when audio ARRIVED, not when the
+    // player got around to starting.
+    this.reportStall();
 
     this.audio = new PassThrough();
     this.ending = false;
@@ -929,6 +1027,10 @@ class Session {
 
   /** Abandon playback mid-stream — barge-in, or teardown. */
   stopAudio() {
+    // Barge-in and teardown both land here: either way the turn being measured
+    // is over, and a clock left armed would report the next turn's audio
+    // against the abandoned utterance's start.
+    this.clearStallClock();
     clearInterval(this.outTick);
     this.outTick = null;
     this.outQueue = Buffer.alloc(0);

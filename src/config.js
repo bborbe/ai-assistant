@@ -255,6 +255,17 @@ const config = {
   // handover bypasses this entirely — a joining bot evicts an idle holder
   // immediately via the shim's yield, never waiting out the grace window.
   voiceIdleReleaseMs: parseInt(process.env.VOICE_IDLE_RELEASE_MS || '3600000', 10),
+  // How long a spoken turn may go without producing audio before the bot
+  // treats the wait as a stall worth speaking into. The mic turn's clock
+  // starts when the user stops speaking (`input_audio_buffer.speech_stopped`),
+  // which is the earliest signal the bot receives that an answer is owed.
+  //
+  // Warm turns run ~5.7s end-to-end (2026-09-09 baseline); the cold-start-
+  // after-idle turn measured 25.6s on 2026-09-11. 8s sits above the warm case
+  // with ~2s of headroom and far below the stall, so a normal pause is never
+  // narrated. Every turn logs its gap regardless — this threshold only decides
+  // when the wait is treated as one worth narrating.
+  voiceStallThresholdMs: parseInt(process.env.VOICE_STALL_THRESHOLD_MS || '8000', 10),
 
   build: {
     version: process.env.BUILD_GIT_VERSION || 'dev',

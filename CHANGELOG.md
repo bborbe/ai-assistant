@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: measure and log the mic turn's stall — the bot now handles `input_audio_buffer.speech_stopped`, the earliest signal it receives that an answer is owed, and logs the gap from there to the first audio frame on every spoken turn (`voice: mic turn start-to-audio`), flagging it `detected` once it crosses `VOICE_STALL_THRESHOLD_MS` (default 8000). Warm turns run ~5.7s end-to-end and the cold-start-after-idle stall measured 25.6s, so the threshold sits between them; an unaddressed utterance is disarmed at the transcription verdict rather than narrated.
+
 ## v0.39.1
 
 - fix: `/status` toggle line gives each flag its own ✅/❌ tick — the grouped `⚙️ wake/posting/interrupt` line previously carried no per-flag icon and read differently from every other ticked status line (transcription, gateway, endpoint).
