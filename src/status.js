@@ -4,7 +4,7 @@ const net = require('node:net');
 const fs = require('node:fs');
 const config = require('./config');
 const voice = require('./voice');
-const { listSessions, DEFAULT_SESSION_KEY } = require('./llm');
+const { listSessions, DEFAULT_SESSION_KEY, getVoiceState } = require('./llm');
 
 /**
  * One-shot health summary, readable from inside Discord.
@@ -122,10 +122,15 @@ async function report(client, hereKey) {
 
   // With voice disabled, speech-to-speech is not probed at all — a red cross
   // against a service this instance was never meant to reach reads as a fault
-  // and sends the reader looking for a broken thing that does not exist.
-  const [shimUp, s2sUp] = await Promise.all([
+  // and sends the reader looking for a broken thing that does not exist. The
+  // toggle-state probe joins the same batch so /status pays no extra latency.
+  const live = [...voice.sessions.values()].find((s) => !s.closed);
+  const [shimUp, s2sUp, toggleState] = await Promise.all([
     httpOk(`${config.baseUrl}/models`),
     config.voiceEnabled && s2sHost ? tcpOk(s2sHost, s2sPort) : Promise.resolve(false),
+    config.voiceEnabled
+      ? getVoiceState(live?.voiceKey ?? DEFAULT_SESSION_KEY)
+      : Promise.resolve({ ok: false }),
   ]);
 
   // Voice sessions this process owns. A ghost connection left by a crashed
@@ -157,7 +162,6 @@ async function report(client, hereKey) {
   // there is nothing being written, so the honest answer is the TRANSCRIBE env
   // default the NEXT call starts with; it is marked `(default)` so it does not
   // read as "recording right now".
-  const live = [...voice.sessions.values()].find((s) => !s.closed);
   const transcribing = live ? Boolean(live.transcript) : config.transcribe;
   // Replaces the old "transcripts — writable": writability is an I/O detail
   // that said nothing about whether the call was actually being recorded. The
@@ -169,6 +173,20 @@ async function report(client, hereKey) {
         live ? '' : ' (default)'
       }${transcriptOk ? '' : ' — transcripts dir NOT writable'}`
     : '🚫 transcription — n/a (voice disabled)';
+  // The shim-owned toggles, one glance instead of three bare invocations.
+  // `wake_override === null` means the env default is in force, marked
+  // `(default)`; a live call's key is queried so a mid-call /interrupt or /mode
+  // shows up, and an idle query answers the unknown key with the shim's
+  // defaults — what the next call starts with. Best-effort: an unreachable or
+  // pre-route shim degrades to a note, never a broken /status.
+  const toggleLine =
+    toggleState.ok === true
+      ? `⚙️ wake: ${toggleState.wake ? 'on' : 'off'}${
+          toggleState.wake_override === null ? ' (default)' : ' (override)'
+        } · posting: ${toggleState.posting ? 'voice-text' : 'voice-only'} · interrupt: ${
+          toggleState.interrupt ? 'on' : 'off'
+        }`
+      : '⚙️ toggles — shim state unavailable';
 
   const ping = Math.round(client.ws.ping);
   const claude = shimUp ? await sessionLines(hereKey) : [];
@@ -181,6 +199,7 @@ async function report(client, hereKey) {
       ? `${tick(s2sUp)} speech-to-speech — ${config.s2sUrl}`
       : '🚫 voice — disabled on this instance (VOICE_ENABLED=false), text only',
     transcriptionLine,
+    ...(config.voiceEnabled ? [toggleLine] : []),
     ...(config.voiceEnabled
       ? [sessions.length ? `🎙️ in voice — ${sessions.join(', ')}` : '🔇 not in a voice channel']
       : []),

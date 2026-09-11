@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: `/status` shows the state of every runtime per-conversation toggle, not just transcription — a new `⚙️ wake: … · posting: voice-text|voice-only · interrupt: on|off` line reads the shim's per-key stores via a new unauthenticated GET `/voice/state` (observe-only, matching the control-auth rule), so a mid-call `/interrupt off` or `/mode voice-only` is visible at a glance; idle, the shim answers an unknown key with its defaults, what the next call starts with. Also adds the first `status.test.js` smoke tests.
+
 ## v0.38.0
 
 - feat: `/status` replaces the `transcripts — writable` line with the transcription state — `transcription: enabled|disabled` (live posture during a call, `TRANSCRIBE` default marked `(default)` when idle), so "are we being written down?" is answerable from the status line; the writable check survives only as a failure suffix so a broken transcript dir stays diagnosable.

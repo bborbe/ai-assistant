@@ -321,6 +321,35 @@ async function setVoiceWake(value, sessionKey) {
   }
 }
 
+/**
+ * Read the effective posture of every runtime per-conversation toggle for one
+ * conversation key — the /status back-edge.
+ *
+ * Returns the shim's per-key stores in one GET (open by design: it observes,
+ * never mutates, so no control token is needed): `wake` (effective always-wake,
+ * override applied), `wake_override` (null = no override, the env default is in
+ * force), `posting` (true = voice-text, false = voice-only), `interrupt`
+ * (true = barge-in cancels, the default) and `transcribe` (true = written down).
+ *
+ * Failure is best-effort: /status must not break because the toggle-state probe
+ * hiccuped. The caller decides how to show a missing answer.
+ */
+async function getVoiceState(sessionKey) {
+  try {
+    const res = await fetch(`${config.baseUrl}/voice/state`, {
+      headers: { 'X-Session-Key': sessionKey },
+    });
+    if (!res.ok) return { ok: false, error: `endpoint ${res.status}` };
+    const body = await res.json().catch(() => null);
+    if (res.ok && body && typeof body.interrupt === 'boolean') {
+      return { ok: true, ...body };
+    }
+    return { ok: false, error: 'malformed response' };
+  } catch (e) {
+    return { ok: false, error: e.message, retryable: true };
+  }
+}
+
 /** Ask the backend to forget a conversation. Backends without the route say so. */
 async function resetSession(sessionKey) {
   const res = await fetch(`${config.baseUrl}/sessions/reset`, {
@@ -475,6 +504,7 @@ module.exports = {
   setChatPosting,
   setInterrupt,
   setTranscribe,
+  getVoiceState,
   setVoiceWake,
   availableSessions,
   sessionKeyFor,
