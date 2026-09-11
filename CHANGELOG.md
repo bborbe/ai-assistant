@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.40.0
 
 - feat: `/status` gives each shim-owned toggle its own line, prefixed by an icon naming what it governs — `👂 ✅ wake: …`, `💬 ✅ posting: …`, `✋ ❌ interrupt: …` replace the single `⚙️ … · … · …` run-on line, so each state is scannable without parsing a joined string and `interrupt: off` reads as the effect it names rather than a bare flag. The per-flag ✅/❌ ticks are unchanged. The degraded `⚙️ toggles — shim state unavailable` line keeps its group icon, there being no per-toggle states to prefix.
 
