@@ -721,7 +721,7 @@ def is_solo(key: str) -> bool:
 # /v1/voice/wake. Tri-state on purpose: True forces the phrase, False relaxes to
 # head-count behaviour, and ABSENT means "no override" — defer to the
 # ALWAYS_WAKE env default. A plain bool cannot express that third case, which is
-# what `/wake auto` restores; without it the configured default is unreachable
+# what `/wake default` restores; without it the configured default is unreachable
 # for the life of the process once the command is used at all.
 #
 # In-memory and per-key, like _SOLO_BY_KEY above and for the same two reasons: a
@@ -2882,10 +2882,11 @@ class Handler(BaseHTTPRequestHandler):
         # above: speech-to-speech owns the HTTP call to /chat/completions and
         # can attach no headers of its own, so posture has to arrive separately.
         #
-        # X-Voice-Wake: on | off | auto. `auto` CLEARS the override rather than
-        # setting it false — "no override, use VOICE_ALWAYS_WAKE" is a third
-        # state, and conflating it with off would make the configured default
-        # unreachable until the process restarts.
+        # X-Voice-Wake: on | off | default. `default` (also accepted as
+        # `clear`) CLEARS the override rather than setting it false — "no
+        # override, use VOICE_ALWAYS_WAKE" is a third state, and conflating it
+        # with off would make the configured default unreachable until the
+        # process restarts.
         #
         # ADMIN SURFACE: this route carries the decision the bot's
         # config.isAdmin gate makes, so it must not be settable by whatever can
@@ -2908,12 +2909,12 @@ class Handler(BaseHTTPRequestHandler):
                 value = True
             elif raw in ("off", "0", "false", "no"):
                 value = False
-            elif raw in ("auto", "default", "clear"):
+            elif raw in ("default", "clear"):
                 value = None
             else:
                 return self._json(
                     400,
-                    {"error": {"message": f"bad X-Voice-Wake: {raw!r} (want on|off|auto)"}},
+                    {"error": {"message": f"bad X-Voice-Wake: {raw!r} (want on|off|default)"}},
                 )
             previous = set_wake_override(key, value)
             effective = effective_always_wake(key)
@@ -2958,8 +2959,8 @@ class Handler(BaseHTTPRequestHandler):
         # must stay unreachable. The /chat/posting route below remains for the
         # SPOKEN instruction path, which knows about chat only.
         #
-        # X-Mode also accepts `default`/`auto`/`clear` (mirroring /voice/wake
-        # and the other flag routes): CLEAR both per-key overrides, restoring
+        # X-Mode also accepts `default`/`clear` (mirroring /voice/wake and the
+        # other flag routes): CLEAR both per-key overrides, restoring
         # the configured default (voice-text). The on|off aliases are mapped on
         # the BOT side (`on` → voice-text, `off` → voice-only) before the mode
         # reaches this route, so MODES stays the canonical value space.
@@ -2968,7 +2969,7 @@ class Handler(BaseHTTPRequestHandler):
             if not key:
                 return self._json(400, {"error": {"message": "missing X-Session-Key"}})
             mode = self.headers.get("X-Mode", "").strip().strip("\"'").lower()
-            if mode in ("auto", "default", "clear"):
+            if mode in ("default", "clear"):
                 prev_chat, prev_speech = clear_mode(key)
                 print(f"-> MODE  [{key}] default (was chat_off={prev_chat}, "
                       f"speech_off={prev_speech})", flush=True)
@@ -3005,7 +3006,7 @@ class Handler(BaseHTTPRequestHandler):
                 # of the 2026-08-18 cross-call leak).
                 return self._json(400, {"error": {"message": "missing X-Session-Key"}})
             posting = self.headers.get("X-Chat-Posting", "").strip().strip("\"'").lower()
-            if posting in ("auto", "default", "clear"):
+            if posting in ("default", "clear"):
                 # Same clear contract as /voice/wake, /voice/barge and
                 # /voice/transcribe: pop the per-key override so the configured
                 # default (posting ON) is in force again.
@@ -3033,7 +3034,7 @@ class Handler(BaseHTTPRequestHandler):
         # the listener speaking mid-turn no longer ends the in-flight answer;
         # the reply still completes and reaches the chat bridge/transcript. `on`
         # restores today's behaviour (cancel on barge-in). `default` (also
-        # accepted as `auto`/`clear`, mirroring /voice/wake) CLEARS the per-key
+        # accepted as `clear`, mirroring /voice/wake) CLEARS the per-key
         # override, so the configured default is in force again. The default is
         # `on` — current behaviour stays the safe baseline until a smarter
         # heuristic has numbers.
@@ -3062,7 +3063,7 @@ class Handler(BaseHTTPRequestHandler):
                 off = False
             elif raw in ("off", "0", "false", "no"):
                 off = True
-            elif raw in ("auto", "default", "clear"):
+            elif raw in ("default", "clear"):
                 previous = set_barge_in_off(key, None)
                 state = "DEFAULT (interrupt enabled)"
                 print(f"-> INTERRUPT [{key}] {state} (was {previous})", flush=True)
@@ -3091,10 +3092,10 @@ class Handler(BaseHTTPRequestHandler):
         # queryable without a live call and both sides agree on one source.
         #
         # X-Transcribe: on | off | default. `off` stops the bot writing this
-        # call down; `on` restores it. `default` (also accepted as `auto`/
-        # `clear`, mirroring /voice/wake) CLEARS the per-key override, so the
-        # configured default is in force again. Bare POST (no header) is the
-        # query form: report the current posture without changing it.
+        # call down; `on` restores it. `default` (also accepted as `clear`,
+        # mirroring /voice/wake) CLEARS the per-key override, so the configured
+        # default is in force again. Bare POST (no header) is the query form:
+        # report the current posture without changing it.
         #
         # ADMIN SURFACE, same as the other three: deciding what gets written
         # down is an operator call, not state the bot merely observes. Guarded
@@ -3120,7 +3121,7 @@ class Handler(BaseHTTPRequestHandler):
                 off = False
             elif raw in ("off", "0", "false", "no"):
                 off = True
-            elif raw in ("auto", "default", "clear"):
+            elif raw in ("default", "clear"):
                 previous = set_transcribe_off(key, None)
                 state = "DEFAULT (writing down)"
                 print(f"-> TRANSCRIBE [{key}] {state} (was {previous})", flush=True)

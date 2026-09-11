@@ -216,11 +216,9 @@ client.on('interactionCreate', async (i) => {
     }
 
     const mode = i.options.getString('mode');
-    const describe = (override, cleared = false) =>
+    const describe = (override) =>
       override === null
-        ? cleared
-          ? `the default (following VOICE_ALWAYS_WAKE, currently **${config.voiceAlwaysWake ? 'on' : 'off'}**)`
-          : `auto (following VOICE_ALWAYS_WAKE, currently **${config.voiceAlwaysWake ? 'on' : 'off'}**)`
+        ? `the default (following VOICE_ALWAYS_WAKE, currently **${config.voiceAlwaysWake ? 'on' : 'off'}**)`
         : `**${override ? 'on' : 'off'}**`;
 
     // Bare invocation is the query form — report, change nothing.
@@ -234,10 +232,10 @@ client.on('interactionCreate', async (i) => {
     }
 
     // The POST reaches the shim, so it can outlast the 3s interaction deadline
-    // if the endpoint is exactly what is unwell. `default` and the legacy
-    // `auto` both clear the override; `on`/`off` set it.
+    // if the endpoint is exactly what is unwell. `default` clears the override;
+    // `on`/`off` set it.
     await i.deferReply({ flags: MessageFlags.Ephemeral });
-    const value = mode === 'auto' || mode === 'default' ? null : mode === 'on';
+    const value = mode === 'default' ? null : mode === 'on';
     const res = await voice.setWakeOverride(i.guildId, value);
     if (!res.ok) {
       return i.editReply(
@@ -247,7 +245,7 @@ client.on('interactionCreate', async (i) => {
       );
     }
     return i.editReply(
-      `Wake phrase: ${describe(value, mode === 'default')}. ` +
+      `Wake phrase: ${describe(value)}. ` +
         `I ${res.solo ? 'now answer unprompted while you are alone' : 'need the wake phrase to answer'}.`,
     );
   }
