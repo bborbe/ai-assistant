@@ -558,7 +558,12 @@ test('speak resolves no-socket immediately when connectS2S tears down the socket
 // `this.audio` (endAudio() no-ops when null) and `this.transcript`.
 function fakeOnEventTarget(overrides = {}) {
   const transcriptWrites = [];
-  return {
+  // Prototype-backed, not a bare object literal: onEvent dispatches to real
+  // Session methods, and on a plain object every one of those is a TypeError
+  // rather than a no-op — which is how the stall clock's clearStallClock()
+  // call broke eight unrelated tests the moment it was added. Own properties
+  // below still shadow the prototype, so the explicit stubs keep winning.
+  return Object.assign(Object.create(Session.prototype), {
     audio: null,
     speaking: false,
     typedReplyPending: false,
@@ -573,8 +578,45 @@ function fakeOnEventTarget(overrides = {}) {
     // Wait state for the "slot already in use" retry deadline — see
     // Session.prototype.onSlotFreed and the 'error' handler in onEvent.
     slotWaitStartedAt: null,
+    // Stall clock — see Session.prototype.startStallClock. `solo` is here
+    // because the transcription handler reads it to decide `answering`, and
+    // that verdict is what disarms the clock for an unaddressed utterance.
+    solo: false,
+    stallStartedAt: null,
+    stallTimer: null,
+    stallDetected: false,
+    // Playback surface speakStallClip() drives. The player is a stub because
+    // these tests are about what gets queued, not about Discord's player.
+    outQueue: Buffer.alloc(0),
+    outTick: null,
+    ending: false,
+    player: { play: () => {}, stop: () => {} },
     ...overrides,
-  };
+  });
+}
+
+// reportStall's entire output is a log line, so asserting on it means reading
+// that line. voice.js holds the same module object this returns, so patching
+// the property here is what its `log.info` call resolves to — no seam needed.
+function captureInfo(fn) {
+  const log = require('../src/log');
+  const real = log.info;
+  const lines = [];
+  log.info = (msg, fields) => lines.push({ msg, fields });
+  try {
+    fn();
+  } finally {
+    log.info = real;
+  }
+  return lines;
+}
+
+// An armed-but-not-fired timer. unref'd so a failing assertion that skips the
+// cleanup cannot leave node:test holding the process open for a minute.
+function armedTimer() {
+  const t = setTimeout(() => {}, 60000);
+  t.unref();
+  return t;
 }
 
 test('onEvent sets inResponse on response.created, for any trigger', () => {
@@ -588,6 +630,175 @@ test('onEvent clears inResponse and typedReplyPending on response.done', () => {
   Session.prototype.onEvent.call(fake, JSON.stringify({ type: 'response.done' }));
   assert.equal(fake.inResponse, false);
   assert.equal(fake.typedReplyPending, false);
+});
+
+// The stall clock — SC1's measurement. `speech_stopped` is the only event that
+// can start it on a mic turn: `response.created` is suppressed on that path
+// (see `answering` in the constructor) and `speech_started` fires while the
+// user is still mid-sentence.
+test('onEvent arms the stall clock on speech_stopped', () => {
+  const fake = fakeOnEventTarget();
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({ type: 'input_audio_buffer.speech_stopped' }),
+  );
+  assert.notEqual(
+    fake.stallStartedAt,
+    null,
+    'speech_stopped is the earliest signal the bot gets that an answer is owed',
+  );
+  assert.notEqual(fake.stallTimer, null);
+  Session.prototype.clearStallClock.call(fake); // never leave a live 8s timer behind
+  assert.equal(fake.stallTimer, null);
+});
+
+test('an unaddressed utterance disarms the stall clock, because silence is not a wait', () => {
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now(), stallTimer: armedTimer() });
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({
+      type: 'conversation.item.input_audio_transcription.completed',
+      transcript: 'did you see the game last night',
+    }),
+  );
+  assert.equal(fake.answering, false);
+  assert.equal(fake.stallStartedAt, null);
+  assert.equal(
+    fake.stallTimer,
+    null,
+    'the timer must be cleared, not left to fire on a turn nobody is waiting for',
+  );
+});
+
+test('an addressed utterance leaves the stall clock running', () => {
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now(), stallTimer: armedTimer() });
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({
+      type: 'conversation.item.input_audio_transcription.completed',
+      transcript: 'hey bot, what is the disk usage',
+    }),
+  );
+  assert.equal(fake.answering, true);
+  assert.notEqual(fake.stallStartedAt, null, 'an answer is coming, so the wait is still measured');
+  Session.prototype.clearStallClock.call(fake);
+});
+
+test('reportStall logs the utterance-to-audio gap and clears the clock', () => {
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now() - 12345 });
+  const lines = captureInfo(() => Session.prototype.reportStall.call(fake));
+  const line = lines.find((l) => l.msg.includes('start-to-audio'));
+  assert.ok(line, 'expected a start-to-audio line');
+  assert.ok(
+    line.fields.gapMs >= 12345,
+    `gapMs ${line.fields.gapMs} must be at least the 12345ms already elapsed`,
+  );
+  assert.equal(line.fields.detected, false, 'a fast turn is measured but not a stall');
+  assert.equal(
+    fake.stallStartedAt,
+    null,
+    'cleared so the next turn measures from its own utterance, not this one',
+  );
+});
+
+test('reportStall reports detected once the threshold timer has fired', () => {
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now() - 9000, stallDetected: true });
+  const lines = captureInfo(() => Session.prototype.reportStall.call(fake));
+  const line = lines.find((l) => l.msg.includes('start-to-audio'));
+  assert.equal(line.fields.detected, true);
+});
+
+test('reportStall logs nothing when no utterance armed the clock', () => {
+  const fake = fakeOnEventTarget();
+  const lines = captureInfo(() => Session.prototype.reportStall.call(fake));
+  assert.deepEqual(lines, [], 'a typed turn must not produce a mic-turn measurement');
+});
+
+// The filler itself. It has to start the pump on its own — at stall time no
+// real audio has arrived, so nothing else has created the stream yet.
+test('speakStallClip starts the pump with the clip queued for it', () => {
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now() - 8100 });
+  Session.prototype.speakStallClip.call(fake);
+  assert.notEqual(fake.audio, null, 'the clip needs a live stream, since no real audio exists yet');
+  assert.equal(fake.speaking, true, 'the ring must be lit, and barge-in must be able to cut it');
+  assert.ok(fake.outQueue.length > 0, 'the clip PCM must be queued for the pump');
+  Session.prototype.stopAudio.call(fake); // clears outTick — never leave a live interval
+  assert.equal(fake.outTick, null);
+});
+
+test('speakStallClip is a no-op once playback is already live', () => {
+  const fake = fakeOnEventTarget({
+    stallStartedAt: Date.now() - 8100,
+    audio: { end: () => {} }, // the answer is already playing
+    outQueue: Buffer.alloc(0),
+  });
+  Session.prototype.speakStallClip.call(fake);
+  assert.equal(
+    fake.outQueue.length,
+    0,
+    'a live answer must not have a filler spliced in front of it',
+  );
+});
+
+// The stall gate has TWO halves, and this pair is why: the threshold alone is
+// not enough to know an answer is owed. The addressing verdict arrives with the
+// transcription, which on a stalled turn lands after the threshold fires — the
+// STT stage is the largest component of the wait (11.34s of a 25.6s turn).
+test('crossing the threshold records the stall but stays silent while the verdict is unknown', () => {
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now() - 8100, answering: false });
+  Session.prototype.onStallThreshold.call(fake);
+  assert.equal(fake.stallDetected, true, 'the stall is still recorded and logged');
+  assert.equal(fake.audio, null, 'nothing may be spoken before the bot knows an answer is owed');
+});
+
+test('crossing the threshold narrates when an answer is already known to be owed', () => {
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now() - 8100, answering: true });
+  Session.prototype.onStallThreshold.call(fake);
+  assert.notEqual(fake.audio, null);
+  Session.prototype.stopAudio.call(fake);
+});
+
+test('a wait already past the threshold is narrated once the verdict lands as addressed', () => {
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now() - 12000, stallDetected: true });
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({
+      type: 'conversation.item.input_audio_transcription.completed',
+      transcript: 'hey bot, what is the disk usage',
+    }),
+  );
+  assert.notEqual(fake.audio, null, 'late is better than never — the wait is still running');
+  Session.prototype.stopAudio.call(fake);
+});
+
+test('a wait already past the threshold stays silent when the verdict lands as unaddressed', () => {
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now() - 12000, stallDetected: true });
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({
+      type: 'conversation.item.input_audio_transcription.completed',
+      transcript: 'did you see the game last night',
+    }),
+  );
+  assert.equal(fake.audio, null, 'no answer is coming, so nothing may promise one');
+});
+
+// Regression guard for the ordering inside pushAudio: the clip makes
+// `this.audio` non-null BEFORE any real audio arrives, so a guard-first
+// ordering silently drops the measurement on exactly the stalled turns it
+// exists to record.
+test('pushAudio still reports the gap when the stall clip already started the pump', () => {
+  const fake = fakeOnEventTarget({
+    stallStartedAt: Date.now() - 12000,
+    stallDetected: true,
+    audio: { write: () => {} }, // the clip owns the stream
+    outQueue: Buffer.alloc(0),
+  });
+  const lines = captureInfo(() => Session.prototype.pushAudio.call(fake, Buffer.alloc(320)));
+  const line = lines.find((l) => l.msg.includes('start-to-audio'));
+  assert.ok(line, 'the measurement must survive the clip having started playback');
+  assert.ok(line.fields.gapMs >= 12000, `gapMs ${line.fields.gapMs} must be at least 12000`);
+  assert.equal(line.fields.detected, true);
 });
 
 test('onEvent marks a typed-triggered reply distinctly in the transcript', () => {
