@@ -486,3 +486,62 @@ test('setTranscribe distinguishes unsupported from broken', async () => {
     global.fetch = realFetch;
   }
 });
+
+test('getVoiceState carries the conversation key and reads the state back', async () => {
+  // The /status back-edge: one GET that returns every runtime per-conversation
+  // toggle for a key, so the operator sees wake / posting / interrupt /
+  // transcribe at a glance instead of invoking each flag bare.
+  const { getVoiceState } = require('../src/llm');
+  const realFetch = global.fetch;
+  let captured;
+  try {
+    global.fetch = async (_url, init) => {
+      captured = init;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          key: 'voice:G1',
+          wake: true,
+          wake_override: null,
+          posting: true,
+          interrupt: false,
+          transcribe: true,
+        }),
+      };
+    };
+    const state = await getVoiceState('voice:G1');
+    assert.equal(captured.headers['X-Session-Key'], 'voice:G1');
+    assert.deepEqual(state, {
+      ok: true,
+      key: 'voice:G1',
+      wake: true,
+      wake_override: null,
+      posting: true,
+      interrupt: false,
+      transcribe: true,
+    });
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
+test('getVoiceState distinguishes unsupported from broken', async () => {
+  // /status must not break because the toggle-state probe hiccuped — an
+  // unreachable or route-less shim degrades to a note, never a broken report.
+  const { getVoiceState } = require('../src/llm');
+  const realFetch = global.fetch;
+  try {
+    global.fetch = async () => ({ ok: false, status: 404 });
+    assert.deepEqual(await getVoiceState('voice:G1'), { ok: false, error: 'endpoint 404' });
+
+    global.fetch = async () => {
+      throw new Error('connect ECONNREFUSED');
+    };
+    const down = await getVoiceState('voice:G1');
+    assert.equal(down.retryable, true);
+    assert.match(down.error, /ECONNREFUSED/);
+  } finally {
+    global.fetch = realFetch;
+  }
+});

@@ -1348,3 +1348,74 @@ class ControlRouteAuth(unittest.TestCase):
             handler.do_POST()
         self.assertEqual(handler.wfile.getvalue().split(b" ")[1], b"401")
         self.assertIn("CHAT_BRIDGE_TOKEN not set — refusing every mutating route", captured.getvalue())
+
+
+class VoiceStateRoute(unittest.TestCase):
+    """GET /voice/state — the /status back-edge for the runtime toggles.
+
+    GET is deliberately unauthenticated (it only observes; the control-plane
+    guard gates do_POST). The route reads the same four per-key stores the
+    POST routes write, so a flip through /interrupt, /mode, /wakephrase or
+    /transcribe shows up here on the next /status.
+    """
+
+    KEY = "voice:test"
+
+    def setUp(self):
+        self._prev = (
+            shim.wake_override(self.KEY),
+            shim.is_chat_off(self.KEY),
+            shim.is_barge_in_off(self.KEY),
+            shim.is_transcribe_off(self.KEY),
+        )
+        shim.set_wake_override(self.KEY, None)
+        shim.set_chat_off(self.KEY, False)
+        shim.set_barge_in_off(self.KEY, False)
+        shim.set_transcribe_off(self.KEY, False)
+
+    def tearDown(self):
+        shim.set_wake_override(self.KEY, self._prev[0])
+        shim.set_chat_off(self.KEY, self._prev[1])
+        shim.set_barge_in_off(self.KEY, self._prev[2])
+        shim.set_transcribe_off(self.KEY, self._prev[3])
+
+    def _get_state(self, headers):
+        handler = shim.Handler.__new__(shim.Handler)
+        handler.path = "/v1/voice/state"
+        handler.headers = headers
+        handler.wfile = io.BytesIO()
+        handler.requestline = "GET /v1/voice/state HTTP/1.1"
+        handler.request_version = "HTTP/1.1"
+        handler.command = "GET"
+        handler.do_GET()
+        return json.loads(handler.wfile.getvalue().split(b"\r\n\r\n")[-1])
+
+    def test_defaults_report_every_flag_positive(self):
+        state = self._get_state({"X-Session-Key": self.KEY})
+        self.assertEqual(state["key"], self.KEY)
+        self.assertEqual(state["wake"], shim.ALWAYS_WAKE)
+        self.assertIsNone(state["wake_override"])
+        self.assertTrue(state["posting"])
+        self.assertTrue(state["interrupt"])
+        self.assertTrue(state["transcribe"])
+
+    def test_flips_show_up_in_the_same_shape_the_routes_write(self):
+        shim.set_wake_override(self.KEY, False)
+        shim.set_chat_off(self.KEY, True)
+        shim.set_barge_in_off(self.KEY, True)
+        shim.set_transcribe_off(self.KEY, True)
+        state = self._get_state({"X-Session-Key": self.KEY})
+        self.assertFalse(state["wake"])
+        self.assertFalse(state["posting"])
+        self.assertFalse(state["interrupt"])
+        self.assertFalse(state["transcribe"])
+
+    def test_an_unknown_key_returns_the_shim_defaults(self):
+        # An idle /status has no live call key; the shim answers an unknown key
+        # with its defaults, which is exactly what the next call starts with.
+        state = self._get_state({})
+        self.assertEqual(state["key"], shim.DEFAULT_KEY)
+        self.assertEqual(state["wake"], shim.ALWAYS_WAKE)
+        self.assertTrue(state["posting"])
+        self.assertTrue(state["interrupt"])
+        self.assertTrue(state["transcribe"])

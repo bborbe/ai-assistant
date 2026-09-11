@@ -2674,6 +2674,24 @@ class Handler(BaseHTTPRequestHandler):
                  "age_minutes": round((now - v.get("created", now)) / 60, 1)}
                 for k, v in sorted(_load().items())
             ]})
+        if path.endswith("/voice/state"):
+            # The bot's /status back-edge: report the effective posture of every
+            # runtime per-conversation toggle for ONE conversation key, so the
+            # operator sees wake / posting / interrupt / transcribe at a glance
+            # instead of invoking each flag bare. GET is open by design — it only
+            # observes, never mutates (the control-plane guard gates do_POST).
+            key = self.headers.get("X-Session-Key", "").strip() or DEFAULT_KEY
+            return self._json(
+                200,
+                {
+                    "key": key,
+                    "wake": effective_always_wake(key),
+                    "wake_override": wake_override(key),
+                    "posting": not is_chat_off(key),
+                    "interrupt": not is_barge_in_off(key),
+                    "transcribe": not is_transcribe_off(key),
+                },
+            )
         self._json(404, {"error": {"message": "not found"}})
 
     def do_POST(self):
