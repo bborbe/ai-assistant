@@ -48,41 +48,59 @@ test('disabling voice removes only the voice commands', () => {
   }
 });
 
-test('/interrupt advertises both on and off choices', () => {
-  // `on` and `off` are the only two postures the shim's flag takes: `on`
-  // (default) cancels the in-flight answer when the listener speaks mid-turn,
-  // `off` lets it finish. A choice silently dropping from the list is exactly
-  // the class of regression the other tests here exist to catch.
+test('/interrupt advertises the on/off/default choices', () => {
+  // The uniform contract: `on` (default) cancels the in-flight answer when the
+  // listener speaks mid-turn, `off` lets it finish, `default` clears the
+  // per-key override. A choice silently dropping from the list is exactly the
+  // class of regression the other tests here exist to catch.
   const interrupt = buildCommands({ voiceEnabled: true }).find((c) => c.name === 'interrupt');
   assert.ok(interrupt, '/interrupt must be registered');
   const choices = interrupt.options[0].choices.map((c) => c.value);
-  assert.deepEqual(choices.sort(), ['off', 'on']);
+  assert.deepEqual(choices.sort(), ['default', 'off', 'on']);
 });
 
-test('/transcribe advertises both on and off choices', () => {
-  // `on` and `off` are the only two postures the flag takes: `on` (default)
-  // writes every speaker down, `off` stops writing this call. A choice
+test('/transcribe advertises the on/off/default choices', () => {
+  // The uniform contract: `on` (default) writes every speaker down, `off`
+  // stops writing this call, `default` clears the per-key override. A choice
   // silently dropping from the list is exactly the class of regression the
-  // other tests here exist to catch. Unlike /wakephrase there is no third
-  // `auto` value: a fresh call falls back to the TRANSCRIBE default because
-  // join clears any stale override.
+  // other tests here exist to catch.
   const transcribe = buildCommands({ voiceEnabled: true }).find((c) => c.name === 'transcribe');
   assert.ok(transcribe, '/transcribe must be registered');
   assert.equal(transcribe.options[0].required, false, 'bare invocation is the query form');
   const choices = transcribe.options[0].choices.map((c) => c.value);
-  assert.deepEqual(choices.sort(), ['off', 'on']);
+  assert.deepEqual(choices.sort(), ['default', 'off', 'on']);
 });
 
-test('/mode advertises all three mode choices', () => {
+test('/wakephrase advertises the on/off/default choices', () => {
+  // The uniform contract replaces the old `auto` picker choice with `default`.
+  // `auto` is still accepted by the handler as a legacy spelling (the shim
+  // keeps accepting it too), but the picker offers the one uniform value.
+  const wakephrase = buildCommands({ voiceEnabled: true }).find((c) => c.name === 'wakephrase');
+  assert.ok(wakephrase, '/wakephrase must be registered');
+  assert.equal(wakephrase.options[0].required, false, 'bare invocation is the query form');
+  const choices = wakephrase.options[0].choices.map((c) => c.value);
+  assert.deepEqual(choices.sort(), ['default', 'off', 'on']);
+});
+
+test('/mode advertises the three modes plus the uniform aliases', () => {
   // The names the user can type ARE the contract: `voice-only` silences chat
-  // posting, `voice-text` does both, `text-only` silences speech. A choice that
-  // silently drops from the list is exactly the class of regression the other
-  // tests here exist to catch — and `text-only` is the one whose absence is
-  // invisible from Discord, because the command still works without it.
+  // posting, `voice-text` does both, `text-only` silences speech — and the
+  // uniform on|off|default aliases (on → voice-text, off → voice-only,
+  // default → configured default) sit on top. A choice that silently drops
+  // from the list is exactly the class of regression the other tests here
+  // exist to catch.
   const mode = buildCommands({ voiceEnabled: true }).find((c) => c.name === 'mode');
   assert.ok(mode, '/mode must be registered');
+  assert.equal(mode.options[0].required, false, 'bare invocation is the query form');
   const choices = mode.options[0].choices.map((c) => c.value);
-  assert.deepEqual(choices.sort(), ['text-only', 'voice-only', 'voice-text']);
+  assert.deepEqual(choices.sort(), [
+    'default',
+    'off',
+    'on',
+    'text-only',
+    'voice-only',
+    'voice-text',
+  ]);
 });
 
 // Discord hides a command from anyone lacking this permission. Asserted on

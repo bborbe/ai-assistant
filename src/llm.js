@@ -224,6 +224,9 @@ async function setMode(mode, sessionKey) {
  *
  * `cancel === null` is the query form (bare /interrupt): no X-Barge-In header
  * is sent, and the shim reports the current posture without changing it.
+ * `cancel === 'default'` is the CLEAR form (from `/interrupt default`): the
+ * header carries `default`, and the shim pops the per-key override so the
+ * configured default (barge-in cancels) is in force again.
  */
 async function setInterrupt(cancel, sessionKey) {
   try {
@@ -231,7 +234,8 @@ async function setInterrupt(cancel, sessionKey) {
       Authorization: `Bearer ${config.chatBridgeToken}`,
       'X-Session-Key': sessionKey,
     };
-    if (cancel !== null) headers['X-Barge-In'] = cancel ? 'on' : 'off';
+    if (cancel === 'default') headers['X-Barge-In'] = 'default';
+    else if (cancel !== null) headers['X-Barge-In'] = cancel ? 'on' : 'off';
     const res = await fetch(`${config.baseUrl}/voice/barge`, {
       method: 'POST',
       headers,
@@ -270,6 +274,9 @@ async function setInterrupt(cancel, sessionKey) {
  *
  * `transcribe === null` is the query form (bare /transcribe): no X-Transcribe
  * header is sent, and the shim reports the current posture without changing it.
+ * `transcribe === 'default'` is the CLEAR form (from `/transcribe default`):
+ * the header carries `default`, and the shim pops the per-key override so the
+ * configured default (transcription ON) is in force again.
  */
 async function setTranscribe(transcribe, sessionKey) {
   try {
@@ -277,7 +284,8 @@ async function setTranscribe(transcribe, sessionKey) {
       Authorization: `Bearer ${config.chatBridgeToken}`,
       'X-Session-Key': sessionKey,
     };
-    if (transcribe !== null) headers['X-Transcribe'] = transcribe ? 'on' : 'off';
+    if (transcribe === 'default') headers['X-Transcribe'] = 'default';
+    else if (transcribe !== null) headers['X-Transcribe'] = transcribe ? 'on' : 'off';
     const res = await fetch(`${config.baseUrl}/voice/transcribe`, {
       method: 'POST',
       headers,

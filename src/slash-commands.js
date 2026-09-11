@@ -64,13 +64,11 @@ function buildCommands({ voiceEnabled }) {
         .addStringOption((o) =>
           o
             .setName('mode')
-            .setDescription(
-              'on = always require it, off = allow solo auto-answer, auto = use the default',
-            )
+            .setDescription('on = require it · off = solo auto-answer · default = reset')
             .addChoices(
               { name: 'on', value: 'on' },
               { name: 'off', value: 'off' },
-              { name: 'auto', value: 'auto' },
+              { name: 'default', value: 'default' },
             ),
         ),
       // Voice-only for the same reason join/leave are: barge-in cancellation
@@ -85,10 +83,12 @@ function buildCommands({ voiceEnabled }) {
         .addStringOption((o) =>
           o
             .setName('mode')
-            .setDescription(
-              'on = speaking over me interrupts the answer (default) · off = let it finish',
-            )
-            .addChoices({ name: 'on', value: 'on' }, { name: 'off', value: 'off' }),
+            .setDescription('on = interrupt (default) · off = let it finish · default = reset')
+            .addChoices(
+              { name: 'on', value: 'on' },
+              { name: 'off', value: 'off' },
+              { name: 'default', value: 'default' },
+            ),
         ),
       // Voice-only for the same reason join/leave are: transcription writes
       // down VOICE turns and nothing else, so on a text-only instance the
@@ -107,10 +107,12 @@ function buildCommands({ voiceEnabled }) {
         .addStringOption((o) =>
           o
             .setName('mode')
-            .setDescription(
-              'on = write every speaker down (default) · off = stop writing this call',
-            )
-            .addChoices({ name: 'on', value: 'on' }, { name: 'off', value: 'off' }),
+            .setDescription('on = write everyone down (default) · off = stop · default = reset')
+            .addChoices(
+              { name: 'on', value: 'on' },
+              { name: 'off', value: 'off' },
+              { name: 'default', value: 'default' },
+            ),
         ),
     );
   }
@@ -134,25 +136,26 @@ function buildCommands({ voiceEnabled }) {
         o.setName('id').setDescription('Session id from /sessions').setRequired(true),
       ),
     // The /mode back-edge: a slash-command surface for the SAME per-key
-    // switches the spoken instruction flips. Three choices, all explicit — a
+    // switches the spoken instruction flips. Six choices, all explicit — a
     // member can read the current mode back from the shim through this
     // command, so "which mode am I in" is answerable without a fourth command.
-    // All three states are nameable, so there is no bare query form and no
-    // `auto`: the default is reachable by naming `voice-text`.
+    // The three states plus the uniform on|off|default aliases (on → voice-text,
+    // off → voice-only, default → the configured default). The option is NOT
+    // required: bare /mode is the query form, matching the other three toggles.
     new SlashCommandBuilder()
       .setName('mode')
-      .setDescription('Set how this conversation answers: spoken, written, or both')
+      .setDescription('Show or set how this conversation answers: spoken, written, or both')
       .addStringOption((o) =>
         o
           .setName('mode')
-          .setDescription(
-            'voice-only = speak, never post · voice-text = speak and post · text-only = post, never speak',
-          )
-          .setRequired(true)
+          .setDescription('voice-only · voice-text · text-only · on · off · default')
           .addChoices(
             { name: 'voice-only (never post to the channel)', value: 'voice-only' },
             { name: 'voice-text (speak and post, the default)', value: 'voice-text' },
             { name: 'text-only (post to the channel, never speak)', value: 'text-only' },
+            { name: 'on (= voice-text)', value: 'on' },
+            { name: 'off (= voice-only)', value: 'off' },
+            { name: 'default (use the configured default)', value: 'default' },
           ),
       ),
   );
