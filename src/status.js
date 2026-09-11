@@ -152,6 +152,24 @@ async function report(client, hereKey) {
     transcriptOk = false;
   }
 
+  // The effective transcription posture. With a call live this is the
+  // session's own state — a mid-call `/transcribe off` reads disabled. Idle
+  // there is nothing being written, so the honest answer is the TRANSCRIBE env
+  // default the NEXT call starts with; it is marked `(default)` so it does not
+  // read as "recording right now".
+  const live = [...voice.sessions.values()].find((s) => !s.closed);
+  const transcribing = live ? Boolean(live.transcript) : config.transcribe;
+  // Replaces the old "transcripts — writable": writability is an I/O detail
+  // that said nothing about whether the call was actually being recorded. The
+  // state is the question the operator asks ("are we being written down?");
+  // the dir check survives only as a failure suffix, so a broken transcript
+  // dir is still diagnosable.
+  const transcriptionLine = config.voiceEnabled
+    ? `${tick(transcribing)} transcription: ${transcribing ? 'enabled' : 'disabled'}${
+        live ? '' : ' (default)'
+      }${transcriptOk ? '' : ' — transcripts dir NOT writable'}`
+    : '🚫 transcription — n/a (voice disabled)';
+
   const ping = Math.round(client.ws.ping);
   const claude = shimUp ? await sessionLines(hereKey) : [];
   return [
@@ -162,7 +180,7 @@ async function report(client, hereKey) {
     config.voiceEnabled
       ? `${tick(s2sUp)} speech-to-speech — ${config.s2sUrl}`
       : '🚫 voice — disabled on this instance (VOICE_ENABLED=false), text only',
-    `${tick(transcriptOk)} transcripts — ${transcriptOk ? 'writable' : 'NOT writable'}`,
+    transcriptionLine,
     ...(config.voiceEnabled
       ? [sessions.length ? `🎙️ in voice — ${sessions.join(', ')}` : '🔇 not in a voice channel']
       : []),
