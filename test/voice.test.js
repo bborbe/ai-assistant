@@ -740,6 +740,49 @@ test('speakStallClip is a no-op once playback is already live', () => {
   );
 });
 
+// The stall gate has TWO halves, and this pair is why: the threshold alone is
+// not enough to know an answer is owed. The addressing verdict arrives with the
+// transcription, which on a stalled turn lands after the threshold fires — the
+// STT stage is the largest component of the wait (11.34s of a 25.6s turn).
+test('crossing the threshold records the stall but stays silent while the verdict is unknown', () => {
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now() - 8100, answering: false });
+  Session.prototype.onStallThreshold.call(fake);
+  assert.equal(fake.stallDetected, true, 'the stall is still recorded and logged');
+  assert.equal(fake.audio, null, 'nothing may be spoken before the bot knows an answer is owed');
+});
+
+test('crossing the threshold narrates when an answer is already known to be owed', () => {
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now() - 8100, answering: true });
+  Session.prototype.onStallThreshold.call(fake);
+  assert.notEqual(fake.audio, null);
+  Session.prototype.stopAudio.call(fake);
+});
+
+test('a wait already past the threshold is narrated once the verdict lands as addressed', () => {
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now() - 12000, stallDetected: true });
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({
+      type: 'conversation.item.input_audio_transcription.completed',
+      transcript: 'hey bot, what is the disk usage',
+    }),
+  );
+  assert.notEqual(fake.audio, null, 'late is better than never — the wait is still running');
+  Session.prototype.stopAudio.call(fake);
+});
+
+test('a wait already past the threshold stays silent when the verdict lands as unaddressed', () => {
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now() - 12000, stallDetected: true });
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({
+      type: 'conversation.item.input_audio_transcription.completed',
+      transcript: 'did you see the game last night',
+    }),
+  );
+  assert.equal(fake.audio, null, 'no answer is coming, so nothing may promise one');
+});
+
 // Regression guard for the ordering inside pushAudio: the clip makes
 // `this.audio` non-null BEFORE any real audio arrives, so a guard-first
 // ordering silently drops the measurement on exactly the stalled turns it

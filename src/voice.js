@@ -766,6 +766,10 @@ class Session {
         // to narrate. Disarmed HERE rather than at `response.done`, which such
         // a turn never sends (see the flag notes below).
         if (!this.answering) this.clearStallClock();
+        // The other half of the stall gate. A wait that already crossed the
+        // threshold while the verdict was unknown is narrated NOW, which is
+        // the earliest moment the bot can know an answer is actually owed.
+        if (this.answering && this.stallDetected) this.speakStallClip();
         if (this.answering) this.showTyping();
         else log.debug('  voice: not addressed, no typing indicator');
         break;
@@ -920,16 +924,35 @@ class Session {
     this.stallStartedAt = Date.now();
     // The DETECTOR, distinct from the measurement in reportStall(). unref'd so
     // a pending stall can never hold the process open through a teardown.
-    this.stallTimer = setTimeout(() => {
-      this.stallTimer = null;
-      this.stallDetected = true;
-      log.info('  voice: stall — no audio yet', {
-        waitedMs: Date.now() - this.stallStartedAt,
-        thresholdMs: config.voiceStallThresholdMs,
-      });
-      this.speakStallClip();
-    }, config.voiceStallThresholdMs);
+    this.stallTimer = setTimeout(() => this.onStallThreshold(), config.voiceStallThresholdMs);
     this.stallTimer.unref?.();
+  }
+
+  /**
+   * The wait crossed the threshold with no audio yet — record it, and narrate
+   * it only if an answer is already known to be owed.
+   *
+   * Crossing the threshold is NOT sufficient on its own. The addressing
+   * verdict arrives with the transcription, and on a stalled turn that lands
+   * well after this fires — the STT stage is the largest single component of
+   * the wait (11.34s of a 25.6s turn), so at an 8s threshold the verdict is
+   * reliably still unknown. Narrating unconditionally here would speak a
+   * filler for every unaddressed remark made during a stall, promising an
+   * answer that is never coming — worse than the silence it replaced, and the
+   * same failure the `answering` flag exists to prevent on the typed path.
+   *
+   * A wait that crosses the threshold while the verdict is still unknown is
+   * not lost: the transcription case in onEvent plays it as soon as the
+   * verdict lands as addressed. Late, never never.
+   */
+  onStallThreshold() {
+    this.stallTimer = null;
+    this.stallDetected = true;
+    log.info('  voice: stall — no audio yet', {
+      waitedMs: Date.now() - this.stallStartedAt,
+      thresholdMs: config.voiceStallThresholdMs,
+    });
+    if (this.answering) this.speakStallClip();
   }
 
   /**
