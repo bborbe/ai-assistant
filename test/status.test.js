@@ -68,7 +68,7 @@ test('idle status shows the toggle defaults', async () => {
     const out = await report(client(), 'channel:1');
     assert.match(out, /transcription: enabled \(default\)/);
     assert.match(out, /^👂 wake: on \(default\)$/m);
-    assert.match(out, /^💬 posting: voice-text$/m);
+    assert.match(out, /^🎚️ mode: voice-text$/m);
     assert.match(out, /^✋ interrupt: on$/m);
   } finally {
     restore();
@@ -96,8 +96,50 @@ test('a live call with every toggle flipped is reflected', async () => {
     const out = await report(client(), 'channel:1');
     assert.match(out, /transcription: disabled/);
     assert.match(out, /^👂 wake: off \(override\)$/m);
-    assert.match(out, /^💬 posting: voice-only$/m);
+    assert.match(out, /^🎚️ mode: voice-only$/m);
     assert.match(out, /^✋ interrupt: off$/m, 'the icon is the only glyph on the line');
+  } finally {
+    restore();
+  }
+});
+
+test('text-only is reported by name, not as a posting flag', async () => {
+  // The mode is ONE setting held as a pair of shim flags, so /status names it.
+  // `posting: true, speech: false` is exactly text-only, and seeing it at a
+  // glance is the whole point — a stale text-only that reads as broken voice is
+  // the failure this line exists to prevent.
+  const restore = stubFetch({
+    key: 'voice:1',
+    wake: true,
+    wake_override: null,
+    posting: true,
+    speech: false,
+    interrupt: true,
+    transcribe: true,
+  });
+  try {
+    const out = await report(client(), 'channel:1');
+    assert.match(out, /^🎚️ mode: text-only$/m);
+  } finally {
+    restore();
+  }
+});
+
+test('a shim without the speech field reads as voice-text, never text-only', async () => {
+  // `speech` is absent on a shim predating text-only. Absent must mean the
+  // default: a truthiness test would report every older shim as text-only, the
+  // one reading that sends an operator hunting a fault that is not there.
+  const restore = stubFetch({
+    key: 'voice:1',
+    wake: true,
+    wake_override: null,
+    posting: true,
+    interrupt: true,
+    transcribe: true,
+  });
+  try {
+    const out = await report(client(), 'channel:1');
+    assert.match(out, /^🎚️ mode: voice-text$/m);
   } finally {
     restore();
   }

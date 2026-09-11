@@ -73,15 +73,16 @@ test('/transcribe advertises both on and off choices', () => {
   assert.deepEqual(choices.sort(), ['off', 'on']);
 });
 
-test('/mode advertises both voice-only and voice-text choices', () => {
-  // The two names the user can type are the contract: `voice-only` silences
-  // chat posting for the conversation, `voice-text` turns it back on. A
-  // choice that silently drops from the list is exactly the class of
-  // regression the other tests here exist to catch.
+test('/mode advertises all three mode choices', () => {
+  // The names the user can type ARE the contract: `voice-only` silences chat
+  // posting, `voice-text` does both, `text-only` silences speech. A choice that
+  // silently drops from the list is exactly the class of regression the other
+  // tests here exist to catch — and `text-only` is the one whose absence is
+  // invisible from Discord, because the command still works without it.
   const mode = buildCommands({ voiceEnabled: true }).find((c) => c.name === 'mode');
   assert.ok(mode, '/mode must be registered');
   const choices = mode.options[0].choices.map((c) => c.value);
-  assert.deepEqual(choices.sort(), ['voice-only', 'voice-text']);
+  assert.deepEqual(choices.sort(), ['text-only', 'voice-only', 'voice-text']);
 });
 
 // Discord hides a command from anyone lacking this permission. Asserted on

@@ -5,7 +5,7 @@ const { Client, GatewayIntentBits, Partials, REST, Routes, MessageFlags } = requ
 const config = require('./config');
 const voice = require('./voice');
 const text = require('./text');
-const { sessionKeyFor, setChatPosting, setInterrupt, setTranscribe } = require('./llm');
+const { sessionKeyFor, setMode, setInterrupt, setTranscribe } = require('./llm');
 const { buildCommands, VOICE_DISABLED_REPLY } = require('./slash-commands');
 const log = require('./log');
 const { startHealthServer, isReady } = require('./health');
@@ -291,18 +291,23 @@ client.on('interactionCreate', async (i) => {
     // ephemeral and still tells the user which mode the conversation is now in.
     await i.deferReply({ flags: MessageFlags.Ephemeral });
     const key = sessionKeyFor(i.channel, i.user.id);
-    const posting = i.options.getString('mode') !== 'voice-only';
-    const result = await setChatPosting(posting, key);
+    const mode = i.options.getString('mode');
+    const result = await setMode(mode, key);
     if (!result.ok) {
       const reason = result.unsupported
         ? 'the backend does not support per-conversation modes'
         : result.error || 'the endpoint is unreachable';
-      return i.editReply(`Could not switch mode (${reason}). Posting stays as it was.`);
+      return i.editReply(`Could not switch mode (${reason}). Mode stays as it was.`);
     }
-    const mode = posting ? 'voice-text' : 'voice-only';
-    return i.editReply(
-      `This conversation is now **${mode}**: ${posting ? 'I speak and post to the channel' : 'I speak and never post to the channel'}.`,
-    );
+    // One sentence per mode, phrased as what the conversation now does. The
+    // three modes are one pair of flags, so describing them flag-by-flag
+    // ("posting on, speech off") would read as two settings rather than one.
+    const describes = {
+      'voice-only': 'I speak and never post to the channel',
+      'voice-text': 'I speak and post to the channel',
+      'text-only': 'I post to the channel and never speak',
+    };
+    return i.editReply(`This conversation is now **${mode}**: ${describes[mode]}.`);
   }
 
   if (i.commandName === 'interrupt') {
