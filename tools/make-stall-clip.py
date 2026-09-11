@@ -86,12 +86,37 @@ def main() -> int:
         print("handler yielded no audio — nothing written", file=sys.stderr)
         return 1
 
+    # The handler ALREADY converts to int16 before yielding — `_to_int16` is
+    # applied inside its streaming loop (qwen3_tts_handler.py:744), so these
+    # chunks are the PCM, not floats.
+    #
+    # Scaling them again is not a harmless no-op. The first version of this
+    # script ran `np.clip(audio, -1.0, 1.0) * 32767` on top, which clamped every
+    # sample to full scale: a ~5x-too-loud, harsh square wave. It was heard in a
+    # live call before anyone read the numbers, and the giveaway was there the
+    # whole time — the measured peak was *exactly* 1.000 full scale, which is
+    # what clamping looks like and is not what speech looks like.
     audio = np.concatenate([np.asarray(c).reshape(-1) for c in chunks])
-    pcm = (np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+    # Exactly 2-byte, not merely "some integer": the conversion below is
+    # `astype("<i2")`, which WRAPS an int32 rather than refusing it. A guard
+    # that accepts a dtype the next line would silently mangle is not a guard.
+    if not (np.issubdtype(audio.dtype, np.integer) and audio.dtype.itemsize == 2):
+        print(
+            f"unexpected chunk dtype {audio.dtype} — expected 2-byte integer PCM; "
+            "refusing to guess a scale (see the note above)",
+            file=sys.stderr,
+        )
+        return 1
+
+    pcm = audio.astype("<i2").tobytes()
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(pcm)
+    peak = int(np.abs(audio).max())
     print(f"wrote {out_path} — {len(pcm)} bytes, {len(audio) / SAMPLE_RATE:.2f}s @ {SAMPLE_RATE} Hz")
+    # Printed every run, and it is the number to check: speech peaks well below
+    # full scale, so a peak at or near 32768 means something is clamping.
+    print(f"peak={peak} ({peak / 32768:.3f} full scale)")
     print(f"line: {LINE!r}")
     return 0
 
