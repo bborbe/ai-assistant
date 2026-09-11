@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.43.0
 
 - fix: `/wakephrase auto` is removed — `default` is the only clear spelling. The legacy `auto` value is rejected by the handler and every shim route (`/voice/wake`, `/voice/barge`, `/voice/transcribe`, `/chat/posting`, `/mode`); `default` (and the `clear` header synonym) clears the per-key override.
 
