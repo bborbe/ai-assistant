@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.41.2
 
 - fix: `/mode text-only` still spoke, through two paths the v0.41.0 gate did not cover. The bot's stall filler fired on EVERY text-only turn — the shim never sends audio in this mode, so the 8s "no audio yet" threshold always crossed, and the 2.7s clip played AFTER the answer had already been posted to the channel (observed live 2026-09-11: chat post 15:38:22, clip 15:38:26). It is now gated on the shim's speech posture, re-read per utterance at stall-clock start so a `/mode` flip lands without the bot keeping a second copy of the mode; a failed probe fails open, leaving the filler speaking rather than silently muting it in every mode. Separately, the shim's holding and progress fillers called `on_text` DIRECTLY, bypassing the `push()` guard, so any slow or tool-using turn still said "checking that now" aloud — the guard now sits in `on_text` itself, the function that writes the wire, so a filler added later cannot reintroduce the leak. `voice: stall — no audio yet` now carries `speechOff`, so a text-only crossing reads as the mode working rather than as a fault.
 
