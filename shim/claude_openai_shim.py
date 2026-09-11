@@ -784,6 +784,56 @@ def is_chat_off(key: str) -> bool:
         return _CHAT_OFF_BY_KEY.get(key, False)
 
 
+# ── text-only switch ───────────────────────────────────────────────────────
+# The mirror of the voice-only switch above: `speech_off` silences SPOKEN
+# output for the rest of this conversation while chat posting stays ON — the
+# assistant hears the user, answers in the channel, and never speaks. Per-key
+# and sticky like its siblings, and in-memory by design: a restart falls back
+# to the default (speech on), which is the ABSENCE of an override rather than a
+# stored False, so an unknown key answers False without needing an env knob.
+#
+# ⚠️ The pair is written TOGETHER, by `set_mode` — never by two independent
+# setters. `(chat_off, speech_off) = (True, True)` is not a mode: speech off
+# AND chat off means the user gets nothing at all, and nothing in Discord would
+# show it. One writer makes that state unreachable; two would make it a
+# two-flag race nobody would notice.
+MODES = ("voice-only", "voice-text", "text-only")
+_SPEECH_OFF_BY_KEY: dict[str, bool] = {}
+_SPEECH_OFF_LOCK = Lock()
+
+
+def set_speech_off(key: str, off: bool) -> bool:
+    """Set the text-only flag for a conversation key. Returns the previous."""
+    with _SPEECH_OFF_LOCK:
+        previous = _SPEECH_OFF_BY_KEY.get(key, False)
+        _SPEECH_OFF_BY_KEY[key] = bool(off)
+    return previous
+
+
+def is_speech_off(key: str) -> bool:
+    """Look up text-only state by key. Unknown keys return False (speech on)."""
+    with _SPEECH_OFF_LOCK:
+        return _SPEECH_OFF_BY_KEY.get(key, False)
+
+
+def set_mode(key: str, mode: str) -> tuple[bool, bool]:
+    """Set BOTH per-conversation flags from one mode name. Returns the previous pair.
+
+    The only writer of the pair — see the warning above. `voice-only` speaks and
+    never posts; `voice-text` (the default) does both; `text-only` posts and
+    never speaks.
+    """
+    chat_off = mode == "voice-only"
+    speech_off = mode == "text-only"
+    with _CHAT_OFF_LOCK:
+        prev_chat = _CHAT_OFF_BY_KEY.get(key, False)
+        _CHAT_OFF_BY_KEY[key] = chat_off
+    with _SPEECH_OFF_LOCK:
+        prev_speech = _SPEECH_OFF_BY_KEY.get(key, False)
+        _SPEECH_OFF_BY_KEY[key] = speech_off
+    return prev_chat, prev_speech
+
+
 # ── barge-in switch ────────────────────────────────────────────────────────
 # "barge-in cancellation" is the behaviour where the listener speaking
 # mid-turn ends the in-flight answer (`listener gone — interrupting turn` →
@@ -1779,6 +1829,23 @@ def _apply_chat_switch(prompt: str, key: str) -> bool:
     precedent (the hub page's documented lesson, observed live: after the
     flip the model kept saying "the details are in the chat").
     """
+    if is_speech_off(key):
+        # Text-only: chat is already ON and speech is OFF, so the chat-off
+        # instruction would set (chat_off, speech_off) = (True, True) — the pair
+        # that is not a mode, and that leaves the user with nothing at all. The
+        # instruction is refused with the way out named, rather than reaching
+        # that state without anyone choosing it.
+        if _CHAT_OFF_RE.search(prompt):
+            print(f"  text-only: chat-off instruction ignored for {key} "
+                  f"(use /mode voice-only to speak again)", flush=True)
+            return False
+        # "write in the chat again" implies speech is on — it clears text-only
+        # and returns the conversation to voice-text.
+        if _CHAT_ON_RE.search(prompt):
+            set_speech_off(key, False)
+            print(f"  text-only: speech back ON for {key} "
+                  f"(spoken instruction)", flush=True)
+        return is_chat_off(key)
     if _CHAT_OFF_RE.search(prompt):
         previous = set_chat_off(key, True)
         if not previous:
@@ -2131,7 +2198,7 @@ class ClaudeProcess:
                 return line
 
     def ask(self, prompt: str, on_text=None, is_gone=None,
-            already_held=False, voice_only=False) -> tuple[str, bool]:
+            already_held=False, voice_only=False, speech_off=False) -> tuple[str, bool]:
         """Run one turn. `on_text` receives assistant text as it arrives.
 
         The `assistant` event carries the reply BEFORE `result` — measured 6.1s
@@ -2201,6 +2268,21 @@ class ClaudeProcess:
             # what the directive asks for anyway, and the full text is still
             # returned to the caller and written to the transcript.
             nonlocal spoken, truncated
+            # Text-only: the sentence is produced and counted, but never reaches
+            # the wire. This is the ONE choke point — every path from model text
+            # to the speaker goes through `push()` — so gating here silences the
+            # spoken answer without touching the chat post, which reads the full
+            # text after the turn.
+            #
+            # Marking it spoken keeps the progress watcher quiet (otherwise it
+            # decides we have gone silent and interjects "still on it" into a
+            # call where nothing is being said). Leaving `truncated` False is
+            # deliberate and load-bearing: the chat bridge reads it as "the
+            # spoken reply was cut short", and nothing was spoken to cut.
+            if speech_off:
+                spoken += 1
+                mark_spoken()
+                return
             # A sentence ending in a colon promises the answer rather than being
             # it. Counting those spent the budget on throat-clearing: "typed
             # messages only reach me through the transcript." / "Let me read
@@ -2466,7 +2548,8 @@ def drop_process(key: str) -> None:
 
 
 def ask_claude(key: str, system: str, prompt: str, on_text=None, is_gone=None,
-               already_held=False, voice_only=False) -> tuple[str, bool, bool]:
+               already_held=False, voice_only=False,
+               speech_off=False) -> tuple[str, bool, bool]:
     """Ask over the persistent process, respawning once if it has died.
 
     Returns `(text, truncated, ok)`. `ok` is False on every error/timeout
@@ -2483,7 +2566,8 @@ def ask_claude(key: str, system: str, prompt: str, on_text=None, is_gone=None,
         try:
             out, truncated = proc.ask(prompt, on_text=on_text, is_gone=is_gone,
                                        already_held=already_held,
-                                       voice_only=voice_only)
+                                       voice_only=voice_only,
+                                       speech_off=speech_off)
             mark_started(key)
             print(f"  [{key}] {time.monotonic() - began:.1f}s, {len(out)} chars", flush=True)
             return out, truncated, True
@@ -2688,6 +2772,7 @@ class Handler(BaseHTTPRequestHandler):
                     "wake": effective_always_wake(key),
                     "wake_override": wake_override(key),
                     "posting": not is_chat_off(key),
+                    "speech": not is_speech_off(key),
                     "interrupt": not is_barge_in_off(key),
                     "transcribe": not is_transcribe_off(key),
                 },
@@ -2840,6 +2925,32 @@ class Handler(BaseHTTPRequestHandler):
         # the flag that gates the chat-bridge post.
         #
         # ADMIN SURFACE, same as /voice/wake: silencing the channel is an
+        # The /mode back-edge: set BOTH per-conversation flags from one mode
+        # name. This is the slash-command surface, where the user picks a mode
+        # rather than flipping a single flag, and it is the only writer of the
+        # pair — see `set_mode` for why (chat_off, speech_off) = (True, True)
+        # must stay unreachable. The /chat/posting route below remains for the
+        # SPOKEN instruction path, which knows about chat only.
+        if self.path.rstrip("/").endswith("/mode"):
+            key = self.headers.get("X-Session-Key", "").strip()
+            if not key:
+                return self._json(400, {"error": {"message": "missing X-Session-Key"}})
+            mode = self.headers.get("X-Mode", "").strip().strip("\"'").lower()
+            if mode not in MODES:
+                return self._json(
+                    400,
+                    {"error": {"message": f"unknown mode {mode!r}; "
+                                         f"expected one of {list(MODES)}"}},
+                )
+            prev_chat, prev_speech = set_mode(key, mode)
+            print(f"-> MODE  [{key}] {mode} (was chat_off={prev_chat}, "
+                  f"speech_off={prev_speech})", flush=True)
+            return self._json(
+                200,
+                {"mode": mode, "posting": not is_chat_off(key),
+                 "speech": not is_speech_off(key), "key": key},
+            )
+
         # operator decision, not state the bot merely observes and reports.
         # Whatever can reach the port must not be able to turn the assistant's
         # chat off — guarded by the shared control-plane check at the top of
@@ -3069,6 +3180,9 @@ class Handler(BaseHTTPRequestHandler):
         chat_off_before = is_chat_off(key)
         _apply_chat_switch(prompt, key)
         chat_off = is_chat_off(key)
+        # Read AFTER _apply_chat_switch, so the spoken "write in the chat again"
+        # — which clears text-only — is already reflected in this turn's mode.
+        speech_off = is_speech_off(key)
         # True exactly on the turn that turns posting back on (the opposite
         # instruction), so the ON note announces the return once, not forever.
         chat_off_just_turned_on = chat_off_before and not chat_off
@@ -3169,7 +3283,7 @@ class Handler(BaseHTTPRequestHandler):
             # which case the pause is left bare on purpose.
             if want_claude and not said and HOLD_AFTER > 0:
                 said = random.choice(_CHECK_LINES)
-            if said and live:
+            if said and live and not speech_off:
                 try:
                     writer.chunk(strip_markdown(said) + " ")
                     pre_spoken = True
@@ -3215,7 +3329,8 @@ class Handler(BaseHTTPRequestHandler):
                     on_text=on_text if live else None,
                     is_gone=(lambda: peer_hung_up(self.connection)) if live else None,
                     already_held=pre_spoken,
-                    voice_only=chat_off)
+                    voice_only=chat_off,
+                    speech_off=speech_off)
         finally:
             stop_keepalive.set()
 
@@ -3259,7 +3374,15 @@ class Handler(BaseHTTPRequestHandler):
                 # not to the channel. The bridge stays on the one path so
                 # nothing is lost; only the destination changes.
                 chat_off = is_chat_off(key)
-                why = ("the question was typed" if typed_turn
+                # Text-only forces the post, ahead of all four inferences. With
+                # speech off nothing is streamed, so `truncated` is False; a
+                # short plain SPOKEN question then fires none of the triggers
+                # and the turn would end at "not posting (short, plain, and not
+                # requested)" — the user hears nothing AND sees nothing, which
+                # is the one outcome this mode must not produce. In text-only
+                # the channel IS the output surface, so the inference is moot.
+                why = ("text-only mode (chat is the only surface)" if speech_off
+                       else "the question was typed" if typed_turn
                        else "asked for it in writing" if _wants_chat_post(prompt)
                        else "spoken reply was truncated" if truncated
                        else "answer has postable shape" if _has_postable_shape(answer)

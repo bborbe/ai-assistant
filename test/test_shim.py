@@ -665,6 +665,92 @@ class VoiceOnlySwitch(unittest.TestCase):
         self.assertIn("voice-only", note)
         self.assertIn("Nothing you write is posted", note)
 
+
+class TextOnlySwitch(unittest.TestCase):
+    """The text-only switch: silence SPOKEN output, keep chat posting.
+
+    The mirror of the voice-only switch, with one structural difference that
+    carries the whole design: the two flags are a PAIR, written together by
+    `set_mode`. `(chat_off, speech_off) = (True, True)` is not a mode — the user
+    gets nothing at all and nothing in Discord shows it — so these tests care as
+    much about that state being unreachable as about text-only working.
+    """
+
+    KEY = "voice:test"
+
+    def setUp(self):
+        self._prev_chat = shim.is_chat_off(self.KEY)
+        self._prev_speech = shim.is_speech_off(self.KEY)
+        shim.set_mode(self.KEY, "voice-text")
+
+    def tearDown(self):
+        shim.set_chat_off(self.KEY, self._prev_chat)
+        shim.set_speech_off(self.KEY, self._prev_speech)
+
+    def test_unknown_key_defaults_to_speech_on(self):
+        # The load-bearing direction: a key the switch never touched must behave
+        # exactly as it did before the feature existed.
+        self.assertFalse(shim.is_speech_off("voice:never-seen"))
+
+    def test_set_speech_off_returns_the_previous_value(self):
+        self.assertFalse(shim.set_speech_off(self.KEY, True))
+        self.assertTrue(shim.set_speech_off(self.KEY, False))
+
+    def test_per_key_state_is_isolated_between_keys(self):
+        shim.set_mode("voice:111111", "text-only")
+        shim.set_mode("voice:222222", "voice-text")
+        self.assertTrue(shim.is_speech_off("voice:111111"))
+        self.assertFalse(shim.is_speech_off("voice:222222"))
+        self.assertFalse(shim.is_speech_off("voice:999999"))
+
+    def test_set_mode_sets_the_pair_for_each_mode(self):
+        shim.set_mode(self.KEY, "voice-only")
+        self.assertTrue(shim.is_chat_off(self.KEY))
+        self.assertFalse(shim.is_speech_off(self.KEY))
+
+        shim.set_mode(self.KEY, "text-only")
+        self.assertFalse(shim.is_chat_off(self.KEY))
+        self.assertTrue(shim.is_speech_off(self.KEY))
+
+        shim.set_mode(self.KEY, "voice-text")
+        self.assertFalse(shim.is_chat_off(self.KEY))
+        self.assertFalse(shim.is_speech_off(self.KEY))
+
+    def test_no_mode_reaches_both_flags_off(self):
+        # THE INVARIANT. Both off means the assistant is silent on every
+        # surface — nothing spoken, nothing posted — with nothing in Discord to
+        # show it. Every mode is walked, plus repeats and junk, so this covers
+        # the WRITER rather than one call site.
+        for mode in ("voice-only", "voice-text", "text-only",
+                     "text-only", "voice-only", "nonsense", ""):
+            shim.set_mode(self.KEY, mode)
+            self.assertFalse(
+                shim.is_chat_off(self.KEY) and shim.is_speech_off(self.KEY),
+                f"mode {mode!r} reached (chat_off, speech_off) = (True, True)",
+            )
+
+    def test_spoken_chat_off_instruction_is_refused_in_text_only(self):
+        # The spoken path knows about chat only, so in text-only it would set
+        # chat_off on top of speech_off — the illegal pair, reached without
+        # anyone choosing it.
+        shim.set_mode(self.KEY, "text-only")
+        shim._apply_chat_switch("please don't write in the chat anymore", self.KEY)
+        self.assertFalse(shim.is_chat_off(self.KEY))
+        self.assertTrue(shim.is_speech_off(self.KEY))
+
+    def test_spoken_chat_on_instruction_clears_text_only(self):
+        # "write in the chat again" implies speech is on, so it returns the
+        # conversation to voice-text rather than leaving it in text-only.
+        shim.set_mode(self.KEY, "text-only")
+        shim._apply_chat_switch("okay you can write in the chat again", self.KEY)
+        self.assertFalse(shim.is_chat_off(self.KEY))
+        self.assertFalse(shim.is_speech_off(self.KEY))
+
+    def test_modes_is_the_validated_set(self):
+        # do_POST rejects anything outside MODES, so this tuple is the contract
+        # the route and the bot both key off.
+        self.assertEqual(set(shim.MODES), {"voice-only", "voice-text", "text-only"})
+
     def test_context_note_announces_the_return_on_the_flip_turn(self):
         # The opposite direction: when posting is turned back on, the model
         # must know before it answers that "the details are in the chat" is

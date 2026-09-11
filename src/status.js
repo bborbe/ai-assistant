@@ -175,9 +175,9 @@ async function report(client, hereKey) {
     : '🚫 transcription — n/a (voice disabled)';
   // The shim-owned toggles, one line each so every state is readable without
   // parsing a run-on line. Each icon names what the toggle GOVERNS — 👂
-  // listening for the phrase, 💬 where replies land, ✋ the interrupt — and the
-  // value after the name carries the state. A per-flag ✅/❌ was tried on top of
-  // that and dropped: a second glyph doing work the name and value already do,
+  // listening for the phrase, 🎚️ the conversation's mode, ✋ the interrupt — and
+  // the value after the name carries the state. A per-flag ✅/❌ was tried on top
+  // of that and dropped: a second glyph doing work the name and value already do,
   // and it made these three lines a different shape from every other line in
   // /status. One ⚙️ prefixing all three made a single glyph do three jobs, and
   // it left `interrupt: off` naming the flag instead of its effect: whether
@@ -189,13 +189,26 @@ async function report(client, hereKey) {
   // shows up, and an idle query answers the unknown key with the shim's
   // defaults — what the next call starts with. Best-effort: an unreachable or
   // pre-route shim degrades to a note, never a broken /status.
+  // The mode is ONE setting held as a pair of shim flags, so it is reported by
+  // NAME rather than flag-by-flag: posting+speech = voice-text, posting alone =
+  // text-only, speech alone = voice-only. `speech` is absent on a shim that
+  // predates text-only, and absent must read as the default — hence the
+  // `!== false` test, never a truthiness one, which would report an old shim as
+  // text-only. The 🎚️ icon names a selector rather than a surface, because the
+  // mode governs the spoken AND the written output — a chat or a speaker icon
+  // would misattribute it to one of them.
+  const modeName = !toggleState.posting
+    ? 'voice-only'
+    : toggleState.speech === false
+      ? 'text-only'
+      : 'voice-text';
   const toggleLines =
     toggleState.ok === true
       ? [
           `👂 wake: ${toggleState.wake ? 'on' : 'off'}${
             toggleState.wake_override === null ? ' (default)' : ' (override)'
           }`,
-          `💬 posting: ${toggleState.posting ? 'voice-text' : 'voice-only'}`,
+          `🎚️ mode: ${modeName}`,
           `✋ interrupt: ${toggleState.interrupt ? 'on' : 'off'}`,
         ]
       : ['⚙️ toggles — shim state unavailable'];
