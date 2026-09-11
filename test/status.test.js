@@ -60,7 +60,7 @@ test('idle status shows the toggle defaults', async () => {
   try {
     const out = await report(client(), 'channel:1');
     assert.match(out, /transcription: enabled \(default\)/);
-    assert.match(out, /⚙️ wake: on \(default\) · posting: voice-text · interrupt: on/);
+    assert.match(out, /⚙️ ✅ wake: on \(default\) · ✅ posting: voice-text · ✅ interrupt: on/);
   } finally {
     restore();
   }
@@ -86,7 +86,7 @@ test('a live call with transcription and interrupt off is reflected', async () =
   try {
     const out = await report(client(), 'channel:1');
     assert.match(out, /transcription: disabled/);
-    assert.match(out, /interrupt: off/);
+    assert.match(out, /❌ interrupt: off/, 'an off toggle must carry its own ❌ tick');
   } finally {
     restore();
   }
