@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: `/status` drops the per-flag ✅/❌ from the three toggle lines, leaving the label icon as the only glyph — `👂 wake: off (default)` rather than `👂 ❌ wake: off (default)`. The tick was doing work the name and value already did, and it made these three lines a different shape from every other line in the report. The split into one line per toggle, and the icons themselves, are unchanged.
+
 ## v0.40.0
 
 - feat: `/status` gives each shim-owned toggle its own line, prefixed by an icon naming what it governs — `👂 ✅ wake: …`, `💬 ✅ posting: …`, `✋ ❌ interrupt: …` replace the single `⚙️ … · … · …` run-on line, so each state is scannable without parsing a joined string and `interrupt: off` reads as the effect it names rather than a bare flag. The per-flag ✅/❌ ticks are unchanged. The degraded `⚙️ toggles — shim state unavailable` line keeps its group icon, there being no per-toggle states to prefix.
