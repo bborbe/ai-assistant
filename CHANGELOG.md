@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: `/status` replaces the `transcripts — writable` line with the transcription state — `transcription: enabled|disabled` (live posture during a call, `TRANSCRIBE` default marked `(default)` when idle), so "are we being written down?" is answerable from the status line; the writable check survives only as a failure suffix so a broken transcript dir stays diagnosable.
+
 ## v0.37.0
 
 - feat: `/status` names the transcription posture for each live voice session — `(transcribing)` when the call is written down, `(transcription off)` when the `TRANSCRIBE` default was off at join or an admin ran `/transcribe off` mid-call, so the toggle's effect is readable in the status line without a separate bare `/transcribe` query.
