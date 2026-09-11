@@ -175,29 +175,28 @@ async function report(client, hereKey) {
     : '🚫 transcription — n/a (voice disabled)';
   // The shim-owned toggles, one line each so every state is readable without
   // parsing a run-on line. Each icon names what the toggle GOVERNS — 👂
-  // listening for the phrase, 💬 where replies land, ✋ the interrupt — never
-  // what it is set to; the tick carries the state, same semantics as the
-  // transcription line (enabled ✅, disabled ❌). One ⚙️ prefixing all three
-  // made a single glyph do three jobs, and it left `interrupt: off` naming the
-  // flag instead of its effect: whether speaking over the answer cancels it
-  // mid-flight or lets it finish. A group icon still fits the degraded line
-  // below, where there are no per-toggle states to prefix.
+  // listening for the phrase, 💬 where replies land, ✋ the interrupt — and the
+  // value after the name carries the state. A per-flag ✅/❌ was tried on top of
+  // that and dropped: a second glyph doing work the name and value already do,
+  // and it made these three lines a different shape from every other line in
+  // /status. One ⚙️ prefixing all three made a single glyph do three jobs, and
+  // it left `interrupt: off` naming the flag instead of its effect: whether
+  // speaking over the answer cancels it mid-flight or lets it finish. A group
+  // icon still fits the degraded line below, where there are no per-toggle
+  // states to prefix.
   // `wake_override === null` means the env default is in force, marked
   // `(default)`; a live call's key is queried so a mid-call /interrupt or /mode
   // shows up, and an idle query answers the unknown key with the shim's
   // defaults — what the next call starts with. Best-effort: an unreachable or
   // pre-route shim degrades to a note, never a broken /status.
-  const tickFlag = (on) => (on ? '✅' : '❌');
   const toggleLines =
     toggleState.ok === true
       ? [
-          `👂 ${tickFlag(toggleState.wake)} wake: ${toggleState.wake ? 'on' : 'off'}${
+          `👂 wake: ${toggleState.wake ? 'on' : 'off'}${
             toggleState.wake_override === null ? ' (default)' : ' (override)'
           }`,
-          `💬 ${tickFlag(toggleState.posting)} posting: ${
-            toggleState.posting ? 'voice-text' : 'voice-only'
-          }`,
-          `✋ ${tickFlag(toggleState.interrupt)} interrupt: ${toggleState.interrupt ? 'on' : 'off'}`,
+          `💬 posting: ${toggleState.posting ? 'voice-text' : 'voice-only'}`,
+          `✋ interrupt: ${toggleState.interrupt ? 'on' : 'off'}`,
         ]
       : ['⚙️ toggles — shim state unavailable'];
 
