@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: `/status` toggle line gives each flag its own ✅/❌ tick — the grouped `⚙️ wake/posting/interrupt` line previously carried no per-flag icon and read differently from every other ticked status line (transcription, gateway, endpoint).
+
 ## v0.39.0
 
 - feat: `/status` shows the state of every runtime per-conversation toggle, not just transcription — a new `⚙️ wake: … · posting: voice-text|voice-only · interrupt: on|off` line reads the shim's per-key stores via a new unauthenticated GET `/voice/state` (observe-only, matching the control-auth rule), so a mid-call `/interrupt off` or `/mode voice-only` is visible at a glance; idle, the shim answers an unknown key with its defaults, what the next call starts with. Also adds the first `status.test.js` smoke tests.

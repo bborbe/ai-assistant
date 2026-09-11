@@ -179,13 +179,17 @@ async function report(client, hereKey) {
   // shows up, and an idle query answers the unknown key with the shim's
   // defaults — what the next call starts with. Best-effort: an unreachable or
   // pre-route shim degrades to a note, never a broken /status.
+  // Each flag carries its own tick, same semantics as the transcription line
+  // (enabled ✅, disabled ❌) — the grouped ⚙️ line without per-flag icons read
+  // differently from the rest of /status, which is a ticked line each.
+  const tickFlag = (on) => (on ? '✅' : '❌');
   const toggleLine =
     toggleState.ok === true
-      ? `⚙️ wake: ${toggleState.wake ? 'on' : 'off'}${
+      ? `⚙️ ${tickFlag(toggleState.wake)} wake: ${toggleState.wake ? 'on' : 'off'}${
           toggleState.wake_override === null ? ' (default)' : ' (override)'
-        } · posting: ${toggleState.posting ? 'voice-text' : 'voice-only'} · interrupt: ${
-          toggleState.interrupt ? 'on' : 'off'
-        }`
+        } · ${tickFlag(toggleState.posting)} posting: ${
+          toggleState.posting ? 'voice-text' : 'voice-only'
+        } · ${tickFlag(toggleState.interrupt)} interrupt: ${toggleState.interrupt ? 'on' : 'off'}`
       : '⚙️ toggles — shim state unavailable';
 
   const ping = Math.round(client.ws.ping);
