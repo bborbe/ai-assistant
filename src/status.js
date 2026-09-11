@@ -173,24 +173,33 @@ async function report(client, hereKey) {
         live ? '' : ' (default)'
       }${transcriptOk ? '' : ' — transcripts dir NOT writable'}`
     : '🚫 transcription — n/a (voice disabled)';
-  // The shim-owned toggles, one glance instead of three bare invocations.
+  // The shim-owned toggles, one line each so every state is readable without
+  // parsing a run-on line. Each icon names what the toggle GOVERNS — 👂
+  // listening for the phrase, 💬 where replies land, ✋ the interrupt — never
+  // what it is set to; the tick carries the state, same semantics as the
+  // transcription line (enabled ✅, disabled ❌). One ⚙️ prefixing all three
+  // made a single glyph do three jobs, and it left `interrupt: off` naming the
+  // flag instead of its effect: whether speaking over the answer cancels it
+  // mid-flight or lets it finish. A group icon still fits the degraded line
+  // below, where there are no per-toggle states to prefix.
   // `wake_override === null` means the env default is in force, marked
   // `(default)`; a live call's key is queried so a mid-call /interrupt or /mode
   // shows up, and an idle query answers the unknown key with the shim's
   // defaults — what the next call starts with. Best-effort: an unreachable or
   // pre-route shim degrades to a note, never a broken /status.
-  // Each flag carries its own tick, same semantics as the transcription line
-  // (enabled ✅, disabled ❌) — the grouped ⚙️ line without per-flag icons read
-  // differently from the rest of /status, which is a ticked line each.
   const tickFlag = (on) => (on ? '✅' : '❌');
-  const toggleLine =
+  const toggleLines =
     toggleState.ok === true
-      ? `⚙️ ${tickFlag(toggleState.wake)} wake: ${toggleState.wake ? 'on' : 'off'}${
-          toggleState.wake_override === null ? ' (default)' : ' (override)'
-        } · ${tickFlag(toggleState.posting)} posting: ${
-          toggleState.posting ? 'voice-text' : 'voice-only'
-        } · ${tickFlag(toggleState.interrupt)} interrupt: ${toggleState.interrupt ? 'on' : 'off'}`
-      : '⚙️ toggles — shim state unavailable';
+      ? [
+          `👂 ${tickFlag(toggleState.wake)} wake: ${toggleState.wake ? 'on' : 'off'}${
+            toggleState.wake_override === null ? ' (default)' : ' (override)'
+          }`,
+          `💬 ${tickFlag(toggleState.posting)} posting: ${
+            toggleState.posting ? 'voice-text' : 'voice-only'
+          }`,
+          `✋ ${tickFlag(toggleState.interrupt)} interrupt: ${toggleState.interrupt ? 'on' : 'off'}`,
+        ]
+      : ['⚙️ toggles — shim state unavailable'];
 
   const ping = Math.round(client.ws.ping);
   const claude = shimUp ? await sessionLines(hereKey) : [];
@@ -203,7 +212,7 @@ async function report(client, hereKey) {
       ? `${tick(s2sUp)} speech-to-speech — ${config.s2sUrl}`
       : '🚫 voice — disabled on this instance (VOICE_ENABLED=false), text only',
     transcriptionLine,
-    ...(config.voiceEnabled ? [toggleLine] : []),
+    ...(config.voiceEnabled ? toggleLines : []),
     ...(config.voiceEnabled
       ? [sessions.length ? `🎙️ in voice — ${sessions.join(', ')}` : '🔇 not in a voice channel']
       : []),
