@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.40.1
 
 - fix: `/status` drops the per-flag ✅/❌ from the three toggle lines, leaving the label icon as the only glyph — `👂 wake: off (default)` rather than `👂 ❌ wake: off (default)`. The tick was doing work the name and value already did, and it made these three lines a different shape from every other line in the report. The split into one line per toggle, and the icons themselves, are unchanged.
 
