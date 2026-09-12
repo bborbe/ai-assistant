@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.44.0
 
 - fix: `/mode` drops the `on`/`off`/`default` aliases — its three named states (`voice-only`, `voice-text`, `text-only`) are the whole value space. An `off` was ambiguous on a command that sets a pair of flags (stop posting? stop speaking?), and the default is reachable by naming `voice-text`. The bare query form stays.
 
