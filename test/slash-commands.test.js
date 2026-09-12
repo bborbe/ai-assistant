@@ -82,25 +82,18 @@ test('/wakephrase advertises the on/off/default choices', () => {
   assert.deepEqual(choices.sort(), ['default', 'off', 'on']);
 });
 
-test('/mode advertises the three modes plus the uniform aliases', () => {
+test('/mode advertises exactly the three named modes', () => {
   // The names the user can type ARE the contract: `voice-only` silences chat
-  // posting, `voice-text` does both, `text-only` silences speech — and the
-  // uniform on|off|default aliases (on → voice-text, off → voice-only,
-  // default → configured default) sit on top. A choice that silently drops
-  // from the list is exactly the class of regression the other tests here
-  // exist to catch.
+  // posting, `voice-text` does both, `text-only` silences speech. The three
+  // named states are the WHOLE value space — no on|off|default aliases (the
+  // default is reachable by naming `voice-text`). A choice that silently
+  // drops from the list — or an alias that creeps back in — is exactly the
+  // class of regression the other tests here exist to catch.
   const mode = buildCommands({ voiceEnabled: true }).find((c) => c.name === 'mode');
   assert.ok(mode, '/mode must be registered');
   assert.equal(mode.options[0].required, false, 'bare invocation is the query form');
   const choices = mode.options[0].choices.map((c) => c.value);
-  assert.deepEqual(choices.sort(), [
-    'default',
-    'off',
-    'on',
-    'text-only',
-    'voice-only',
-    'voice-text',
-  ]);
+  assert.deepEqual(choices.sort(), ['text-only', 'voice-only', 'voice-text']);
 });
 
 // Discord hides a command from anyone lacking this permission. Asserted on

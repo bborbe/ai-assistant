@@ -312,23 +312,19 @@ client.on('interactionCreate', async (i) => {
       const current = !state.posting ? 'voice-only' : !state.speech ? 'text-only' : 'voice-text';
       return i.editReply(`This conversation is currently **${current}**: ${describes[current]}.`);
     }
-    // The uniform on|off|default aliases. `on`/`off` are spelled as the modes
-    // they mean; `default` stays `default` so the shim clears both per-key
-    // overrides and the configured default (voice-text) is in force again.
-    const mapped = mode === 'on' ? 'voice-text' : mode === 'off' ? 'voice-only' : mode;
-    const result = await setMode(mapped, key);
+    // The three named modes are the whole value space — /mode deliberately has
+    // no on|off|default aliases: its states are all explicit and nameable, so
+    // the default (voice-text) is reachable by naming it, and an `off` would be
+    // ambiguous (off = stop posting? stop speaking?) on a command that sets a
+    // pair of flags. The bare query form above reports the current state.
+    const result = await setMode(mode, key);
     if (!result.ok) {
       const reason = result.unsupported
         ? 'the backend does not support per-conversation modes'
         : result.error || 'the endpoint is unreachable';
       return i.editReply(`Could not switch mode (${reason}). Mode stays as it was.`);
     }
-    if (mode === 'default') {
-      return i.editReply(
-        `This conversation is back to the default mode (**voice-text**): ${describes['voice-text']}.`,
-      );
-    }
-    return i.editReply(`This conversation is now **${mapped}**: ${describes[mapped]}.`);
+    return i.editReply(`This conversation is now **${mode}**: ${describes[mode]}.`);
   }
 
   if (i.commandName === 'interrupt') {
