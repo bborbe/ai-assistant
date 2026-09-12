@@ -136,26 +136,24 @@ function buildCommands({ voiceEnabled }) {
         o.setName('id').setDescription('Session id from /sessions').setRequired(true),
       ),
     // The /mode back-edge: a slash-command surface for the SAME per-key
-    // switches the spoken instruction flips. Six choices, all explicit — a
+    // switches the spoken instruction flips. Three choices, all explicit — a
     // member can read the current mode back from the shim through this
     // command, so "which mode am I in" is answerable without a fourth command.
-    // The three states plus the uniform on|off|default aliases (on → voice-text,
-    // off → voice-only, default → the configured default). The option is NOT
-    // required: bare /mode is the query form, matching the other three toggles.
+    // The three named states are the WHOLE value space: no on|off|default
+    // aliases (an `off` would be ambiguous on a command that sets a pair of
+    // flags, and the default is reachable by naming `voice-text`). The option
+    // is NOT required: bare /mode is the query form.
     new SlashCommandBuilder()
       .setName('mode')
       .setDescription('Show or set how this conversation answers: spoken, written, or both')
       .addStringOption((o) =>
         o
           .setName('mode')
-          .setDescription('voice-only · voice-text · text-only · on · off · default')
+          .setDescription('voice-only · voice-text · text-only')
           .addChoices(
             { name: 'voice-only (never post to the channel)', value: 'voice-only' },
             { name: 'voice-text (speak and post, the default)', value: 'voice-text' },
             { name: 'text-only (post to the channel, never speak)', value: 'text-only' },
-            { name: 'on (= voice-text)', value: 'on' },
-            { name: 'off (= voice-only)', value: 'off' },
-            { name: 'default (use the configured default)', value: 'default' },
           ),
       ),
   );
