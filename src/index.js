@@ -6,7 +6,7 @@ const config = require('./config');
 const voice = require('./voice');
 const text = require('./text');
 const { sessionKeyFor, setMode, setInterrupt, setTranscribe, getVoiceState } = require('./llm');
-const { buildCommands, VOICE_DISABLED_REPLY } = require('./slash-commands');
+const { buildCommands, VOICE_DISABLED_REPLY, ADMIN_COMMANDS } = require('./slash-commands');
 const log = require('./log');
 const { startHealthServer, isReady } = require('./health');
 const gchat = require('./gchat');
@@ -173,13 +173,14 @@ client.on('interactionCreate', async (i) => {
     return i.reply({ content: 'Not authorised.', flags: MessageFlags.Ephemeral });
   }
 
-  // Defence in depth. Every command here is admin-tier and carries
+  // Defence in depth for the admin tier. ADMIN_COMMANDS carry
   // setDefaultMemberPermissions, so Discord already hides them from ordinary
   // members — but hiding is a client affordance, not authorisation. A member who
   // holds ManageGuild without being in ADMIN_USER_IDS still sees and can invoke
   // them, and so can anyone whose guild has an Integrations override. This is
-  // the check that actually decides.
-  if (!config.isAdmin(i.user.id)) {
+  // the check that actually decides. Every other command is open to anyone
+  // who passed the allowlist above.
+  if (ADMIN_COMMANDS.has(i.commandName) && !config.isAdmin(i.user.id)) {
     log.warn('slash command refused — not an admin', {
       command: i.commandName,
       user: i.user.tag,
