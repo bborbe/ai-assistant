@@ -38,8 +38,15 @@ const VOICE_DISABLED_REPLY =
  * whether or not they are in ADMIN_USER_IDS — which is why index.js still
  * checks config.isAdmin before acting. Hiding is a UX affordance; the id check
  * is the actual authorisation.
+ *
+ * Applied only to ADMIN_COMMANDS. Those switch or spawn Claude Code sessions;
+ * the rest (voice controls, /mode, /status) act on the caller's own
+ * conversation and are visible to every member — still gated by
+ * ALLOWED_USER_IDS in index.js, so visible is not the same as usable.
  */
 const ADMIN_PERMISSION = PermissionFlagsBits.ManageGuild;
+
+const ADMIN_COMMANDS = new Set(['new', 'sessions', 'switch']);
 
 function buildCommands({ voiceEnabled }) {
   const commands = [];
@@ -172,10 +179,11 @@ function buildCommands({ voiceEnabled }) {
       ),
   );
 
-  // Applied to every command, not a subset: the whole slash surface is session
-  // and voice control, and there is no command here an ordinary user should
-  // reach. The mention surface is what they get, and it is not built here.
-  return commands.map((c) => c.setDefaultMemberPermissions(ADMIN_PERMISSION).toJSON());
+  // null is explicit "everyone" — spelled out so the public tier reads as a
+  // decision, not an omission.
+  return commands.map((c) =>
+    c.setDefaultMemberPermissions(ADMIN_COMMANDS.has(c.name) ? ADMIN_PERMISSION : null).toJSON(),
+  );
 }
 
-module.exports = { buildCommands, VOICE_DISABLED_REPLY, ADMIN_PERMISSION };
+module.exports = { buildCommands, VOICE_DISABLED_REPLY, ADMIN_PERMISSION, ADMIN_COMMANDS };

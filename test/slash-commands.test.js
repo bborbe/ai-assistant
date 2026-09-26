@@ -108,17 +108,19 @@ test('/mode advertises exactly the three named modes', () => {
 });
 
 // Discord hides a command from anyone lacking this permission. Asserted on
-// EVERY command rather than a sampled one: the whole slash surface is session
-// and voice control, and a single command shipped without the field is
-// silently visible to every member of the guild.
-test('every command carries the admin permission gate', () => {
-  const { ADMIN_PERMISSION } = require('../src/slash-commands');
+// EVERY command in both directions: an admin command shipped without the field
+// is silently visible to the whole guild, and a public one shipped with it is
+// silently hidden from the people it was opened for.
+test('only the session commands carry the admin permission gate', () => {
+  const { ADMIN_PERMISSION, ADMIN_COMMANDS } = require('../src/slash-commands');
+  assert.deepEqual([...ADMIN_COMMANDS].sort(), ['new', 'sessions', 'switch']);
   for (const voiceEnabled of [true, false]) {
     for (const c of buildCommands({ voiceEnabled })) {
+      const want = ADMIN_COMMANDS.has(c.name) ? String(ADMIN_PERMISSION) : null;
       assert.equal(
         c.default_member_permissions,
-        String(ADMIN_PERMISSION),
-        `${c.name} must be permission-gated (voiceEnabled=${voiceEnabled})`,
+        want,
+        `${c.name} permission gate (voiceEnabled=${voiceEnabled})`,
       );
     }
   }
