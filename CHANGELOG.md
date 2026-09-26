@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: add `SLASH_COMMAND_MODE`. `multi` (the default) keeps the legacy surface unchanged: every command top-level, hidden behind `ManageGuild`. `single` bundles them under one `/ben` command as subcommands (`/ben join`, `/ben status`, `/ben mode`, …) instead of a dozen generic names that collide with other bots, and makes `/ben` visible to every member of the guild. Authorisation is identical in both modes: `ALLOWED_USER_IDS` and `ADMIN_USER_IDS` are checked on every invocation. A command in the other mode's shape, still cached from the guild's previous list, is answered with a pointer to the current one. An unknown mode fails startup rather than guessing.
+
 ## v0.51.5
 
 - fix: name the release timeout for an empty room, not for silence. `VOICE_EMPTY_ROOM_RELEASE_MS` / `config.voiceEmptyRoomReleaseMs` replace the `IDLE` names, because the trigger is `humansIn(channel) === 0` — the room being empty — not quiet: talking to yourself indefinitely never releases the bot while walking out does, and the old name misled exactly that way during the 2026-09-25 live run. `scheduleIdleRelease` / `cancelIdleRelease` / `idleReleaseTimer` become `scheduleEmptyRoomRelease` / `cancelEmptyRoomRelease` / `emptyRoomReleaseTimer`, the leave reason `'idle'` becomes `'empty-room'`, and the log line is now `voice: empty-room grace expired, releasing session` (previously `voice: idle grace expired, releasing session`). `VOICE_IDLE_RELEASE_MS` is still accepted as a fallback so no existing `local.env` breaks. No behaviour change: same default, same trigger, same timer semantics.

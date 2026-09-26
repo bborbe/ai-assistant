@@ -51,6 +51,20 @@ const WAKE_LEAD_WORDS = [
   'yup',
 ];
 
+const SLASH_COMMAND_MODES = ['multi', 'single'];
+
+function slashCommandMode(v) {
+  const mode = (v || 'multi').trim().toLowerCase();
+  // Thrown, not defaulted: a typo would otherwise register the shape the
+  // operator did not ask for, and nothing downstream would say why.
+  if (!SLASH_COMMAND_MODES.includes(mode)) {
+    throw new Error(
+      `SLASH_COMMAND_MODE must be one of ${SLASH_COMMAND_MODES.join(', ')} (got "${v}")`,
+    );
+  }
+  return mode;
+}
+
 function list(v) {
   return (v || '')
     .split(',')
@@ -117,9 +131,11 @@ const config = {
   //
   // Discord's own visibility gate is permission-based, not id-based — there is
   // no "show this command to these user ids" in the API — so the ids here
-  // cannot hide a command by themselves. They are the defence-in-depth half:
-  // `setDefaultMemberPermissions` hides the command in the client,
-  // `isAdmin` refuses it on the wire if someone reaches it anyway.
+  // cannot hide a command by themselves. In `multi` mode they are the
+  // defence-in-depth half: `setDefaultMemberPermissions` hides the command in
+  // the client, `isAdmin` refuses it on the wire if someone reaches it anyway.
+  // In `single` mode `/ben` is visible to everyone and `isAdmin` is the whole
+  // gate.
   // UNSET inherits the allowlist, so every existing deployment keeps working
   // exactly as it did — this release would otherwise take slash commands away
   // from every instance that never heard of ADMIN_USER_IDS. Set it explicitly
@@ -132,13 +148,23 @@ const config = {
   // Which guilds get slash commands registered at all. Empty = every guild the
   // bot is in (the historical behaviour, and right for a single-guild install).
   //
-  // Exists because permission-gated visibility cuts both ways: on a guild where
-  // the operator is an ordinary member, a command gated on ManageGuild is hidden
-  // from THEM too, so gating alone cannot produce "admins only" there. Naming no
-  // guild is then the honest surface — the same reasoning as VOICE_ENABLED=0
-  // omitting join/leave rather than registering them to refuse. The @mention
-  // surface is unaffected; it is not a slash command.
+  // Exists because neither command shape can produce "admins only" by itself.
+  // In `multi` mode a command gated on ManageGuild is hidden from an operator
+  // who is an ordinary member of the guild; in `single` mode `/ben` is visible
+  // to everyone, so on a guild with no admins it only advertises a command
+  // that refuses everyone. Naming no guild is then the honest surface — the
+  // same reasoning as VOICE_ENABLED=0 omitting join/leave rather than
+  // registering them to refuse. The @mention surface is unaffected; it is not a
+  // slash command.
   slashCommandGuildIds: list(process.env.SLASH_COMMAND_GUILD_IDS),
+
+  // The shape of the slash-command surface. `multi` (the default, and the
+  // legacy behaviour) registers every command top-level, hidden behind
+  // ManageGuild. `single` registers one `/ben` command with the same commands
+  // as subcommands, visible to every member — one picker entry instead of a
+  // dozen generic names that collide with other bots. Authorisation
+  // (ALLOWED_USER_IDS / ADMIN_USER_IDS) is identical in both.
+  slashCommandMode: slashCommandMode(process.env.SLASH_COMMAND_MODE),
 
   // How many prior messages a text thread resends. The endpoint may be
   // stateless (MiniMax uses this) or stateful (the shim discards it) — we
