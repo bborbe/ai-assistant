@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.52.0
 
 - feat: open the non-session slash commands to every member. Only `/new`, `/sessions` and `/switch` stay behind `ManageGuild` visibility and the `ADMIN_USER_IDS` check (`ADMIN_COMMANDS`); `/join`, `/leave`, `/cancel`, `/wakephrase`, `/interrupt`, `/transcribe`, `/mode` and `/status` register with `default_member_permissions: null`, so non-admins on a guild see them. They remain gated by `ALLOWED_USER_IDS`.
 
