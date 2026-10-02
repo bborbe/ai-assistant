@@ -66,6 +66,18 @@ spec:
               value: '0'
             - name: LOG_LEVEL
               value: info
+            # The Star Citizen assistant is the ONLY identity that groups its
+            # commands under a prefix. `multi` (the default) registers a dozen
+            # generic top-level names — /new, /status, /mode — that collide with
+            # every other bot on the Liga server; `single` collapses them under
+            # one `/sc` instead. Deliberately NOT set on the personal, boss or
+            # brogrammers identities, which keep the default surface.
+            # VOICE_ENABLED=0 above means join/leave are omitted from the
+            # subcommand list, so `/sc` carries the nine text-surface commands.
+            - name: SLASH_COMMAND_MODE
+              value: single
+            - name: SLASH_COMMAND_NAME
+              value: sc
           # Liveness must not depend on Discord: an outage there should drain,
           # not restart every pod into a reconnect storm.
           livenessProbe:

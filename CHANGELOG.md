@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- chore: turn on the `single`-mode command prefix for the Star Citizen assistant — and only for it — by setting `SLASH_COMMAND_MODE=single` and `SLASH_COMMAND_NAME=sc` in `k8s/discord-assistant-deploy.yaml`, the manifest the `star-citizen` namespace alone applies. On the Liga server the default `multi` surface registers a dozen generic top-level names (`/new`, `/status`, `/mode`) that collide with every other bot in the guild; `/sc` collapses them into one entry. The personal, boss and brogrammers identities deliberately keep the default surface, so nothing is set on them. `VOICE_ENABLED=0` on this deployment means `join`/`leave` are omitted, so `/sc` carries the nine text-surface commands. Takes effect on the next deploy of that namespace, not on merge.
+
 ## v0.58.1
 
 - refactor: extract the `single`-mode admin gate into `isAdminOnly()` and test it. The gate is a composition — resolve the command, then key the tier on the result — and keyed on the wire name (`ADMIN_COMMANDS.has(i.commandName)`) it can never match inside the wrapper, so every subcommand including `new` would silently read as public. A test on the static command definitions passes with that bug present, and `index.js` logs in at require time so a test cannot reach the expression there; the extraction is what makes the composition testable. Behaviour is unchanged.
