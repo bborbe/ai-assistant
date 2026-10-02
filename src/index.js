@@ -6,7 +6,12 @@ const config = require('./config');
 const voice = require('./voice');
 const text = require('./text');
 const { sessionKeyFor, setMode, setInterrupt, setTranscribe, getVoiceState } = require('./llm');
-const { buildCommands, VOICE_DISABLED_REPLY, ADMIN_COMMANDS } = require('./slash-commands');
+const {
+  buildCommands,
+  commandFor,
+  VOICE_DISABLED_REPLY,
+  ADMIN_COMMANDS,
+} = require('./slash-commands');
 const log = require('./log');
 const { startHealthServer, isReady } = require('./health');
 const gchat = require('./gchat');
@@ -59,7 +64,11 @@ if (config.gchatEnabled) {
   }
 }
 
-const commands = buildCommands({ voiceEnabled: config.voiceEnabled });
+const commands = buildCommands({
+  voiceEnabled: config.voiceEnabled,
+  mode: config.slashCommandMode,
+  name: config.slashCommandName,
+});
 
 const client = new Client({
   intents: [
@@ -168,8 +177,21 @@ client.on('interactionCreate', async (i) => {
   });
   if (!i.isChatInputCommand()) return;
 
+  // A command in the other mode's shape is a stale entry from the guild's
+  // previous list, and is answered rather than left hanging.
+  const cmd = commandFor(i, config.slashCommandMode, config.slashCommandName);
+  if (cmd === null) {
+    return i.reply({
+      content:
+        config.slashCommandMode === 'single'
+          ? `That command is gone — use \`/${config.slashCommandName}\` instead.`
+          : `\`/${config.slashCommandName}\` is gone — its subcommands are top-level commands here.`,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
   if (!config.isAllowed(i.user.id)) {
-    log.warn('slash command dropped', { command: i.commandName, user: i.user.tag, id: i.user.id });
+    log.warn('slash command dropped', { command: cmd, user: i.user.tag, id: i.user.id });
     return i.reply({ content: 'Not authorised.', flags: MessageFlags.Ephemeral });
   }
 
@@ -180,9 +202,14 @@ client.on('interactionCreate', async (i) => {
   // them, and so can anyone whose guild has an Integrations override. This is
   // the check that actually decides. Every other command is open to anyone
   // who passed the allowlist above.
-  if (ADMIN_COMMANDS.has(i.commandName) && !config.isAdmin(i.user.id)) {
+  //
+  // Keyed on the RESOLVED command (`cmd`), never on `i.commandName`: in
+  // `single` mode the interaction names the wrapper, so keying on the wire name
+  // would never match and every subcommand would silently fall through as
+  // public — the session commands included.
+  if (ADMIN_COMMANDS.has(cmd) && !config.isAdmin(i.user.id)) {
     log.warn('slash command refused — not an admin', {
-      command: i.commandName,
+      command: cmd,
       user: i.user.tag,
       id: i.user.id,
     });
@@ -192,7 +219,7 @@ client.on('interactionCreate', async (i) => {
     });
   }
 
-  if (i.commandName === 'status') {
+  if (cmd === 'status') {
     // Deferred: the checks open sockets to the shim and to speech-to-speech,
     // which can exceed the 3s interaction deadline when one of them is exactly
     // the thing that is broken.
@@ -205,18 +232,18 @@ client.on('interactionCreate', async (i) => {
   // keeps a guild's previous command list until the new one is PUT, so an
   // instance restarted into text-only can still receive them for a moment.
   if (
-    (i.commandName === 'join' ||
-      i.commandName === 'leave' ||
-      i.commandName === 'cancel' ||
-      i.commandName === 'wakephrase' ||
-      i.commandName === 'interrupt' ||
-      i.commandName === 'transcribe') &&
+    (cmd === 'join' ||
+      cmd === 'leave' ||
+      cmd === 'cancel' ||
+      cmd === 'wakephrase' ||
+      cmd === 'interrupt' ||
+      cmd === 'transcribe') &&
     !config.voiceEnabled
   ) {
     return i.reply({ content: VOICE_DISABLED_REPLY, flags: MessageFlags.Ephemeral });
   }
 
-  if (i.commandName === 'wakephrase') {
+  if (cmd === 'wakephrase') {
     const session = voice.sessions.get(i.guildId);
     if (!session || session.closed) {
       return i.reply({
@@ -260,7 +287,7 @@ client.on('interactionCreate', async (i) => {
     );
   }
 
-  if (i.commandName === 'join') {
+  if (cmd === 'join') {
     const channel = i.member?.voice?.channel;
     if (!channel) {
       return i.reply({ content: 'Join a voice channel first.', flags: MessageFlags.Ephemeral });
@@ -285,18 +312,18 @@ client.on('interactionCreate', async (i) => {
     }
   }
 
-  if (i.commandName === 'new' || i.commandName === 'sessions' || i.commandName === 'switch') {
+  if (cmd === 'new' || cmd === 'sessions' || cmd === 'switch') {
     // Deferred: each of these calls the endpoint, which can outlast the 3s
     // interaction deadline precisely when the endpoint is the thing misbehaving.
     await i.deferReply({ flags: MessageFlags.Ephemeral });
     const key = sessionKeyFor(i.channel, i.user.id);
     const { newSession, sessionsList, switchSession } = require('./commands');
-    if (i.commandName === 'new') return i.editReply(await newSession(key));
-    if (i.commandName === 'sessions') return i.editReply(await sessionsList(key));
+    if (cmd === 'new') return i.editReply(await newSession(key));
+    if (cmd === 'sessions') return i.editReply(await sessionsList(key));
     return i.editReply(await switchSession(key, i.options.getString('id')));
   }
 
-  if (i.commandName === 'mode') {
+  if (cmd === 'mode') {
     // Not deferred: this is one localhost POST to the shim, far inside the 3s
     // deadline — but it does reach the network, so the reply still goes
     // ephemeral and still tells the user which mode the conversation is now in.
@@ -337,7 +364,7 @@ client.on('interactionCreate', async (i) => {
     return i.editReply(`This conversation is now **${mode}**: ${describes[mode]}.`);
   }
 
-  if (i.commandName === 'interrupt') {
+  if (cmd === 'interrupt') {
     // Same shape as /mode, deliberately not /wakephrase: the flag lives on the
     // shim keyed per conversation, not on a live Session, so no call needs to
     // be up to flip it. One localhost POST to the shim, far inside the 3s
@@ -371,7 +398,7 @@ client.on('interactionCreate', async (i) => {
     );
   }
 
-  if (i.commandName === 'transcribe') {
+  if (cmd === 'transcribe') {
     // Same shape as /interrupt, deliberately not /wakephrase: the flag lives on
     // the shim keyed per conversation, so no call needs to be up to flip it —
     // but the GATE is this bot's own transcript writer, so a live session gets
@@ -409,7 +436,7 @@ client.on('interactionCreate', async (i) => {
     );
   }
 
-  if (i.commandName === 'leave') {
+  if (cmd === 'leave') {
     const left = voice.leave(i.guildId, 'command');
     await i.reply({
       content: left ? 'Left.' : 'Not in a voice channel.',
@@ -417,7 +444,7 @@ client.on('interactionCreate', async (i) => {
     });
   }
 
-  if (i.commandName === 'cancel') {
+  if (cmd === 'cancel') {
     // The typed counterpart to barge-in, for when the listener does not want
     // to talk over the assistant. Same shape as /leave rather than /interrupt:
     // it touches only local playback state, so there is no shim round trip and
