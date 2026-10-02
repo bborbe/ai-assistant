@@ -7,6 +7,18 @@
 # down/unreachable the render serves the last-cached value instead of failing,
 # so `make apply` survives a TeamVault outage. Each lookup key must have been
 # fetched successfully once with --cache to populate its cache entry.
+#
+# The apply goes through the environment-specific wrapper, never bare `kubectl`.
+# `kubectl` is a shell function that refuses outright — "Please use
+# environment-specific aliases instead" — so the `kubectl apply
+# --context=$${CLUSTER_CONTEXT}` form this replaced could not execute at all: it
+# died before doing any work, the same way for every caller, and `make buca`
+# therefore built and pushed an image and then failed at the apply. The wrapper
+# also carries its own KUBECONFIG, which the default one has no contexts for.
+#
+# CLUSTER_CONTEXT selects the wrapper and is the only thing that does. An
+# unmapped value is refused rather than guessed at, because a typo here applies
+# one cluster's manifests to the other.
 apply:
 	@command -v teamvault-cli >/dev/null 2>&1 || { echo "teamvault-cli not on PATH" >&2; exit 1; }
-	bash -c 'source ${ROOTDIR}/local.env && find . -name "*.yaml" | while read -r file; do cat $${file} | teamvault-cli config parse --cache | kubectl apply --context=$${CLUSTER_CONTEXT} -f -; done'
+	bash -c 'source ${ROOTDIR}/local.env && case "$${CLUSTER_CONTEXT}" in nuke-dev) KUBECTL=kubectlnukedev ;; nuke-prod) KUBECTL=kubectlnukeprod ;; *) echo "Makefile.k8s: no wrapper for CLUSTER_CONTEXT=$${CLUSTER_CONTEXT} — refusing to guess" >&2; exit 1 ;; esac && [ -n "$${NAMESPACE}" ] || { echo "Makefile.k8s: NAMESPACE unset in $${ROOTDIR}/local.env" >&2; exit 1; } && command -v "$${KUBECTL}" >/dev/null 2>&1 || { echo "Makefile.k8s: $${KUBECTL} not on PATH" >&2; exit 1; } && find . -name "*.yaml" | while read -r file; do cat $${file} | teamvault-cli config parse --cache | $${KUBECTL} -n "$${NAMESPACE}" apply -f -; done'

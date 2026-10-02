@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: route `make apply` through the environment-specific kubectl wrapper, so the documented deploy path runs at all. It called bare `kubectl`, which on this machine is a shell function that refuses outright — `ERROR: Please use environment-specific aliases instead` — so `kubectl apply --context=$CLUSTER_CONTEXT` died before doing any work, identically for every caller, and `make buca` built and pushed an image and then failed at the apply. `CLUSTER_CONTEXT` now selects the wrapper (`nuke-dev` → `kubectlnukedev`, `nuke-prod` → `kubectlnukeprod`) and an unmapped value is refused rather than guessed at, because a typo there applies one cluster's manifests to the other. The wrapper also carries its own `KUBECONFIG`, which the default one has no contexts for. Applies are now namespaced with `-n "$NAMESPACE"`, and a missing `NAMESPACE` fails loudly instead of applying into whatever the current context defaults to.
+
 ## v0.58.2
 
 - chore: turn on the `single`-mode command prefix for the Star Citizen assistant — and only for it — by setting `SLASH_COMMAND_MODE=single` and `SLASH_COMMAND_NAME=sc` in `k8s/discord-assistant-deploy.yaml`, the manifest the `star-citizen` namespace alone applies. On the Liga server the default `multi` surface registers a dozen generic top-level names (`/new`, `/status`, `/mode`) that collide with every other bot in the guild; `/sc` collapses them into one entry. The personal, boss and brogrammers identities deliberately keep the default surface, so nothing is set on them. `VOICE_ENABLED=0` on this deployment means `join`/`leave` are omitted, so `/sc` carries the nine text-surface commands. Takes effect on the next deploy of that namespace, not on merge.
