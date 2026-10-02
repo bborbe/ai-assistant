@@ -262,10 +262,23 @@ shim | s2s | transcriber | bot | gateway) ;;
 *) die_config "usage: launchd-run.sh <shim|s2s|transcriber|bot|gateway>" ;;
 esac
 
-[ -f local.env ] || die_config "local.env missing — cp local.env.example local.env"
+# The env file is per-IDENTITY, not per-repo: several identities can share one
+# checkout, and `local.env` is a single filename. DISCORD_ASSISTANT_ENV names
+# the file explicitly; unset keeps the historical ./local.env.
+#
+# launchd's EnvironmentVariables is a literal dict and never expands `~`, so a
+# leading ~/ is expanded here rather than left as a trap for whoever writes the
+# plist. This block is duplicated in scripts/dev.sh on purpose: the installed
+# copy of this script runs from ~/.local/bin, outside the repo, so it cannot
+# source a shared helper.
+env_file="${DISCORD_ASSISTANT_ENV:-local.env}"
+case "$env_file" in
+"~/"*) env_file="$HOME/${env_file#\~/}" ;;
+esac
+[ -f "$env_file" ] || die_config "env file $env_file missing — set DISCORD_ASSISTANT_ENV, or cp local.env.example local.env"
 set -a
-# shellcheck disable=SC1091
-. ./local.env
+# shellcheck disable=SC1090
+. "$env_file"
 set +a
 
 # Per-component secret isolation. local.env holds no secrets, only the

@@ -61,6 +61,7 @@ To put Claude Code behind it instead of a hosted model, run `make shim` and poin
 
 | Env                       | Default                           | Meaning                                                                                                                                                           |
 | ------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DISCORD_ASSISTANT_ENV`   | `local.env`                       | Which env file the launcher, `scripts/dev.sh` and the Makefile read. Set it to run several identities from one checkout, each with its own file                   |
 | `DISCORD_TOKEN`           | —                                 | Bot token (required)                                                                                                                                              |
 | `ALLOWED_USER_IDS`        | —                                 | Comma-separated Discord user IDs. **Empty means nobody** — it fails closed on purpose                                                                             |
 | `ADMIN_USER_IDS`          | —                                 | Comma-separated Discord user IDs allowed to use the session slash commands (`/new`, `/sessions`, `/switch`). A subset of the allowlist; **empty means no admins** |
@@ -76,6 +77,15 @@ To put Claude Code behind it instead of a hosted model, run `make shim` and poin
 See `local.env.example` for the full set.
 
 There is **no committed env file** on purpose. Make variables override the environment, so a committed `export DISCORD_TOKEN=` — even an empty one — silently clobbers whatever you exported in your shell. Config lives in gitignored `local.env`; `make run` fails with a pointer to the template if it is missing.
+
+**One checkout can serve several identities.** `local.env` is a single filename, which used to mean one checkout per identity; `DISCORD_ASSISTANT_ENV` names the file instead, so an identity needs only its own env file and its own plists:
+
+```bash
+DISCORD_ASSISTANT_ENV=~/.config/discord-assistant/sc.env \
+  make launchd-install LAUNCHD_LABEL=com.github.bborbe.sc-assistant LAUNCHD_COMPONENTS=bot
+```
+
+Unset, the default is unchanged (`local.env` relative to the repo), so a single-instance install needs no migration.
 
 ## The shim — Claude Code behind an OpenAI endpoint
 

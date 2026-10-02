@@ -11,8 +11,16 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-[ -f local.env ] || { echo "local.env missing — run: cp local.env.example local.env" >&2; exit 1; }
-set -a; . ./local.env; set +a
+# The env file is per-IDENTITY, not per-repo — scripts/launchd-run.sh carries the
+# same block, which cannot be shared because the installed copy of that script
+# runs from ~/.local/bin, outside the repo. Unset keeps the historical
+# ./local.env; a leading ~/ is expanded because a plist never expands it.
+env_file="${DISCORD_ASSISTANT_ENV:-local.env}"
+case "$env_file" in
+"~/"*) env_file="$HOME/${env_file#\~/}" ;;
+esac
+[ -f "$env_file" ] || { echo "env file $env_file missing — set DISCORD_ASSISTANT_ENV, or cp local.env.example local.env" >&2; exit 1; }
+set -a; . "$env_file"; set +a
 
 # The chat bridge secret is a TeamVault key id now, not a literal — resolve it
 # once here, before anything starts. Both processes this script launches need
