@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.58.0
 
 - feat: honor `DISCORD_ASSISTANT_ENV` in the launcher, `scripts/dev.sh` and the Makefile, so an identity's env file is chosen by path instead of being fixed at `./local.env` relative to the repo. Several identities can now run from ONE checkout — each with its own env file (`DISCORD_ASSISTANT_ENV=~/.config/discord-assistant/sc.env`) and its own plists — instead of a full checkout apiece, which is what let sc, boss and brogrammers drift to v0.51.5 / v0.45.0 / v0.45.0 against master. Unset, nothing changes: the default is `local.env` relative to the repo, so a single-instance install behaves exactly as before. `make launchd-install` now writes the variable into each generated plist, `~` expanded at Make time because a plist's `EnvironmentVariables` is a literal dict that launchd never expands — the launcher expands a leading `~/` too, for shell use. A new test asserts every placeholder the template uses appears in the Makefile's own sed pipeline: the rendering test duplicates that pipeline, so on its own it stayed green while the Makefile omitted a token entirely.
 
