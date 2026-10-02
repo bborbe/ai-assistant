@@ -246,3 +246,48 @@ test('commandFor resolves each mode and names the other shape as stale', () => {
   assert.equal(commandFor(legacy, 'multi'), 'status');
   assert.equal(commandFor(ben, 'multi'), null);
 });
+
+// The regression this pins down is a COMPOSITION, so a test on the static
+// command definitions cannot see it: `ADMIN_COMMANDS.has(i.commandName)` reads
+// correctly and is wrong, because in `single` mode the wire name is the wrapper
+// — it never matches, and every subcommand, `new` included, reads as public.
+// That is why this drives the interaction through the same gate index.js runs.
+test('single mode: the admin gate lands on the resolved subcommand, not the wire name', () => {
+  const { isAdminOnly, ADMIN_COMMANDS } = require('../src/slash-commands');
+  const subs = commandsOf({ voiceEnabled: true, mode: 'single' }).map((c) => c.name);
+  const mk = (wire, sub) => ({ commandName: wire, options: { getSubcommand: () => sub } });
+
+  const adminTier = ['new', 'sessions', 'switch'];
+  assert.deepEqual(
+    subs.filter((s) => adminTier.includes(s)),
+    adminTier,
+    'the tier must be a subset of the registered subcommands',
+  );
+
+  for (const sub of subs) {
+    const want = adminTier.includes(sub);
+    assert.equal(
+      isAdminOnly(mk('sc', sub), 'single', 'sc'),
+      want,
+      `/${'sc'} ${sub} must be ${want ? 'admin-only' : 'public'}`,
+    );
+  }
+
+  // The bug, spelled out: keyed on the wire name the naive form answers
+  // "public" for every admin command.
+  for (const sub of adminTier) {
+    assert.equal(
+      ADMIN_COMMANDS.has(mk('sc', sub).commandName),
+      false,
+      'the wire-name form is the regression this test exists to catch',
+    );
+  }
+
+  // `multi` mode is untouched — there the wire name IS the command.
+  assert.equal(isAdminOnly(mk('new', null), 'multi', 'sc'), true);
+  assert.equal(isAdminOnly(mk('status', null), 'multi', 'sc'), false);
+
+  // A stale other-shape interaction is not admin-tier; index.js answers it with
+  // a pointer before the gate is reached.
+  assert.equal(isAdminOnly(mk('ben', 'new'), 'single', 'sc'), false);
+});

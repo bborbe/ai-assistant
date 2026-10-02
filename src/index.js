@@ -9,8 +9,8 @@ const { sessionKeyFor, setMode, setInterrupt, setTranscribe, getVoiceState } = r
 const {
   buildCommands,
   commandFor,
+  isAdminOnly,
   VOICE_DISABLED_REPLY,
-  ADMIN_COMMANDS,
 } = require('./slash-commands');
 const log = require('./log');
 const { startHealthServer, isReady } = require('./health');
@@ -207,7 +207,10 @@ client.on('interactionCreate', async (i) => {
   // `single` mode the interaction names the wrapper, so keying on the wire name
   // would never match and every subcommand would silently fall through as
   // public — the session commands included.
-  if (ADMIN_COMMANDS.has(cmd) && !config.isAdmin(i.user.id)) {
+  if (
+    isAdminOnly(i, config.slashCommandMode, config.slashCommandName) &&
+    !config.isAdmin(i.user.id)
+  ) {
     log.warn('slash command refused — not an admin', {
       command: cmd,
       user: i.user.tag,
