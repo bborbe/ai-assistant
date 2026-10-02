@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.58.2
 
 - chore: turn on the `single`-mode command prefix for the Star Citizen assistant — and only for it — by setting `SLASH_COMMAND_MODE=single` and `SLASH_COMMAND_NAME=sc` in `k8s/discord-assistant-deploy.yaml`, the manifest the `star-citizen` namespace alone applies. On the Liga server the default `multi` surface registers a dozen generic top-level names (`/new`, `/status`, `/mode`) that collide with every other bot in the guild; `/sc` collapses them into one entry. The personal, boss and brogrammers identities deliberately keep the default surface, so nothing is set on them. `VOICE_ENABLED=0` on this deployment means `join`/`leave` are omitted, so `/sc` carries the nine text-surface commands. Takes effect on the next deploy of that namespace, not on merge.
 
