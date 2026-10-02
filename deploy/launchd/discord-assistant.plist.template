@@ -44,6 +44,12 @@
         <string>__PATH__</string>
         <key>DISCORD_ASSISTANT_REPO</key>
         <string>__REPO__</string>
+        <!-- Which env file the launcher sources, absolute (from LAUNCHD_ENV, which
+             expands `~` — launchd does not). This is what lets several identities
+             share ONE checkout: the repo path is the same, the env file differs.
+             Defaults to `local.env` relative to DISCORD_ASSISTANT_REPO. -->
+        <key>DISCORD_ASSISTANT_ENV</key>
+        <string>__ENV__</string>
     </dict>
 
     <key>RunAtLoad</key>

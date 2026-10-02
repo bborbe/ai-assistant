@@ -23,13 +23,16 @@ const TEMPLATE = path.join(
   'discord-assistant.plist.template',
 );
 
-function render({ label, component }) {
+const MAKEFILE = path.join(__dirname, '..', 'Makefile');
+
+function render({ label, component, env = 'local.env' }) {
   return fs
     .readFileSync(TEMPLATE, 'utf8')
     .replace(/__COMPONENT__/g, component)
     .replace(/__LABEL__/g, label)
     .replace(/__LAUNCHER__/g, '/home/u/.local/bin/x-launchd')
     .replace(/__REPO__/g, '/repo')
+    .replace(/__ENV__/g, env)
     .replace(/__HOME__/g, '/home/u')
     .replace(/__LOGDIR__/g, '/home/u/Library/Logs/x')
     .replace(/__PATH__/g, '/usr/bin:/bin');
@@ -37,6 +40,13 @@ function render({ label, component }) {
 
 const labelOf = (xml) => {
   const m = xml.match(/<key>Label<\/key>\s*(?:<!--[\s\S]*?-->\s*)*<string>([^<]*)<\/string>/);
+  return m && m[1];
+};
+
+// EnvironmentVariables entries sit directly under their key, with no comment
+// between (unlike Label), so the plain form is enough here.
+const envValue = (xml, key) => {
+  const m = xml.match(new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`));
   return m && m[1];
 };
 
@@ -61,12 +71,50 @@ test('two identities never share a Label', () => {
 });
 
 test('no placeholder survives rendering', () => {
-  // Catches a placeholder added to the template but never wired into the
-  // Makefile's sed pipeline — which is exactly how __LABEL__ would have been
-  // missed a second time.
+  // Catches a placeholder added to the template but never added to render()
+  // above — which is exactly how __LABEL__ would have been missed a second
+  // time. Note what this does NOT cover: render() reimplements the Makefile's
+  // sed pipeline, so a token present here and absent from the Makefile still
+  // renders clean. The Makefile-wiring test below is the one that catches that.
   for (const component of ['shim', 's2s', 'transcriber', 'bot']) {
     const xml = render({ label: 'com.example.app', component });
     const leftover = xml.match(/__[A-Z_]+__/g);
     assert.equal(leftover, null, `unsubstituted ${leftover} in the ${component} plist`);
   }
+});
+
+test('every placeholder the template uses is wired into the Makefile', () => {
+  // The two substitution lists are independent implementations, so the render()
+  // tests cannot see a token the Makefile forgot. A placeholder added to the
+  // template and to render() but NOT to the Makefile's sed pipeline ships
+  // unsubstituted and fails at `launchctl bootstrap`, on a machine, during an
+  // install — never in CI. This reads the Makefile itself.
+  const wired = new Set(
+    [...fs.readFileSync(MAKEFILE, 'utf8').matchAll(/-e 's\|(__[A-Z_]+__)\|/g)].map((m) => m[1]),
+  );
+  const used = new Set(
+    [...fs.readFileSync(TEMPLATE, 'utf8').matchAll(/__[A-Z_]+__/g)].map((m) => m[0]),
+  );
+  const unwired = [...used].filter((token) => !wired.has(token));
+  assert.deepEqual(
+    unwired,
+    [],
+    `template placeholders absent from the Makefile sed pipeline: ${unwired.join(', ')}`,
+  );
+});
+
+test('the plist names the env file, which is what lets identities share a checkout', () => {
+  const xml = render({
+    label: 'com.github.bborbe.sc-assistant',
+    component: 'bot',
+    env: '/home/u/.config/discord-assistant/sc.env',
+  });
+  assert.equal(envValue(xml, 'DISCORD_ASSISTANT_ENV'), '/home/u/.config/discord-assistant/sc.env');
+});
+
+test('an unset DISCORD_ASSISTANT_ENV still yields the historical local.env', () => {
+  // The default path must not become mandatory: a single-instance install that
+  // never heard of the variable has to keep working untouched.
+  const xml = render({ label: 'com.github.bborbe.discord-assistant', component: 'bot' });
+  assert.equal(envValue(xml, 'DISCORD_ASSISTANT_ENV'), 'local.env');
 });

@@ -9,7 +9,13 @@ include Makefile.docker
 # the SHELL instead of relying on this include — Make would read `$HOME` as an
 # (empty) Make variable and keep the quotes literally, yielding paths like
 # `"OME/Documents/...`.
--include local.env
+#
+# WHICH file is per-IDENTITY, not per-repo: several identities can share one
+# checkout, and `local.env` is a single filename. DISCORD_ASSISTANT_ENV names it;
+# unset keeps the historical ./local.env. It has to come from the environment or
+# the command line — it cannot live in the file it is there to locate.
+DISCORD_ASSISTANT_ENV ?= local.env
+-include $(DISCORD_ASSISTANT_ENV)
 
 SERVICE = bborbe/discord-assistant
 
@@ -27,7 +33,7 @@ install:
 # would bake the literal token into the sh -c argv and expose it to `ps`.
 run: require-config
 	@command -v teamvault-cli >/dev/null 2>&1 || { echo "teamvault-cli not on PATH" >&2; exit 1; }
-	@set -a; . ./local.env; set +a; \
+	@set -a; . "$(DISCORD_ASSISTANT_ENV)"; set +a; \
 	DISCORD_TOKEN=$$(teamvault-cli password $$DISCORD_TOKEN_KEY); \
 	[ -n "$$DISCORD_TOKEN" ] || { echo "empty token from TeamVault key $$DISCORD_TOKEN_KEY" >&2; exit 1; }; \
 	export DISCORD_TOKEN; bash scripts/supervise.sh node src/index.js
@@ -41,7 +47,7 @@ dev: require-config
 .PHONY: require-config
 # Fail with a useful message rather than an empty-token error.
 require-config:
-	@test -f local.env || { echo "local.env missing — run: cp local.env.example local.env" >&2; exit 1; }
+	@test -f "$(DISCORD_ASSISTANT_ENV)" || { echo "$(DISCORD_ASSISTANT_ENV) missing — run: cp local.env.example $(DISCORD_ASSISTANT_ENV)" >&2; exit 1; }
 
 .PHONY: transcriber
 # Watch for voice segments and append speaker-labelled transcripts.
@@ -49,13 +55,13 @@ require-config:
 # — no speech-to-speech checkout required. Separate from the bot on purpose:
 # STT must never stall a live conversation.
 transcriber:
-	@set -a; . ./local.env; set +a; \
+	@set -a; . "$(DISCORD_ASSISTANT_ENV)"; set +a; \
 	uv run tools/transcriber.py
 
 .PHONY: shim
 # Run the Claude Code OpenAI-compatible shim
 shim:
-	@set -a; [ -f local.env ] && . ./local.env; set +a; \
+	@set -a; [ -f "$(DISCORD_ASSISTANT_ENV)" ] && . "$(DISCORD_ASSISTANT_ENV)"; set +a; \
 	SHIM_TRANSCRIPT_DIR="$$TRANSCRIPT_DIR"; export SHIM_TRANSCRIPT_DIR; \
 	if [ -n "$$FRONT_API_KEY_ID" ]; then \
 	  SHIM_FRONT_API_KEY=$$(teamvault-cli password $$FRONT_API_KEY_ID); \
@@ -99,6 +105,12 @@ LAUNCHD_PATH       = $(HOME)/.local/bin:/opt/homebrew/bin:$(HOME)/.pyenv/shims:/
 # truth; this is a deploy artifact and launchd-install always re-copies it, so
 # it cannot drift.
 LAUNCHD_LAUNCHER   = $(HOME)/.local/bin/$(LAUNCHD_INSTANCE)-launchd
+# What the plist hands the launcher as DISCORD_ASSISTANT_ENV. A `~` is expanded
+# HERE because a plist's EnvironmentVariables is a literal dict and launchd never
+# expands it; the launcher also expands a leading ~/ itself, for shell use. With
+# the variable unset this resolves to `local.env` relative to DISCORD_ASSISTANT_REPO
+# — byte-identical in effect to what a single-instance install produced before.
+LAUNCHD_ENV        = $(subst ~,$(HOME),$(DISCORD_ASSISTANT_ENV))
 
 .PHONY: launchd-install
 # Deploy the launcher outside the repo, generate the five plists, load them
@@ -121,6 +133,7 @@ launchd-install: require-config
 	      -e 's|__LABEL__|$(LAUNCHD_LABEL)|g' \
 	      -e 's|__LAUNCHER__|$(LAUNCHD_LAUNCHER)|g' \
 	      -e 's|__REPO__|$(CURDIR)|g' \
+	      -e 's|__ENV__|$(LAUNCHD_ENV)|g' \
 	      -e 's|__HOME__|$(HOME)|g' \
 	      -e 's|__LOGDIR__|$(LAUNCHD_LOGDIR)|g' \
 	      -e 's|__PATH__|$(LAUNCHD_PATH)|g' \

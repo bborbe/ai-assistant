@@ -114,6 +114,8 @@ Ordering is not expressed and does not need to be: the bot tolerates the shim an
 
 Instead each job runs `scripts/launchd-run.sh <component>`, which sources the gitignored `local.env`, resolves secrets at launch, and `exec`s the real process:
 
+**Which file it sources is `DISCORD_ASSISTANT_ENV`**, defaulting to `local.env` relative to the repo. That default is what a single-instance install has always used and it does not change. Set the variable to run several identities from **one** checkout — each with its own env file and its own plists, rather than a full checkout apiece. `make launchd-install` writes the value into the generated plist, expanding `~` because a plist's `EnvironmentVariables` is a literal dict that launchd never expands; the launcher expands a leading `~/` as well, so the variable behaves the same whether it comes from a plist or a shell.
+
 - `DISCORD_TOKEN` ← `teamvault-cli password $DISCORD_TOKEN_KEY`
 - `SHIM_FRONT_API_KEY` ← `teamvault-cli password $FRONT_API_KEY_ID`
 - `S2S_GATEWAY_TOKEN` ← `teamvault-cli password $S2S_GATEWAY_TOKEN_KEY` (gateway and bot, each its own resolution)
@@ -187,7 +189,16 @@ make install
 make launchd-install
 ```
 
-`launchd-install` generates the five plists from `deploy/launchd/discord-assistant.plist.template` — substituting the component, repo path, home and `PATH` — writes them to `~/Library/LaunchAgents/`, and loads each one. It `bootout`s first, so it is safe to re-run after editing the template.
+`launchd-install` generates the five plists from `deploy/launchd/discord-assistant.plist.template` — substituting the component, repo path, env-file path, home and `PATH` — writes them to `~/Library/LaunchAgents/`, and loads each one. It `bootout`s first, so it is safe to re-run after editing the template.
+
+**A second identity installs from the same checkout, with its own env file.** Everything instance-specific derives from `LAUNCHD_LABEL`, so the second install lands beside the first rather than on top of it:
+
+```bash
+DISCORD_ASSISTANT_ENV=~/.config/discord-assistant/sc.env \
+  make launchd-install LAUNCHD_LABEL=com.github.bborbe.sc-assistant LAUNCHD_COMPONENTS=bot
+```
+
+⚠️ **Pass `LAUNCHD_LABEL` and `LAUNCHD_COMPONENTS` explicitly, always.** A bare `make launchd-install` uses the default label and the full component list, so it rewrites the _first_ identity's plists and launcher and bootstraps a second shim/s2s/transcriber that collide on ports 8080 and 8765. The label is the only thing keeping the two installs apart.
 
 The plists are generated rather than committed because each embeds an absolute repo path. The template is the committed artifact.
 
