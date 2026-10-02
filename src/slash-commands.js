@@ -244,9 +244,30 @@ function commandFor(interaction, mode, name = DEFAULT_COMMAND_NAME) {
   return interaction.commandName === name ? null : interaction.commandName;
 }
 
+/**
+ * Whether an interaction must be admin-only, in this instance's mode.
+ *
+ * Resolves the command FIRST and keys the tier on that — never on the wire
+ * name. In `single` mode the wire name is the wrapper, so
+ * `ADMIN_COMMANDS.has(i.commandName)` can never match and every subcommand,
+ * the session commands included, would silently read as public.
+ *
+ * It lives here rather than inline in index.js because THAT composition is the
+ * thing worth testing: a test on the static command definitions passes with the
+ * bug present, and index.js logs in at require time so a test cannot reach it.
+ *
+ * A stale other-shape interaction is not admin-tier — index.js answers it with a
+ * pointer before this is reached, so the null guard is belt-and-braces.
+ */
+function isAdminOnly(interaction, mode, name = DEFAULT_COMMAND_NAME) {
+  const cmd = commandFor(interaction, mode, name);
+  return cmd !== null && ADMIN_COMMANDS.has(cmd);
+}
+
 module.exports = {
   buildCommands,
   commandFor,
+  isAdminOnly,
   VOICE_DISABLED_REPLY,
   DEFAULT_COMMAND_NAME,
   ADMIN_PERMISSION,
