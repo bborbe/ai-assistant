@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.58.1
 
 - refactor: extract the `single`-mode admin gate into `isAdminOnly()` and test it. The gate is a composition — resolve the command, then key the tier on the result — and keyed on the wire name (`ADMIN_COMMANDS.has(i.commandName)`) it can never match inside the wrapper, so every subcommand including `new` would silently read as public. A test on the static command definitions passes with that bug present, and `index.js` logs in at require time so a test cannot reach the expression there; the extraction is what makes the composition testable. Behaviour is unchanged.
 
