@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.58.3
 
 - fix: route `make apply` through the environment-specific kubectl wrapper, so the documented deploy path runs at all. It called bare `kubectl`, which on this machine is a shell function that refuses outright — `ERROR: Please use environment-specific aliases instead` — so `kubectl apply --context=$CLUSTER_CONTEXT` died before doing any work, identically for every caller, and `make buca` built and pushed an image and then failed at the apply. `CLUSTER_CONTEXT` now selects the wrapper (`nuke-dev` → `kubectlnukedev`, `nuke-prod` → `kubectlnukeprod`) and an unmapped value is refused rather than guessed at, because a typo there applies one cluster's manifests to the other. The wrapper also carries its own `KUBECONFIG`, which the default one has no contexts for. Applies are now namespaced with `-n "$NAMESPACE"`, and a missing `NAMESPACE` fails loudly instead of applying into whatever the current context defaults to.
 
