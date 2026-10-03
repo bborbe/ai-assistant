@@ -11,12 +11,12 @@ Rather than a bare placeholder, here is the honest state — so the next person 
 **Already built, and built to survive the move:**
 
 - `Dockerfile` — multi-stage, non-root, `readOnlyRootFilesystem`-compatible, `HEALTHCHECK` wired to `/healthz`
-- `k8s/discord-assistant-deploy.yaml` + `-svc.yaml` — pinned to `replicas: 1` with `strategy: Recreate`
+- `k8s/discord-assistant-deploy.yaml` + `-svc.yaml` — `strategy: Recreate`, and `replicas` declared **0**; the hold is explained under [One invariant that must not be broken](#one-invariant-that-must-not-be-broken)
 - `Makefile.k8s` (`apply`, via `teamvault-cli config parse`) and `make buca`
 - `/healthz`, `/readiness`, `/version`, graceful shutdown that drains rather than restarts on a Discord outage
 - Config resolved **environment > file > default**, so a ConfigMap overrides without editing anything
 
-**Never applied.** No `discord-assistant` exists in any cluster.
+**Applied.** `discord-assistant` exists in the `star-citizen` namespace and ran there until 2026-10-03, when it was deliberately held down — see [One invariant that must not be broken](#one-invariant-that-must-not-be-broken).
 
 **Built (2026-08-27):**
 
@@ -38,10 +38,14 @@ Rather than a bare placeholder, here is the honest state — so the next person 
 
 ## One invariant that must not be broken
 
-**A Discord bot identity permits exactly one gateway connection.** `replicas: 1` and `strategy: Recreate` exist for this reason, and it also means a cluster instance and a laptop instance can never run at the same time on the same identity. Stop one before starting the other, or use a second Discord application.
+**A Discord bot identity permits exactly one gateway connection.** `strategy: Recreate` exists for this reason, and it also means a cluster instance and a laptop instance can never run at the same time on the same identity. Stop one before starting the other, or use a second Discord application.
+
+⚠️ **This is not hypothetical — it happened on 2026-10-03.** The cluster assistant and the laptop instance share the application `Star Citizen Assistant` (id `1536456376258404452`). With both live, Discord delivered every interaction to *both* gateway sessions: the text-only pod answered the voice subcommands with `VOICE_DISABLED_REPLY` and won the acknowledgement race, and the laptop instance — the one that actually has voice — then died on an uncaught `DiscordAPIError[10062] Unknown interaction`, twice inside one minute, restarting under launchd each time. The two also overwrite each other's guild registration, since registrations are per-application, so the live `/sc` flapped between the pod's 5 subcommands and the laptop's 11.
+
+`k8s/discord-assistant-deploy.yaml` therefore declares `replicas: 0`. The hold is a *declaration* rather than a hand-applied scale, so an apply cannot undo it. Raise it back to 1 only when the pod is the sole holder of the identity, or has its own Discord application.
 
 ## The likely shape
 
-If the GPU answer is "no", the outcome is probably not "stay local" but a **split**: the text surface in the cluster, always up, with voice remaining local while the laptop is on. That fixes the real problem — laptop closed, assistant gone — for the surface that needs no GPU at all.
+If the GPU answer is "no", the outcome is probably not "stay local" but a **split**: the text surface in the cluster, with voice remaining local while the laptop is on. That fixes the real problem — laptop closed, assistant gone — for the surface that needs no GPU at all. It does require a **second Discord application** — the cluster and laptop instances cannot both hold one identity (see above) — so until that exists the cluster copy stays at `replicas: 0`.
 
 A `docker-compose.yml` may also be worth adding as a **local k8s-parity dev harness** (bot + shim wired the way the cluster wires them), to exercise container config without a cluster round-trip. That is distinct from using Compose as the local deployment, which was considered and rejected — see the last section of [deploy-local.md](deploy-local.md).
