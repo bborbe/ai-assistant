@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.58.8
 
 - chore: default `LAUNCHD_LABEL` is now `com.github.bborbe.ai-assistant` (was `discord-assistant`, the pre-rename repo name); `docs/deploy-local.md` documents the multi-identity layout — shared `ai-assistant-{shim,s2s,gateway}`, per-identity `ai-assistant-<identity>-{bot,transcriber}` — so a job's name says whose it is. Existing installs keep their labels until reinstalled — run `make launchd-uninstall LAUNCHD_LABEL=com.github.bborbe.discord-assistant` before the first install under the new default, or the two sets collide on ports (see `docs/deploy-local.md` § Upgrading from the old label).
 
