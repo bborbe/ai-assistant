@@ -88,8 +88,10 @@ spec:
             # every other bot on the Liga server; `single` collapses them under
             # one `/sc` instead. Deliberately NOT set on the personal, boss or
             # brogrammers identities, which keep the default surface.
-            # VOICE_ENABLED=0 above means join/leave are omitted from the
-            # subcommand list, so `/sc` carries the nine text-surface commands.
+            # VOICE_ENABLED=0 above means all six voice commands (join, leave,
+            # wakephrase, interrupt, transcribe, cancel) are omitted from the
+            # subcommand list, so `/sc` carries the five text-surface commands:
+            # status, new, sessions, switch, mode.
             - name: SLASH_COMMAND_MODE
               value: single
             - name: SLASH_COMMAND_NAME
