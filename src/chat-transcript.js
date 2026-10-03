@@ -14,9 +14,15 @@ const { slug } = require('./transcript');
  * and merges by filename. A Chat turn has no audio and no lag: both sides
  * arrive as text, in order, in the same call. So this writer appends one block
  * per turn and needs none of that machinery — but it keeps the voice writer's
- * on-disk shape, so a reader who knows one knows the other, and so the shim's
- * `TRANSCRIPT_DIRECTIVE` ("one folder per channel per day … in `transcript.md`")
- * describes a Chat conversation truthfully as well.
+ * on-disk shape, so a reader who knows one knows the other.
+ *
+ * That shape is a shared CONVENTION, not an active read path. The shim's
+ * `TRANSCRIPT_DIRECTIVE` is gated on voice (`shim/claude_openai_shim.py`:
+ * `TRANSCRIPT_DIRECTIVE if voice else ""`), so a Chat session is never told a
+ * transcript exists and will not open this folder mid-conversation. The
+ * recording lands; reading it back does not, and wiring that is a separate
+ * change — `gchat.js` sends no voice flag, and the directive's own comment
+ * gives the reason (a text surface already has its history in the thread).
  *
  * Until this existed the Chat surface recorded NOTHING: `transcript.js` is
  * instantiated only inside a voice session (`voice.js`), and `gchat.js` touched
@@ -59,17 +65,27 @@ function transcriptFile(spaceId, threadId, at) {
  * to be a record. Escaping only that exact pattern keeps every other heading in
  * an answer rendering normally.
  *
- * The leading `[ \t]{0,3}` is not decoration. CommonMark allows 0-3 spaces
- * before an ATX heading, so `   ## turn …` and `##  turn …` both read as a
- * boundary to any markdown parser — matching only column 0 would leave the
- * forgery open through whitespace alone. Four or more leading spaces is an
- * indented code block, which renders literally and is deliberately not matched.
+ * The leading group is not decoration. It covers the containers CommonMark lets
+ * carry a heading: 0-3 spaces (an ATX heading may be indented that far) and any
+ * number of `>` blockquote markers, each optionally spaced — so `   ## turn …`,
+ * `##  turn …` and `> ## turn …` are all caught, where anchoring at column 0
+ * would leave each of them open. Four or more leading spaces is an indented code
+ * block, which renders literally and is deliberately not matched.
+ *
+ * This is hardening, not a parse contract. The file is a record a person or an
+ * agent reads; nothing parses it back, and markdown offers more ways to render a
+ * heading than a regex should chase. What is guaranteed is that the forms a
+ * model actually emits — a quoted or indented example of a transcript — cannot
+ * pass for the writer's own delimiter.
  *
  * `\##` renders as a literal `##` in markdown, so the recorded text still reads
  * as it was written.
  */
 function defuseTurnHeadings(text) {
-  return String(text ?? '').replace(/^([ \t]{0,3})(##[ \t]+turn\b)/gm, '$1\\$2');
+  return String(text ?? '').replace(
+    /^((?:[ \t]{0,3}>[ \t]*)*[ \t]{0,3})(##[ \t]+turn\b)/gm,
+    '$1\\$2',
+  );
 }
 
 /**

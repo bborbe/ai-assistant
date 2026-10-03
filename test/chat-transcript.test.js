@@ -120,6 +120,17 @@ test('defuseTurnHeadings catches whitespace-prefixed delimiters', () => {
   assert.equal(defuseTurnHeadings('\t## turn x'), '\t\\## turn x');
 });
 
+// A blockquote is the other container CommonMark lets carry a heading, so
+// `> ## turn …` reads as a boundary too — and an answer quoting a transcript
+// emits one without any attacker.
+test('defuseTurnHeadings catches blockquoted delimiters', () => {
+  const { defuseTurnHeadings } = loadWriter({ transcriptDir: tmpDir() });
+
+  assert.equal(defuseTurnHeadings('> ## turn x'), '> \\## turn x');
+  assert.equal(defuseTurnHeadings('> > ## turn x'), '> > \\## turn x');
+  assert.equal(defuseTurnHeadings('   > ## turn x'), '   > \\## turn x');
+});
+
 // Four or more leading spaces is an indented code block, which renders
 // literally — it is not a heading, so escaping it would only distort the record.
 test('defuseTurnHeadings leaves an indented code block alone', () => {
