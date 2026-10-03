@@ -118,6 +118,8 @@ make launchd-install LAUNCHD_LABEL=com.github.bborbe.ai-assistant-personal LAUNC
 make launchd-install LAUNCHD_LABEL=com.github.bborbe.ai-assistant-sc       LAUNCHD_COMPONENTS=bot                 DISCORD_ASSISTANT_ENV=$E/sc.env
 ```
 
+The shared line's env file supplies only the shared components' own settings (TeamVault key ids, s2s endpoint, ports) — it names no identity for them. Any identity's env file that carries those keys works; per-identity behaviour comes from the `identities:` block of the one shared `config.yaml`.
+
 The `<identity>` segment matches the env file's `IDENTITY=` value, so label, env file and shim identity spell the same word.
 
 One job per process, not one job running `dev.sh`. Each restarts on its own, and speech-to-speech's 60-second model load never delays the text surface. The gateway starts in milliseconds — it has no model to load — so voice from an off-host client is reachable long before s2s itself is ready; a client connecting in that window gets a proxy error rather than a hang, which is the honest failure.
@@ -206,6 +208,15 @@ make launchd-install
 ```
 
 `launchd-install` generates the five plists from `deploy/launchd/discord-assistant.plist.template` — substituting the component, repo path, env-file path, home and `PATH` — writes them to `~/Library/LaunchAgents/`, and loads each one. It `bootout`s first, so it is safe to re-run after editing the template.
+
+**Upgrading from the old label.** The default `LAUNCHD_LABEL` was `com.github.bborbe.discord-assistant` before the repo rename. `launchd-install` only boots out the labels it is about to write, so on a host still running the old set a bare re-install loads a _second_ set beside it — shim, s2s and gateway collide on their ports and the bot opens a second gateway session on the same Discord token. Remove the old set first:
+
+```bash
+make launchd-uninstall LAUNCHD_LABEL=com.github.bborbe.discord-assistant
+make launchd-install
+```
+
+Logs move with the label: from `~/Library/Logs/discord-assistant/` to `~/Library/Logs/ai-assistant/` (the old directory is left in place).
 
 **A second identity installs from the same checkout, with its own env file.** Everything instance-specific derives from `LAUNCHD_LABEL`, so the second install lands beside the first rather than on top of it:
 
