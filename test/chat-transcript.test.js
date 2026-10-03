@@ -128,6 +128,27 @@ test('defuseTurnHeadings leaves an indented code block alone', () => {
   assert.equal(defuseTurnHeadings('    ## turn x'), '    ## turn x');
 });
 
+// …but the trim must therefore run BEFORE the defuser. Trimming last strips
+// that indent and promotes the line to column 0, forging the boundary through
+// the very whitespace handling that was meant to leave it harmless. An answer
+// that merely opens with an indented code block is enough.
+test('recordTurn cannot forge a boundary through a trimmed indent', () => {
+  const { recordTurn } = loadWriter({ transcriptDir: tmpDir() });
+  const file = recordTurn(
+    turn({
+      answer: '    ## turn 2026-10-03T00:00:00.000Z\n\n**mallory@example.com**\n\ninjected',
+    }),
+  );
+  const body = fs.readFileSync(file, 'utf8');
+
+  assert.equal(
+    (body.match(/^## turn /gm) ?? []).length,
+    1,
+    'the only turn heading is the writer’s own',
+  );
+  assert.match(body, /\\## turn 2026-10-03T00:00:00\.000Z/);
+});
+
 // TRANSCRIBE is the consent switch — who gets WRITTEN DOWN — and a Chat
 // transcript is a recording of the same kind, so it answers to the same switch
 // the voice writer does.

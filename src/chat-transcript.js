@@ -115,10 +115,17 @@ function recordTurn({ spaceId, threadId, sender, question, answer }) {
     // exact-matches the sender against the operator's allowlist, and the label
     // is env-configured — but that argument has to be re-derived every time a
     // caller changes, and the defuser costs nothing.
+    //
+    // Trim FIRST, defuse second. Trimming last strips the leading whitespace the
+    // defuser deliberately leaves alone — 4+ spaces is an indented code block,
+    // which renders literally — and promotes that line to column 0, forging the
+    // very boundary this guards. An answer that merely OPENS with an indented
+    // code block is enough, so that needs no attacker either.
+    const body = (text) => defuseTurnHeadings(String(text ?? '').trim());
     const block =
       `\n## turn ${at.toISOString()}\n\n` +
-      `**${defuseTurnHeadings(sender) || 'unknown'}**\n\n${defuseTurnHeadings(question).trim()}\n\n` +
-      `**${defuseTurnHeadings(config.assistantLabel)}**\n\n${defuseTurnHeadings(answer).trim()}\n`;
+      `**${defuseTurnHeadings(sender) || 'unknown'}**\n\n${body(question)}\n\n` +
+      `**${defuseTurnHeadings(config.assistantLabel)}**\n\n${body(answer)}\n`;
     fs.appendFileSync(file, block);
     log.info('chat transcript turn recorded', { file, sender });
     return file;
