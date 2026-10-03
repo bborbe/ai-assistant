@@ -125,4 +125,6 @@ TranscriptSession.prototype.writeText = function writeText(speaker, text) {
   }
 };
 
-module.exports = { TranscriptSession };
+// `slug` is exported for the Chat writer, which names its folders the same way
+// so one convention covers both surfaces.
+module.exports = { TranscriptSession, slug };

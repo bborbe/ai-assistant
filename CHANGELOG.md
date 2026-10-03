@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: record Google Chat turns to a transcript. The Chat surface wrote nothing at all: `transcript.js` is instantiated only inside a voice session (`voice.js`), and `gchat.js` touched no filesystem, so a Chat turn left its answer in the thread and nowhere else and evidence of a conversation had to be copied out by hand. `chat-transcript.js` appends one block per turn — sender, question, answer — to `$TRANSCRIPT_DIR/<spaceId>-<threadId>-<UTC day>/transcript.md`, the same on-disk shape the voice writer uses so the shim's `TRANSCRIPT_DIRECTIVE` describes a Chat conversation truthfully too. Written only once the answer is actually in the thread (the transcript is evidence of what the requester received), gated on `TRANSCRIBE` like every other recording, and never allowed to fail a turn that already succeeded. `gchatIds` is now shared by the session key and the transcript folder so the two cannot drift.
+
 ## v0.58.7
 
 - docs: correct the last surviving copy of the retired "nothing is deployed" claim, at the top of `docs/deploy-kubernetes.md`. The page opened with _"Coming soon. Nothing is deployed to a cluster yet"_ while line 19 of that same page — added by the previous correction — says the Deployment exists in `star-citizen` and ran there until 2026-10-03, and while the README now links to the page saying the same. No other live copy of the claim remains. The surviving `replicas: 1` in `k8s/discord-assistant-shim-deploy.yaml` is not one — the shim holds no Discord gateway identity, so the one-gateway invariant does not apply to it — and the remaining CHANGELOG hits are this series' own entries and released sections, which are left alone.
