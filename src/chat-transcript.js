@@ -29,7 +29,9 @@ const { slug } = require('./transcript');
  *
  * UTC throughout, for the same reason the voice writer is: folder date and the
  * timestamps inside must agree, or a turn just after local midnight lands in a
- * folder dated the previous day.
+ * folder dated the previous day. `at` is therefore the caller's single clock
+ * read, not a fresh one here — a second `new Date()` could straddle midnight
+ * against the heading's.
  *
  * The `gchat-` prefix is what keeps the two surfaces apart. Both writers use
  * `<a>-<b>-<day>` and both write `transcript.md`, so without it a Chat pair
@@ -39,8 +41,8 @@ const { slug } = require('./transcript');
  * happen, so it is not reachable in practice — but the prefix costs nothing and
  * removes the class rather than relying on that argument holding forever.
  */
-function transcriptFile(spaceId, threadId) {
-  const day = new Date().toISOString().slice(0, 10);
+function transcriptFile(spaceId, threadId, at) {
+  const day = at.toISOString().slice(0, 10);
   const dir = path.join(config.transcriptDir, `gchat-${slug(spaceId)}-${slug(threadId)}-${day}`);
   fs.mkdirSync(dir, { recursive: true });
   return path.join(dir, 'transcript.md');
@@ -57,11 +59,17 @@ function transcriptFile(spaceId, threadId) {
  * to be a record. Escaping only that exact pattern keeps every other heading in
  * an answer rendering normally.
  *
+ * The leading `[ \t]{0,3}` is not decoration. CommonMark allows 0-3 spaces
+ * before an ATX heading, so `   ## turn …` and `##  turn …` both read as a
+ * boundary to any markdown parser — matching only column 0 would leave the
+ * forgery open through whitespace alone. Four or more leading spaces is an
+ * indented code block, which renders literally and is deliberately not matched.
+ *
  * `\##` renders as a literal `##` in markdown, so the recorded text still reads
  * as it was written.
  */
 function defuseTurnHeadings(text) {
-  return String(text ?? '').replace(/^## turn\b/gm, '\\## turn');
+  return String(text ?? '').replace(/^([ \t]{0,3})(##[ \t]+turn\b)/gm, '$1\\$2');
 }
 
 /**
@@ -96,15 +104,19 @@ function recordTurn({ spaceId, threadId, sender, question, answer }) {
   if (!String(answer ?? '').trim()) return null;
 
   try {
-    const file = transcriptFile(spaceId, threadId);
-    const at = new Date().toISOString();
+    // One clock read for both the folder and the heading. Two `new Date()`
+    // calls with an mkdir between them can straddle UTC midnight and file a
+    // turn in day N with a heading stamped day N+1 — the exact disagreement the
+    // folder's UTC comment exists to prevent.
+    const at = new Date();
+    const file = transcriptFile(spaceId, threadId, at);
     // The sender and the label go through the defuser too, so the escaping is
     // symmetric. Neither is attacker-controlled today — `isAllowedSender`
     // exact-matches the sender against the operator's allowlist, and the label
     // is env-configured — but that argument has to be re-derived every time a
     // caller changes, and the defuser costs nothing.
     const block =
-      `\n## turn ${at}\n\n` +
+      `\n## turn ${at.toISOString()}\n\n` +
       `**${defuseTurnHeadings(sender) || 'unknown'}**\n\n${defuseTurnHeadings(question).trim()}\n\n` +
       `**${defuseTurnHeadings(config.assistantLabel)}**\n\n${defuseTurnHeadings(answer).trim()}\n`;
     fs.appendFileSync(file, block);

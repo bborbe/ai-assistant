@@ -109,6 +109,25 @@ test('defuseTurnHeadings leaves every other heading alone', () => {
   assert.equal(defuseTurnHeadings('## turn now'), '\\## turn now');
 });
 
+// CommonMark allows 0-3 spaces before an ATX heading, so a body can forge a
+// boundary through whitespace alone. Matching only column 0 — the first
+// version of this — left exactly that open.
+test('defuseTurnHeadings catches whitespace-prefixed delimiters', () => {
+  const { defuseTurnHeadings } = loadWriter({ transcriptDir: tmpDir() });
+
+  assert.equal(defuseTurnHeadings('   ## turn x'), '   \\## turn x');
+  assert.equal(defuseTurnHeadings('##  turn x'), '\\##  turn x');
+  assert.equal(defuseTurnHeadings('\t## turn x'), '\t\\## turn x');
+});
+
+// Four or more leading spaces is an indented code block, which renders
+// literally — it is not a heading, so escaping it would only distort the record.
+test('defuseTurnHeadings leaves an indented code block alone', () => {
+  const { defuseTurnHeadings } = loadWriter({ transcriptDir: tmpDir() });
+
+  assert.equal(defuseTurnHeadings('    ## turn x'), '    ## turn x');
+});
+
 // TRANSCRIBE is the consent switch — who gets WRITTEN DOWN — and a Chat
 // transcript is a recording of the same kind, so it answers to the same switch
 // the voice writer does.
