@@ -1,6 +1,6 @@
 # Deploying to Kubernetes
 
-**Coming soon.** Nothing is deployed to a cluster yet.
+**Applied, currently held down.** The cluster Deployment is declared at `replicas: 0` on purpose — see [One invariant that must not be broken](#one-invariant-that-must-not-be-broken) for the reason and the exit condition.
 
 For the working deployment, see [deploy-local.md](deploy-local.md).
 
