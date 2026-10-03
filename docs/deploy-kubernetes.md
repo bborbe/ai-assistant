@@ -1,6 +1,6 @@
 # Deploying to Kubernetes
 
-**Coming soon.** Nothing is deployed to a cluster yet.
+**Applied, and currently held down.** `discord-assistant` exists in the `star-citizen` namespace and is declared at `replicas: 0` — see [One invariant that must not be broken](#one-invariant-that-must-not-be-broken) for why, and for what has to change before it comes back.
 
 For the working deployment, see [deploy-local.md](deploy-local.md).
 
