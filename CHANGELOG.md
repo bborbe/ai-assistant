@@ -8,9 +8,12 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## v0.58.6
+## Unreleased
 
 - docs: correct the last surviving copy of the retired "nothing is deployed" claim, at the top of `docs/deploy-kubernetes.md`. The page opened with _"Coming soon. Nothing is deployed to a cluster yet"_ while line 19 of that same page — added by the previous correction — says the Deployment exists in `star-citizen` and ran there until 2026-10-03, and while the README now links to the page saying the same. No other live copy of the claim remains. The surviving `replicas: 1` in `k8s/discord-assistant-shim-deploy.yaml` is not one — the shim holds no Discord gateway identity, so the one-gateway invariant does not apply to it — and the remaining CHANGELOG hits are this series' own entries and released sections, which are left alone.
+
+## v0.58.6
+
 - docs: correct the two surviving copies of the stale `replicas: 1` claim, in `README.md`. It still said the manifests "have never been applied" and that `k8s/` "pins `replicas: 1` with `strategy: Recreate`" — the second is the dangerous one, since a reader following the README would scale the held Deployment back up and re-break the laptop bot, which is the failure the hold exists to prevent. Also carries prettier's reformat of `docs/deploy-kubernetes.md`, which #120 merged unformatted: `Makefile.precommit` runs `format` (`prettier --write`) before `check` (`prettier --check`), so `formatcheck` inspects the files it has just rewritten and cannot fail.
 
 ## v0.58.5
