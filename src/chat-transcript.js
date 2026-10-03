@@ -30,10 +30,18 @@ const { slug } = require('./transcript');
  * UTC throughout, for the same reason the voice writer is: folder date and the
  * timestamps inside must agree, or a turn just after local midnight lands in a
  * folder dated the previous day.
+ *
+ * The `gchat-` prefix is what keeps the two surfaces apart. Both writers use
+ * `<a>-<b>-<day>` and both write `transcript.md`, so without it a Chat pair
+ * that slugs to the same two strings as a Discord guild/channel pair on the
+ * same day would append text into the folder the transcriber reads as an audio
+ * archive. A guild would have to be named after a Chat space id for that to
+ * happen, so it is not reachable in practice — but the prefix costs nothing and
+ * removes the class rather than relying on that argument holding forever.
  */
 function transcriptFile(spaceId, threadId) {
   const day = new Date().toISOString().slice(0, 10);
-  const dir = path.join(config.transcriptDir, `${slug(spaceId)}-${slug(threadId)}-${day}`);
+  const dir = path.join(config.transcriptDir, `gchat-${slug(spaceId)}-${slug(threadId)}-${day}`);
   fs.mkdirSync(dir, { recursive: true });
   return path.join(dir, 'transcript.md');
 }
@@ -76,16 +84,29 @@ function recordTurn({ spaceId, threadId, sender, question, answer }) {
   // gets WRITTEN DOWN, and it is deliberately separate from the allowlist that
   // decides who may DRIVE the bot. A Chat transcript is the same kind of
   // recording, so it answers to the same switch.
+  //
+  // `ANNOUNCE_TRANSCRIPTION` is deliberately NOT wired here, unlike the voice
+  // path (`text.js`, `index.js`). That announcement exists because a voice
+  // channel records people who cannot see the bot writing them down; a Chat
+  // turn is recorded in the thread its participants are already reading, and
+  // the only parties written are the requester and the bot. So an operator who
+  // set it to 0 to stop the bot posting notices still gets the record — the
+  // switch governs the notice, not whether a recording happens.
   if (!config.transcribe) return null;
   if (!String(answer ?? '').trim()) return null;
 
   try {
     const file = transcriptFile(spaceId, threadId);
     const at = new Date().toISOString();
+    // The sender and the label go through the defuser too, so the escaping is
+    // symmetric. Neither is attacker-controlled today — `isAllowedSender`
+    // exact-matches the sender against the operator's allowlist, and the label
+    // is env-configured — but that argument has to be re-derived every time a
+    // caller changes, and the defuser costs nothing.
     const block =
       `\n## turn ${at}\n\n` +
-      `**${sender || 'unknown'}**\n\n${defuseTurnHeadings(question).trim()}\n\n` +
-      `**${config.assistantLabel}**\n\n${defuseTurnHeadings(answer).trim()}\n`;
+      `**${defuseTurnHeadings(sender) || 'unknown'}**\n\n${defuseTurnHeadings(question).trim()}\n\n` +
+      `**${defuseTurnHeadings(config.assistantLabel)}**\n\n${defuseTurnHeadings(answer).trim()}\n`;
     fs.appendFileSync(file, block);
     log.info('chat transcript turn recorded', { file, sender });
     return file;
@@ -95,4 +116,7 @@ function recordTurn({ spaceId, threadId, sender, question, answer }) {
   }
 }
 
-module.exports = { recordTurn, transcriptFile, defuseTurnHeadings };
+// `transcriptFile` is deliberately not exported: it creates the directory as a
+// side effect, so a name that reads like a pure path helper would mislead a
+// caller. Tests drive `recordTurn` instead.
+module.exports = { recordTurn, defuseTurnHeadings };

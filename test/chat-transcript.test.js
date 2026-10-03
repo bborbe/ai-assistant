@@ -46,13 +46,16 @@ test('recordTurn writes the sender and the reply', () => {
   assert.match(body, /make apply BRANCH=dev/);
 });
 
+// The `gchat-` prefix is what keeps a Chat conversation out of a voice folder:
+// both writers use `<a>-<b>-<day>` and both write `transcript.md`, so without
+// it a colliding pair would append text into the archive the transcriber reads.
 test('recordTurn files a conversation per space, thread and UTC day', () => {
   const dir = tmpDir();
   const { recordTurn } = loadWriter({ transcriptDir: dir });
   const file = recordTurn(turn());
   const day = new Date().toISOString().slice(0, 10);
 
-  assert.equal(path.dirname(file), path.join(dir, `AAA-BBB-${day}`));
+  assert.equal(path.dirname(file), path.join(dir, `gchat-AAA-BBB-${day}`));
 });
 
 test('recordTurn keeps two conversations apart', () => {

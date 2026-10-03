@@ -96,6 +96,17 @@ test('gchatIds tolerates a trailing slash and an empty name', () => {
   assert.deepEqual(gchatIds('', null), { spaceId: '', threadId: 'space' });
 });
 
+// Pins the one behaviour the `gchatIds` extraction changed: the old
+// `String(spaceName)` turned `undefined` into the literal id `"undefined"`,
+// this yields `''`. No production path hits it (`parseEvent` coerces with
+// `|| ''`) and the new behaviour is the better one — but this is exactly the
+// refactor where a drift between the session key and the transcript folder
+// would be silent, so the difference is asserted rather than assumed.
+test('gchatIds treats a missing name as empty, not the string "undefined"', () => {
+  assert.deepEqual(gchatIds(undefined, undefined), { spaceId: '', threadId: 'space' });
+  assert.equal(gchatSessionKey(undefined, undefined), 'gchat:_space:data');
+});
+
 test('classify: non-empty is shape, empty is ask-requester', () => {
   assert.equal(classify('how do I deploy kafka'), 'shape');
   assert.equal(classify(''), 'ask-requester');
