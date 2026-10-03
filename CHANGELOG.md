@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.58.5
 
 - docs: correct what the deliberate hold makes stale. `docs/deploy-kubernetes.md` still described the bot Deployment as `replicas: 1` and claimed nothing had ever been applied to a cluster, and the manifest's own `SLASH_COMMAND_MODE` comment said a text-only pod carries "the nine text-surface commands" — it carries five (`status`, `new`, `sessions`, `switch`, `mode`), because all six voice commands are gated on `VOICE_ENABLED`, not just `join`/`leave`. Documentation and comments only; no behaviour change.
 
