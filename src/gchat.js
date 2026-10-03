@@ -3,6 +3,7 @@
 const config = require('./config');
 const log = require('./log');
 const { conversationKey, converse } = require('./llm');
+const { recordTurn } = require('./chat-transcript');
 
 /**
  * Google Chat transport — the OPTIONAL second surface of the assistant.
@@ -72,6 +73,27 @@ function parseEvent(payload) {
 }
 
 /**
+ * The trailing ids of Google Chat's slash-separated resource names.
+ *
+ * `spaces/AAA/threads/BBB` → `{ spaceId: 'AAA', threadId: 'BBB' }`. A missing
+ * thread (DM / unthreaded) degrades to `space`. Shared by the session key and
+ * the transcript folder, which must agree on what one conversation is — two
+ * extractors would eventually disagree, and the mismatch would show up as a
+ * transcript filed under a conversation nobody can find it by.
+ */
+function gchatIds(spaceName, threadName) {
+  const last = (name) =>
+    String(name ?? '')
+      .replace(/\/+$/, '')
+      .split('/')
+      .pop() || '';
+  return {
+    spaceId: last(spaceName),
+    threadId: threadName ? last(threadName) || 'space' : 'space',
+  };
+}
+
+/**
  * The shim session key for a Google Chat thread.
  *
  * `gchat:<spaceId>_<threadId>:<identity>` — exactly three colon segments,
@@ -84,9 +106,7 @@ function parseEvent(payload) {
  * two surfaces cannot collide on a session (goal SC2).
  */
 function gchatSessionKey(spaceName, threadName) {
-  const spaceId = String(spaceName).replace(/\/+$/, '').split('/').pop() || '';
-  let threadId = 'space';
-  if (threadName) threadId = String(threadName).replace(/\/+$/, '').split('/').pop() || 'space';
+  const { spaceId, threadId } = gchatIds(spaceName, threadName);
   // Only the namespace and id are this transport's business; the core builds the
   // string. `alwaysIdentity` is what keeps the trailing segment even with no
   // IDENTITY set — see `conversationKey`.
@@ -352,6 +372,18 @@ function startGchat() {
         threadName: event.threadName,
         text: answer,
       });
+      // Recorded only once the answer is actually in the thread: the transcript
+      // is evidence of what the requester RECEIVED, so a turn that never reached
+      // them is not a turn worth writing down. Never throws — the answer is
+      // already delivered, and losing its record must not fail it.
+      const { spaceId, threadId } = gchatIds(event.spaceName, event.threadName);
+      recordTurn({
+        spaceId,
+        threadId,
+        sender: event.senderEmail,
+        question: event.argumentText,
+        answer,
+      });
       // Only now that the answer is in the thread — see setPlaceholder.
       await setPlaceholder(placeholder, turnStatus({ ms: elapsedMs }));
       message.ack();
@@ -388,6 +420,7 @@ function startGchat() {
 
 module.exports = {
   parseEvent,
+  gchatIds,
   gchatSessionKey,
   classify,
   isAllowedSender,
