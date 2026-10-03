@@ -4,8 +4,24 @@ metadata:
   name: discord-assistant
   namespace: '{{"NAMESPACE" | env}}'
 spec:
-  # A Discord bot identity permits ONE gateway connection — never scale this up.
-  replicas: 1
+  # HELD AT 0 — deliberately not running.
+  #
+  # A Discord bot identity permits ONE gateway connection. This deployment shares
+  # its Discord application (Star Citizen Assistant, id 1536456376258404452) with
+  # the laptop instance, which is the one that has voice (`VOICE_ENABLED=1`). With
+  # both live, Discord delivers every interaction to both gateway sessions: this
+  # pod runs text-only, so it answers the voice subcommands with
+  # VOICE_DISABLED_REPLY and wins the acknowledgement race, and the laptop
+  # instance then dies on an uncaught `DiscordAPIError[10062] Unknown interaction`
+  # — observed 2026-10-03, twice inside one minute, each killing the process and
+  # restarting it under launchd. The two also overwrite each other's guild
+  # registration, since registrations are per-application: the live `/sc` flaps
+  # between this pod's 5 subcommands and the laptop's 11, last writer wins.
+  #
+  # The laptop instance is the intended one while voice is the goal. Raise this
+  # back to 1 only once this pod is the sole holder of the identity, or once it
+  # has been given its own Discord application.
+  replicas: 0
   strategy:
     type: Recreate
   selector:
