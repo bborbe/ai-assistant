@@ -216,7 +216,11 @@ make launchd-uninstall LAUNCHD_LABEL=com.github.bborbe.discord-assistant
 make launchd-install
 ```
 
-Logs move with the label: from `~/Library/Logs/discord-assistant/` to `~/Library/Logs/ai-assistant/` (the old directory is left in place).
+Logs move with the label: from `~/Library/Logs/discord-assistant/` to `~/Library/Logs/ai-assistant/`. `launchd-uninstall` leaves the old directory behind, and it is **not** inert: `s2s.log` carries the gateway token in cleartext (see the Makefile's log-mode note). Delete it once the new set is confirmed running:
+
+```bash
+rm -rf ~/Library/Logs/discord-assistant/
+```
 
 **A second identity installs from the same checkout, with its own env file.** Everything instance-specific derives from `LAUNCHD_LABEL`, so the second install lands beside the first rather than on top of it:
 
