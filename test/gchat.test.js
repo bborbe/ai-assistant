@@ -11,6 +11,7 @@ delete require.cache[require.resolve('../src/config')];
 delete require.cache[require.resolve('../src/gchat')];
 const {
   parseEvent,
+  gchatIds,
   gchatSessionKey,
   classify,
   turnStatus,
@@ -71,6 +72,39 @@ test('gchatSessionKey has exactly three colon segments, gchat prefix', () => {
   assert.equal(key.split(':').length, 3);
   assert.equal(key.split(':')[0], 'gchat');
   assert.equal(key.split(':')[2], 'data');
+});
+
+// The ids are shared by the session key and the transcript folder, so the two
+// cannot drift into filing a conversation somewhere nobody looks for it.
+test('gchatIds takes the trailing ids of the resource names', () => {
+  assert.deepEqual(gchatIds('spaces/AAA', 'spaces/AAA/threads/BBB'), {
+    spaceId: 'AAA',
+    threadId: 'BBB',
+  });
+});
+
+test('gchatIds degrades a missing thread to space', () => {
+  assert.deepEqual(gchatIds('spaces/AAA', null), { spaceId: 'AAA', threadId: 'space' });
+  assert.deepEqual(gchatIds('spaces/AAA', undefined), { spaceId: 'AAA', threadId: 'space' });
+});
+
+test('gchatIds tolerates a trailing slash and an empty name', () => {
+  assert.deepEqual(gchatIds('spaces/AAA/', 'spaces/AAA/threads/BBB/'), {
+    spaceId: 'AAA',
+    threadId: 'BBB',
+  });
+  assert.deepEqual(gchatIds('', null), { spaceId: '', threadId: 'space' });
+});
+
+// Pins the one behaviour the `gchatIds` extraction changed: the old
+// `String(spaceName)` turned `undefined` into the literal id `"undefined"`,
+// this yields `''`. No production path hits it (`parseEvent` coerces with
+// `|| ''`) and the new behaviour is the better one — but this is exactly the
+// refactor where a drift between the session key and the transcript folder
+// would be silent, so the difference is asserted rather than assumed.
+test('gchatIds treats a missing name as empty, not the string "undefined"', () => {
+  assert.deepEqual(gchatIds(undefined, undefined), { spaceId: '', threadId: 'space' });
+  assert.equal(gchatSessionKey(undefined, undefined), 'gchat:_space:data');
 });
 
 test('classify: non-empty is shape, empty is ask-requester', () => {
