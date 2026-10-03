@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- docs: correct the two surviving copies of the stale `replicas: 1` claim, in `README.md`. It still said the manifests "have never been applied" and that `k8s/` "pins `replicas: 1` with `strategy: Recreate`" — the second is the dangerous one, since a reader following the README would scale the held Deployment back up and re-break the laptop bot, which is the failure the hold exists to prevent. Also carries prettier's reformat of `docs/deploy-kubernetes.md`, which #120 merged unformatted: `Makefile.precommit` runs `format` (`prettier --write`) before `check` (`prettier --check`), so `formatcheck` inspects the files it has just rewritten and cannot fail.
+
 ## v0.58.5
 
 - docs: correct what the deliberate hold makes stale. `docs/deploy-kubernetes.md` still described the bot Deployment as `replicas: 1` and claimed nothing had ever been applied to a cluster, and the manifest's own `SLASH_COMMAND_MODE` comment said a text-only pod carries "the nine text-surface commands" — it carries five (`status`, `new`, `sessions`, `switch`, `mode`), because all six voice commands are gated on `VOICE_ENABLED`, not just `join`/`leave`. Documentation and comments only; no behaviour change.
