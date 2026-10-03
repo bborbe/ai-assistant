@@ -88,21 +88,37 @@ sqlite3 ~/Library/Application\ Support/com.apple.TCC/TCC.db \
 
 `/Users/…/.local/bin/uv` appears there with `auth_value 2`. `/bin/bash` does not — which is the whole story.
 
-**Consequence for this deployment:** `make launchd-install` copies `scripts/launchd-run.sh` to `~/.local/bin/discord-assistant-launchd` and the plists point _there_. The repo copy stays the source of truth and the install target always re-copies, so the two cannot drift. The launcher learns where the repo is from `DISCORD_ASSISTANT_REPO`, set in the plist, because it can no longer infer it from its own path.
+**Consequence for this deployment:** `make launchd-install` copies `scripts/launchd-run.sh` to `~/.local/bin/<instance>-launchd` (e.g. `ai-assistant-launchd`) and the plists point _there_. The repo copy stays the source of truth and the install target always re-copies, so the two cannot drift. The launcher learns where the repo is from `DISCORD_ASSISTANT_REPO`, set in the plist, because it can no longer infer it from its own path.
 
 The plists also set no `WorkingDirectory`: that would make launchd `chdir` into the protected folder before the process exists. The launcher `cd`s itself once running, which is allowed.
 
 ## Layout: one plist per process
 
-Five labels, following the existing house convention:
+A single-identity install gets five labels under the default `LAUNCHD_LABEL`:
 
 ```
-com.github.bborbe.discord-assistant-shim
-com.github.bborbe.discord-assistant-s2s
-com.github.bborbe.discord-assistant-gateway
-com.github.bborbe.discord-assistant-transcriber
-com.github.bborbe.discord-assistant-bot
+com.github.bborbe.ai-assistant-shim
+com.github.bborbe.ai-assistant-s2s
+com.github.bborbe.ai-assistant-gateway
+com.github.bborbe.ai-assistant-transcriber
+com.github.bborbe.ai-assistant-bot
 ```
+
+**Several identities on one host split shared from per-identity jobs.** One shim, s2s and gateway serve every identity, so they carry no identity in their name; each identity's bot (and transcriber, where it records) carries its own. The name says whose job it is — restarting `ai-assistant-shim` visibly touches everyone, restarting `ai-assistant-sc-bot` touches only Star Citizen:
+
+```
+com.github.bborbe.ai-assistant-{shim,s2s,gateway}              # shared
+com.github.bborbe.ai-assistant-<identity>-{bot,transcriber}    # per identity
+```
+
+```bash
+E=~/.config/discord-assistant
+make launchd-install LAUNCHD_LABEL=com.github.bborbe.ai-assistant          LAUNCHD_COMPONENTS="shim s2s gateway" DISCORD_ASSISTANT_ENV=$E/personal.env
+make launchd-install LAUNCHD_LABEL=com.github.bborbe.ai-assistant-personal LAUNCHD_COMPONENTS="bot transcriber"   DISCORD_ASSISTANT_ENV=$E/personal.env
+make launchd-install LAUNCHD_LABEL=com.github.bborbe.ai-assistant-sc       LAUNCHD_COMPONENTS=bot                 DISCORD_ASSISTANT_ENV=$E/sc.env
+```
+
+The `<identity>` segment matches the env file's `IDENTITY=` value, so label, env file and shim identity spell the same word.
 
 One job per process, not one job running `dev.sh`. Each restarts on its own, and speech-to-speech's 60-second model load never delays the text surface. The gateway starts in milliseconds — it has no model to load — so voice from an off-host client is reachable long before s2s itself is ready; a client connecting in that window gets a proxy error rather than a hang, which is the honest failure.
 
@@ -195,7 +211,7 @@ make launchd-install
 
 ```bash
 DISCORD_ASSISTANT_ENV=~/.config/discord-assistant/sc.env \
-  make launchd-install LAUNCHD_LABEL=com.github.bborbe.sc-assistant LAUNCHD_COMPONENTS=bot
+  make launchd-install LAUNCHD_LABEL=com.github.bborbe.ai-assistant-sc LAUNCHD_COMPONENTS=bot
 ```
 
 ⚠️ **Pass `LAUNCHD_LABEL` and `LAUNCHD_COMPONENTS` explicitly, always.** A bare `make launchd-install` uses the default label and the full component list, so it rewrites the _first_ identity's plists and launcher and bootstraps a second shim/s2s/transcriber that collide on ports 8080 and 8765. The label is the only thing keeping the two installs apart.
@@ -218,15 +234,15 @@ Then type `status` at the bot in Discord. A process that is running is not the s
 
 ```bash
 # after editing a plist
-launchctl bootout gui/$(id -u)/com.github.bborbe.discord-assistant-bot
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.github.bborbe.discord-assistant-bot.plist
+launchctl bootout gui/$(id -u)/com.github.bborbe.ai-assistant-bot
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.github.bborbe.ai-assistant-bot.plist
 
 # restart in place, no plist change
-launchctl kickstart -k gui/$(id -u)/com.github.bborbe.discord-assistant-bot
+launchctl kickstart -k gui/$(id -u)/com.github.bborbe.ai-assistant-bot
 
 # remove
-launchctl bootout gui/$(id -u)/com.github.bborbe.discord-assistant-bot
-rm ~/Library/LaunchAgents/com.github.bborbe.discord-assistant-bot.plist
+launchctl bootout gui/$(id -u)/com.github.bborbe.ai-assistant-bot
+rm ~/Library/LaunchAgents/com.github.bborbe.ai-assistant-bot.plist
 ```
 
 `kickstart -k` is enough for a code change; a plist change needs the bootout/bootstrap pair.
@@ -234,7 +250,7 @@ rm ~/Library/LaunchAgents/com.github.bborbe.discord-assistant-bot.plist
 ## Logs
 
 ```
-~/Library/Logs/discord-assistant/{shim,s2s,transcriber,bot}.log
+~/Library/Logs/<instance>/{shim,s2s,gateway,transcriber,bot}.log   # e.g. ai-assistant/, ai-assistant-sc/
 ```
 
 launchd does not rotate these. They grow without bound; truncate them by hand or add `newsyslog.d` config if it ever matters.

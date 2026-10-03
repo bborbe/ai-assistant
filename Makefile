@@ -91,7 +91,7 @@ LAUNCHD_DIR        = $(HOME)/Library/LaunchAgents
 #
 # LAUNCHD_INSTANCE is the label's last dotted segment, so every default below is
 # byte-identical to what a single-instance install produced before.
-LAUNCHD_LABEL      = com.github.bborbe.discord-assistant
+LAUNCHD_LABEL      = com.github.bborbe.ai-assistant
 LAUNCHD_INSTANCE   = $(lastword $(subst ., ,$(LAUNCHD_LABEL)))
 LAUNCHD_LOGDIR     = $(HOME)/Library/Logs/$(LAUNCHD_INSTANCE)
 # A plist inherits no PATH. Explicit, absolute, and covering every binary the
