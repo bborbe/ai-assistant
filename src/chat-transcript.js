@@ -39,12 +39,31 @@ function transcriptFile(spaceId, threadId) {
 }
 
 /**
+ * Neutralise a forged turn boundary in a body.
+ *
+ * The delimiter is `## turn <iso>` and bodies are interpolated verbatim, so a
+ * body containing that line would split one turn into two. This needs no
+ * attacker: `SYSTEM_DIRECTIVE` tells the model "Markdown is fine", so an answer
+ * that happens to document a markdown file can emit one by accident — and a
+ * sender who can steer the model writes synthetic turns into what is supposed
+ * to be a record. Escaping only that exact pattern keeps every other heading in
+ * an answer rendering normally.
+ *
+ * `\##` renders as a literal `##` in markdown, so the recorded text still reads
+ * as it was written.
+ */
+function defuseTurnHeadings(text) {
+  return String(text ?? '').replace(/^## turn\b/gm, '\\## turn');
+}
+
+/**
  * Append one turn — who asked, and what they got back.
  *
  * Speaker-then-text rather than a one-line `speaker: text` entry: a Chat answer
  * is markdown and routinely several paragraphs, and flattening it would either
  * lose the structure or make the entry unreadable. The next `## turn` heading
- * delimits it, so no indentation scheme is needed.
+ * delimits it, so no indentation scheme is needed — and `defuseTurnHeadings`
+ * above is what makes that delimiting claim true.
  *
  * Never throws. The answer is already in the thread by the time this runs, and
  * losing the record of a turn is not worth failing one that succeeded — the
@@ -65,8 +84,8 @@ function recordTurn({ spaceId, threadId, sender, question, answer }) {
     const at = new Date().toISOString();
     const block =
       `\n## turn ${at}\n\n` +
-      `**${sender || 'unknown'}**\n\n${String(question ?? '').trim()}\n\n` +
-      `**${config.assistantLabel}**\n\n${String(answer).trim()}\n`;
+      `**${sender || 'unknown'}**\n\n${defuseTurnHeadings(question).trim()}\n\n` +
+      `**${config.assistantLabel}**\n\n${defuseTurnHeadings(answer).trim()}\n`;
     fs.appendFileSync(file, block);
     log.info('chat transcript turn recorded', { file, sender });
     return file;
@@ -76,4 +95,4 @@ function recordTurn({ spaceId, threadId, sender, question, answer }) {
   }
 }
 
-module.exports = { recordTurn, transcriptFile };
+module.exports = { recordTurn, transcriptFile, defuseTurnHeadings };
