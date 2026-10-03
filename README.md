@@ -205,9 +205,9 @@ Naive `pcm[::3]` is wrong twice over: it walks alternating channels on an interl
 ## Deployment
 
 - **[docs/deploy-local.md](docs/deploy-local.md)** — macOS, launchd. Unattended: starts at login, survives sleep/wake, no terminal.
-- **[docs/deploy-kubernetes.md](docs/deploy-kubernetes.md)** — coming soon. The image and manifests exist and have never been applied; that page records what is actually built and what still blocks it.
+- **[docs/deploy-kubernetes.md](docs/deploy-kubernetes.md)** — the cluster path. Applied in the `star-citizen` namespace, where the bot Deployment is currently **held at `replicas: 0` on purpose**. That page records what is built, the one-gateway invariant the hold enforces, and what still blocks the rest.
 
-**Never scale beyond one replica** — a Discord bot identity permits exactly one gateway connection, which is why `k8s/` pins `replicas: 1` with `strategy: Recreate`. The same constraint means a cluster instance and a laptop instance cannot run at once on one identity.
+**Never scale beyond one replica** — a Discord bot identity permits exactly one gateway connection. That is why `k8s/discord-assistant-deploy.yaml` declares `replicas: 0` with `strategy: Recreate`: the cluster assistant and the laptop instance share one Discord application, so running both at once is precisely the failure the hold prevents — the text-only pod wins the acknowledgement race and the laptop instance dies on the uncaught `DiscordAPIError[10062]` that follows. See [docs/deploy-kubernetes.md](docs/deploy-kubernetes.md). The same constraint means a cluster instance and a laptop instance cannot run at once on one identity.
 
 ## Running it
 
