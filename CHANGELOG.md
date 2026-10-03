@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- chore: default `LAUNCHD_LABEL` is now `com.github.bborbe.ai-assistant` (was `discord-assistant`, the pre-rename repo name); `docs/deploy-local.md` documents the multi-identity layout — shared `ai-assistant-{shim,s2s,gateway}`, per-identity `ai-assistant-<identity>-{bot,transcriber}` — so a job's name says whose it is. Existing installs keep their labels until reinstalled — run `make launchd-uninstall LAUNCHD_LABEL=com.github.bborbe.discord-assistant` before the first install under the new default, or the two sets collide on ports (see `docs/deploy-local.md` § Upgrading from the old label).
+
 ## v0.58.7
 
 - docs: correct the last surviving copy of the retired "nothing is deployed" claim, at the top of `docs/deploy-kubernetes.md`. The page opened with _"Coming soon. Nothing is deployed to a cluster yet"_ while line 19 of that same page — added by the previous correction — says the Deployment exists in `star-citizen` and ran there until 2026-10-03, and while the README now links to the page saying the same. No other live copy of the claim remains. The surviving `replicas: 1` in `k8s/discord-assistant-shim-deploy.yaml` is not one — the shim holds no Discord gateway identity, so the one-gateway invariant does not apply to it — and the remaining CHANGELOG hits are this series' own entries and released sections, which are left alone.

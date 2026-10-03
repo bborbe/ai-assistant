@@ -89,9 +89,12 @@ LAUNCHD_DIR        = $(HOME)/Library/LaunchAgents
 # Harmless while both sit on the same commit, a silent downgrade of a live
 # service the moment they do not, and nothing logs it.
 #
-# LAUNCHD_INSTANCE is the label's last dotted segment, so every default below is
-# byte-identical to what a single-instance install produced before.
-LAUNCHD_LABEL      = com.github.bborbe.discord-assistant
+# LAUNCHD_INSTANCE is the label's last dotted segment, so every default below
+# derives from the label alone. The default label itself moved from
+# discord-assistant to ai-assistant (the repo rename), so a single-instance install
+# now writes ~/Library/Logs/ai-assistant/ and ~/.local/bin/ai-assistant-launchd —
+# see docs/deploy-local.md § Upgrading from the old label.
+LAUNCHD_LABEL      = com.github.bborbe.ai-assistant
 LAUNCHD_INSTANCE   = $(lastword $(subst ., ,$(LAUNCHD_LABEL)))
 LAUNCHD_LOGDIR     = $(HOME)/Library/Logs/$(LAUNCHD_INSTANCE)
 # A plist inherits no PATH. Explicit, absolute, and covering every binary the
