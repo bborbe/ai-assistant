@@ -82,7 +82,7 @@ There is **no committed env file** on purpose. Make variables override the envir
 
 ```bash
 DISCORD_ASSISTANT_ENV=~/.config/discord-assistant/sc.env \
-  make launchd-install LAUNCHD_LABEL=com.github.bborbe.sc-assistant LAUNCHD_COMPONENTS=bot
+  make launchd-install LAUNCHD_LABEL=com.github.bborbe.ai-assistant-sc LAUNCHD_COMPONENTS=bot
 ```
 
 Unset, the default is unchanged (`local.env` relative to the repo), so a single-instance install needs no migration.
