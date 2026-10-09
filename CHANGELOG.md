@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.60.2
 
 - docs: document `SHIM_FRONT_API_KEY` in `local.env.example` — the front tier (fast chit-chat path) only turns on when it is non-empty, and a local Ollama front model needs a non-secret dummy there. The env-file migration lost this line in 2026-10 with nothing logged, leaving every turn on the slow Claude path.
 
