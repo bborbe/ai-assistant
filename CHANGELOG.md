@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.60.4
 
 - fix(shim): a message typed into a call's text chat always goes to Claude, never the front model
 - fix(shim): treat front-model scope refusals ("I can only answer from the conversation itself") as a deferral to Claude instead of speaking them
