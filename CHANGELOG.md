@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.60.1
 
 - fix: the acknowledgment cue is now a single "Got it.", off by default (`VOICE_ACK=1` enables it per identity), and plays only when the answer has not started within `VOICE_ACK_DELAY_MS` (default 3000ms) — a front-tier reply comes out with no cue in front of it. The hum-type cues ("Ah.", "Mm-hm.", "Hmm.", "Uh-huh.") were judged strange or annoying in a live call and are removed.
 
