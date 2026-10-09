@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: play a short backchannel ("Ah.", "Mm-hm.", "Hmm." or "Uh-huh.", rotated, never the same twice in a row) in the assistant's own voice the moment an addressed spoken turn is transcribed, so the speaker knows it was heard before any model time is spent. The clips are pre-rendered (`src/ack-clips/*.pcm`, via `tools/make-stall-clip.py <out> "<line>"`), never play on top of other audio, stays silent in text-only mode and on cancelled turns, and is switched off with `VOICE_ACK=0`.
+
 ## v0.59.1
 
 - fix: send `turn_detection` under `session.audio.input` so `INTERRUPT_RESPONSE=0` actually reaches speech-to-speech. The top-level position was accepted and ignored, the server defaulted to interrupting, and a finished answer was flushed unplayed whenever the user spoke before it started.

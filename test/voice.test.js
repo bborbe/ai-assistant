@@ -2553,3 +2553,94 @@ test('onPlayerIdle gives up after repeated resumes', () => {
   assert.equal(fake.audio, null, 'playback is abandoned cleanly');
   assert.equal(fake.outQueue.length, 0);
 });
+
+// The acknowledgment cues: a rotated backchannel the moment an addressed turn is transcribed.
+test('speakAckClip queues the cue on a self-closing stream', () => {
+  const fake = fakeOnEventTarget();
+  Session.prototype.speakAckClip.call(fake);
+  assert.notEqual(fake.audio, null, 'the cue needs a live stream');
+  assert.ok(fake.outQueue.length > 0, 'the cue PCM is queued');
+  assert.equal(fake.ending, true, 'an unanswered turn must not leave the ring lit');
+  assert.equal(fake.ackOnly, true);
+  assert.ok(
+    fake._transcriptWrites.some((w) => ['Ah.', 'Mm-hm.', 'Hmm.', 'Uh-huh.'].includes(w.text)),
+    'the cue is recorded as said',
+  );
+  Session.prototype.stopAudio.call(fake);
+  assert.equal(fake.ackOnly, false);
+});
+
+test('speakAckClip never stacks on live playback', () => {
+  const fake = fakeOnEventTarget({ audio: { end: () => {} } });
+  Session.prototype.speakAckClip.call(fake);
+  assert.equal(fake.outQueue.length, 0);
+});
+
+test('speakAckClip stays silent in text-only mode and on a cancelled turn', () => {
+  for (const o of [{ speechOff: true }, { cancelled: true }]) {
+    const fake = fakeOnEventTarget(o);
+    Session.prototype.speakAckClip.call(fake);
+    assert.equal(fake.audio, null, JSON.stringify(o));
+    assert.equal(fake.outQueue.length, 0, JSON.stringify(o));
+  }
+});
+
+test('speakAckClip honours VOICE_ACK=0', (t) => {
+  t.mock.property(config, 'voiceAck', false);
+  const fake = fakeOnEventTarget();
+  Session.prototype.speakAckClip.call(fake);
+  assert.equal(fake.audio, null);
+});
+
+test('a reply arriving during the cue takes the stream over', () => {
+  const fake = fakeOnEventTarget();
+  Session.prototype.speakAckClip.call(fake);
+  const stream = fake.audio;
+  Session.prototype.pushAudio.call(fake, Buffer.alloc(320));
+  assert.equal(fake.audio, stream, 'same stream, no gap between cue and answer');
+  assert.equal(fake.ending, false, 'the stream must outlive the cue now');
+  assert.equal(fake.ackOnly, false);
+  Session.prototype.stopAudio.call(fake);
+});
+
+test('an addressed transcription plays the cue; an unaddressed one does not', () => {
+  const addressed = fakeOnEventTarget({ solo: true, speakAckClip: Session.prototype.speakAckClip });
+  onCtx(addressed, {
+    type: 'conversation.item.input_audio_transcription.completed',
+    transcript: 'what is the plan',
+  });
+  assert.ok(addressed.outQueue.length > 0, 'solo turn is addressed: cue queued');
+  Session.prototype.stopAudio.call(addressed);
+
+  const unaddressed = fakeOnEventTarget({
+    solo: false,
+    speakAckClip: Session.prototype.speakAckClip,
+  });
+  onCtx(unaddressed, {
+    type: 'conversation.item.input_audio_transcription.completed',
+    transcript: 'talking to a colleague',
+  });
+  assert.equal(unaddressed.outQueue.length, 0, 'no cue for a remark not meant for the bot');
+});
+
+test('pickAckClip never repeats the last cue', () => {
+  for (const r of [0, 0.4, 0.99]) {
+    for (let last = 0; last < 3; last++) {
+      const i = voice.pickAckClip(last, 3, () => r);
+      assert.notEqual(i, last, `r=${r} last=${last}`);
+      assert.ok(i >= 0 && i < 3);
+    }
+  }
+  assert.equal(voice.pickAckClip(undefined, 1), 0, 'a single cue is always that cue');
+});
+
+test('speakAckClip rotates through the cue set', () => {
+  const fake = fakeOnEventTarget();
+  const said = [];
+  for (let k = 0; k < 6; k++) {
+    Session.prototype.speakAckClip.call(fake);
+    said.push(fake._transcriptWrites.at(-1).text);
+    Session.prototype.stopAudio.call(fake);
+  }
+  for (let k = 1; k < said.length; k++) assert.notEqual(said[k], said[k - 1], said.join(' '));
+});
