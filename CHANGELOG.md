@@ -12,6 +12,8 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 - docs: document `SHIM_FRONT_API_KEY` in `local.env.example` — the front tier (fast chit-chat path) only turns on when it is non-empty, and a local Ollama front model needs a non-secret dummy there. The env-file migration lost this line in 2026-10 with nothing logged, leaving every turn on the slow Claude path.
 
+- fix: the acknowledgment cue is now a single "Got it.", off by default (`VOICE_ACK=1` enables it per identity), and plays only when the answer has not started within `VOICE_ACK_DELAY_MS` (default 3000ms) — a front-tier reply comes out with no cue in front of it. The hum-type cues ("Ah.", "Mm-hm.", "Hmm.", "Uh-huh.") were judged strange or annoying in a live call and are removed.
+
 ## v0.60.0
 
 - feat: play a short backchannel ("Ah.", "Mm-hm.", "Hmm." or "Uh-huh.", rotated, never the same twice in a row) in the assistant's own voice the moment an addressed spoken turn is transcribed, so the speaker knows it was heard before any model time is spent. The clips are pre-rendered (`src/ack-clips/*.pcm`, via `tools/make-stall-clip.py <out> "<line>"`), never play on top of other audio, stays silent in text-only mode and on cancelled turns, and is switched off with `VOICE_ACK=0`.
