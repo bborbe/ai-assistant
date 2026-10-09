@@ -110,6 +110,10 @@ barge_in_off: false
 # said the details are in the chat" into an empty channel. Left unset, an
 # identity falls back to the global default exactly as before — a
 # single-identity install needs no migration.
+# `transcript_dir` is the same story for the call transcript: each bot writes
+# its own (its TRANSCRIPT_DIR), but the shared shim only knows the folder of
+# the env file that launched it, so without an override every identity's voice
+# session is told that one folder. Set it to the bot's own TRANSCRIPT_DIR.
 # identities:
 #   sc:                          # matches sc-assistant's IDENTITY=sc
 #     cwd: ~/Documents/Obsidian/StarCitizen
@@ -119,6 +123,7 @@ barge_in_off: false
 #     cwd: ~/Documents/Obsidian/Boss
 #     claude_script: ~/Documents/workspaces/scripts/cc-boss
 #     chat_bridge_url: http://127.0.0.1:8101/chat
+#     transcript_dir: ~/Documents/Obsidian/Boss/70 Source Material/Discord
 #   bro:                         # matches brogrammers-assistant's IDENTITY=bro
 #     cwd: ~/Documents/Obsidian/BrogrammersAssistant
 #     claude_script: ~/Documents/workspaces/scripts/cc-discord-assistant-bro

@@ -24,6 +24,14 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "shim"))
 
+# The shim reads its config file at IMPORT time, from
+# `~/.config/discord-assistant/config.yaml` unless this is set. Pointing it at a
+# path that does not exist keeps the suite on the shim's own defaults: with the
+# operator's live file loaded (`barge_in_off: true` on 2026-10-09), four tests
+# failed on a machine that runs the assistant and passed in CI.
+os.environ["DISCORD_ASSISTANT_CONFIG"] = str(
+    pathlib.Path(tempfile.gettempdir()) / "ai-assistant-test-no-such-config.yaml")
+
 import claude_openai_shim as shim  # noqa: E402
 
 
@@ -236,6 +244,18 @@ class IdentityForKey(unittest.TestCase):
         # or a bot with no IDENTITY set — must behave exactly as before.
         resolved = shim.identity_for("voice:999")
         self.assertEqual(resolved["chat_bridge_url"], shim.CHAT_BRIDGE_URL)
+
+    def test_an_identity_with_a_transcript_dir_override_resolves_to_it(self):
+        # THE BUG THIS FIELD FIXES: the shared shim told every voice session
+        # the folder of whichever env file launched it, so Boss read
+        # Personal's transcript while its own bot wrote under Boss/.
+        shim.IDENTITIES["boss"] = {"cwd": "/tmp/boss", "transcript_dir": "/tmp/boss-transcripts"}
+        resolved = shim.identity_for("voice:999:boss")
+        self.assertEqual(resolved["transcript_dir"], "/tmp/boss-transcripts")
+
+    def test_an_identity_with_no_transcript_dir_falls_back_to_the_global(self):
+        resolved = shim.identity_for("voice:111:sc")
+        self.assertEqual(resolved["transcript_dir"], shim.TRANSCRIPT_DIR)
 
     def test_text_surfaces_never_consult_the_guild_map(self):
         # thread:/dm:/channel: keys name a channel or user, never a guild —
@@ -452,6 +472,12 @@ class LoadIdentitiesFromConfig(unittest.TestCase):
         shim._CFG = {"identities": {"sc": {"chat_bridge_url": "http://127.0.0.1:8091/chat"}}}
         out = shim._load_identities()
         self.assertEqual(out["sc"]["chat_bridge_url"], "http://127.0.0.1:8091/chat")
+
+    def test_transcript_dir_is_carried_over_expanded(self):
+        shim._CFG = {"identities": {"boss": {"transcript_dir": "~/boss-transcripts"}}}
+        out = shim._load_identities()
+        self.assertEqual(out["boss"]["transcript_dir"],
+                         str(pathlib.Path("~/boss-transcripts").expanduser()))
 
     def test_https_chat_bridge_url_is_accepted(self):
         shim._CFG = {"identities": {"sc": {"chat_bridge_url": "https://host.example/chat"}}}
@@ -1257,6 +1283,26 @@ class VoiceRebind(unittest.TestCase):
                 # Must not raise — a down bot must never block shim startup.
                 shim.notify_voice_rebind()
         self.assertIn("notify failed", captured.getvalue())
+
+
+
+
+class TranscriptDirective(unittest.TestCase):
+    """The voice directive that tells the model where the call transcript is."""
+
+    def test_names_the_folder_it_is_given(self):
+        self.assertIn("/tmp/boss-transcripts", shim.transcript_directive("/tmp/boss-transcripts"))
+
+    def test_is_empty_when_no_folder_is_set(self):
+        # Empty is the off switch — an unset dir must not arm the directive
+        # with a bogus path (see `_expand`).
+        self.assertEqual(shim.transcript_directive(""), "")
+
+    def test_the_prompt_asks_for_the_turn_identity_folder(self):
+        # The directive must be built from THIS turn's identity, not from a
+        # process-wide constant — that constant is the bug.
+        src = _function_source("do_POST") or pathlib.Path(shim.__file__).read_text()
+        self.assertIn('transcript_directive(identity_for(key)["transcript_dir"])', src)
 
 
 if __name__ == "__main__":
