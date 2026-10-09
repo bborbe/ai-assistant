@@ -8,6 +8,11 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix(shim): per-identity `transcript_dir` — the shared shim told every voice session the launching env's transcript folder, so Boss read Personal's transcript while its bot wrote under Boss/
+- test(shim): point the suite at a non-existent config so the operator's live `config.yaml` no longer fails 4 tests locally
+
 ## v0.60.2
 
 - docs: document `SHIM_FRONT_API_KEY` in `local.env.example` — the front tier (fast chit-chat path) only turns on when it is non-empty, and a local Ollama front model needs a non-secret dummy there. The env-file migration lost this line in 2026-10 with nothing logged, leaving every turn on the slow Claude path.

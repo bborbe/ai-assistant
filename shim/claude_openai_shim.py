@@ -124,7 +124,7 @@ def _expand(p: str) -> str:
 
     `Path("").expanduser()` returns `"."`, so expanding unconditionally turns
     "this setting is unset" into "this setting is the current directory" — and
-    several settings use empty as their off switch (`TRANSCRIPT_DIRECTIVE` and
+    several settings use empty as their off switch (`transcript_directive()` and
     `RELAY_DIRECTIVE` are both empty exactly when their dir is). Observed
     2026-09-20: adding `_expand` to `TRANSCRIPT_DIR` made an unset transcript dir
     resolve to `.`, which armed the transcript directive with a bogus path.
@@ -393,7 +393,7 @@ VOICE_KEY_PREFIX = "voice:"
 # snowflakes do not share a namespace — so one map serves both shapes.
 def _load_identities() -> dict[str, dict]:
     """identityName-or-guildId -> {cwd, claude_script, mcp_config, allowed_tools,
-    chat_bridge_url}.
+    chat_bridge_url, transcript_dir}.
 
     Read straight off the parsed config file rather than through `setting()`:
     that helper resolves ONE scalar against env/file/default, and an identity
@@ -423,6 +423,14 @@ def _load_identities() -> dict[str, dict]:
             entry["claude_script"] = _expand(str(cfg["claude_script"]))
         if cfg.get("mcp_config"):
             entry["mcp_config"] = _expand(str(cfg["mcp_config"]))
+        if cfg.get("transcript_dir"):
+            # Per identity because each bot writes its OWN transcript (its
+            # TRANSCRIPT_DIR), while the shim is shared and its own
+            # SHIM_TRANSCRIPT_DIR comes from whichever env file launched it.
+            # Without this every voice session was told the first identity's
+            # folder: Boss read Personal's transcript while its bot wrote under
+            # Boss/ (observed 2026-10-09).
+            entry["transcript_dir"] = _expand(str(cfg["transcript_dir"]))
         if cfg.get("allowed_tools"):
             # Expanded like every other path field above. An allowed-tools value
             # can carry a `~`-rooted path, and passing the literal `~` through to
@@ -537,12 +545,12 @@ def _identity_fallback(key: str, reason: str, enforce: bool) -> dict:
             raise IdentityRefused(key, reason)
     return {"cwd": CWD, "claude_script": CLAUDE_SCRIPT,
             "mcp_config": MCP_CONFIG, "allowed_tools": ALLOWED_TOOLS,
-            "chat_bridge_url": CHAT_BRIDGE_URL}
+            "chat_bridge_url": CHAT_BRIDGE_URL, "transcript_dir": TRANSCRIPT_DIR}
 
 
 def identity_for(key: str, *, enforce: bool = False) -> dict:
-    """Resolve {cwd, claude_script, mcp_config, allowed_tools, chat_bridge_url}
-    for a turn.
+    """Resolve {cwd, claude_script, mcp_config, allowed_tools, chat_bridge_url,
+    transcript_dir} for a turn.
 
     This is the routing fix itself: everything that used to read the
     module-level CWD / CLAUDE_SCRIPT / MCP_CONFIG / ALLOWED_TOOLS constants
@@ -598,7 +606,7 @@ def identity_for(key: str, *, enforce: bool = False) -> dict:
     """
     defaults = {"cwd": CWD, "claude_script": CLAUDE_SCRIPT,
                 "mcp_config": MCP_CONFIG, "allowed_tools": ALLOWED_TOOLS,
-                "chat_bridge_url": CHAT_BRIDGE_URL}
+                "chat_bridge_url": CHAT_BRIDGE_URL, "transcript_dir": TRANSCRIPT_DIR}
     prefix, sep, rest = key.partition(":")
     if not sep:
         return _identity_fallback(key, "no identity segment (bare key)", enforce)
@@ -1773,18 +1781,28 @@ def relay_prompt_block(msgs: list[RelayMessage]) -> str:
     return "\n".join(lines) + "\n\n"
 
 
-TRANSCRIPT_DIRECTIVE = (
-    f"A live transcript of this call is written to {TRANSCRIPT_DIR}, one folder "
-    "per channel per day — the most recently modified is this conversation, in "
-    "`transcript.md`.\n"
-    "It holds BOTH what everyone said aloud and everything typed into the voice "
-    "channel's text chat, in order, with names. Typed messages reach you ONLY "
-    "this way; they are never in your context.\n"
-    "So when the user refers to anything from earlier — 'the link I posted', "
-    "'the path I pasted', 'what we just discussed' — READ that file before "
-    "answering. Do not say you cannot see it, and do not assume 'posted' means "
-    "an attachment: it usually means a line in that transcript."
-) if TRANSCRIPT_DIR else ""
+def transcript_directive(transcript_dir: str) -> str:
+    """The transcript directive for ONE identity's folder — empty when unset.
+
+    A function, not a constant: the folder is per identity (see
+    `identities.<name>.transcript_dir`), so a module-level string built from
+    the shim's own TRANSCRIPT_DIR pointed every identity at the same folder.
+    """
+    if not transcript_dir:
+        return ""
+    return (
+        f"A live transcript of this call is written to {transcript_dir}, one folder "
+        "per channel per day — the most recently modified is this conversation, in "
+        "`transcript.md`.\n"
+        "It holds BOTH what everyone said aloud and everything typed into the voice "
+        "channel's text chat, in order, with names. Typed messages reach you ONLY "
+        "this way; they are never in your context.\n"
+        "So when the user refers to anything from earlier — 'the link I posted', "
+        "'the path I pasted', 'what we just discussed' — READ that file before "
+        "answering. Do not say you cannot see it, and do not assume 'posted' means "
+        "an attachment: it usually means a line in that transcript."
+    )
+
 
 VOICE_DIRECTIVE = (
     "SPOKEN OUTPUT MODE. Your reply is read aloud, not displayed. Speak the way a person "
@@ -3833,7 +3851,8 @@ class Handler(BaseHTTPRequestHandler):
         # conversation has silenced posting — see the comment above it.
         parts = [p for p in (system, MEMORY_DIRECTIVE,
                              VOICE_DIRECTIVE if voice else TEXT_DIRECTIVE,
-                             TRANSCRIPT_DIRECTIVE if voice else "",
+                             transcript_directive(identity_for(key)["transcript_dir"])
+                             if voice else "",
                              RELAY_DIRECTIVE if voice else "",
                              (CHAT_BRIDGE_VOICE_ONLY_DIRECTIVE
                               if is_chat_off(key) else CHAT_BRIDGE_DIRECTIVE)
