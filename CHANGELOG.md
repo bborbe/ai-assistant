@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.59.1
 
 - fix: send `turn_detection` under `session.audio.input` so `INTERRUPT_RESPONSE=0` actually reaches speech-to-speech. The top-level position was accepted and ignored, the server defaulted to interrupting, and a finished answer was flushed unplayed whenever the user spoke before it started.
 - fix: stop a long reply losing its tail. The Discord player gave up after 5 missed frames (100ms) and went idle mid-reply, and the rest of the reply was written into a stream nobody read. Tolerance is now 5s, and an idle player with a reply still queued is resumed on a fresh resource and logged.
