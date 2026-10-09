@@ -8,6 +8,11 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix(shim): a message typed into a call's text chat always goes to Claude, never the front model
+- fix(shim): treat front-model scope refusals ("I can only answer from the conversation itself") as a deferral to Claude instead of speaking them
+
 ## v0.60.3
 
 - fix(shim): per-identity `transcript_dir` — the shared shim told every voice session the launching env's transcript folder, so Boss read Personal's transcript while its bot wrote under Boss/
