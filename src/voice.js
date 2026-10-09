@@ -1219,15 +1219,10 @@ class Session {
   }
 
   /**
-   * Speak the acknowledgment cue ("Got it.") — reached from scheduleAckClip()
-   * once an addressed turn's answer has not started within voiceAckDelayMs.
-   *
-   * Unlike the stall clip, the stream it opens CLOSES ITSELF once the clip has
-   * drained (`ending` set up front): a turn that is never answered must not
-   * leave the speaking ring lit. If the answer's first audio arrives while the
-   * clip is still playing, pushAudio() hands the open stream over to the reply
-   * (`ackOnly`), so the answer follows the cue without a gap and the stream
-   * then lives as long as the reply does.
+   * Arm the acknowledgment cue for the turn just transcribed: after
+   * voiceAckDelayMs, speak it unless answer audio arrived first
+   * (`turnAudioSeen`, raised by pushAudio()) or the turn already ended
+   * (`answering` lowered). pushAudio() and stopAudio() cancel the timer.
    */
   scheduleAckClip() {
     this.clearAckTimer();
@@ -1242,6 +1237,7 @@ class Session {
     this.ackTimer.unref?.();
   }
 
+  /** Cancel a pending acknowledgment cue, if one is armed. */
   clearAckTimer() {
     if (this.ackTimer) {
       clearTimeout(this.ackTimer);
@@ -1249,6 +1245,17 @@ class Session {
     }
   }
 
+  /**
+   * Speak the acknowledgment cue ("Got it.") — reached from scheduleAckClip()
+   * once an addressed turn's answer has not started within voiceAckDelayMs.
+   *
+   * Unlike the stall clip, the stream it opens CLOSES ITSELF once the clip has
+   * drained (`ending` set up front): a turn that is never answered must not
+   * leave the speaking ring lit. If the answer's first audio arrives while the
+   * clip is still playing, pushAudio() hands the open stream over to the reply
+   * (`ackOnly`), so the answer follows the cue without a gap and the stream
+   * then lives as long as the reply does.
+   */
   speakAckClip() {
     if (!config.voiceAck || !ACK_CLIPS.length) return;
     // Something is already playing — a reply, or the stall clip. Never stack.
