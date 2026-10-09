@@ -186,32 +186,45 @@ function sessionUpdate(interruptResponse) {
 }
 
 /**
- * The acknowledgment cue — a short "Okay." in the assistant's own voice, played
- * the moment an addressed turn is transcribed so the speaker knows it reached
- * the assistant before any model time is spent. Pre-rendered by
- * tools/make-stall-clip.py (second argument is the line) for the same reason as
- * the stall clip: it must cost nothing at the moment it is needed.
+ * The acknowledgment cues — short backchannels ("Ah.", "Mm-hm.", "Hmm.", "Uh-huh.")
+ * in the assistant's own voice, one played the moment an addressed turn is
+ * transcribed so the speaker knows it reached the assistant before any model
+ * time is spent. Pre-rendered by tools/make-stall-clip.py (second argument is
+ * the line) into src/ack-clips/<name>.pcm with a .txt sidecar, for the same
+ * reason as the stall clip: it must cost nothing at the moment it is needed.
  *
- * "Okay." rather than "Hmm.": the TTS renders a non-word like "Hmm" oddly —
- * heard live on 2026-10-09 as "strange" — while a real word comes out clean.
- * Missing file → empty buffer → no cue, same degrade-don't-fail posture.
+ * Several, rotated, because one identical sound on every turn reads as a
+ * machine (chosen live on 2026-10-09). An empty or missing directory → no cue,
+ * the same degrade-don't-fail posture as the stall clip.
  */
-const ACK_CLIP = (() => {
+const ACK_CLIPS = (() => {
+  const dir = path.join(__dirname, 'ack-clips');
   try {
-    return up(fs.readFileSync(path.join(__dirname, 'ack-clip.pcm')));
+    return fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith('.pcm'))
+      .sort()
+      .map((f) => {
+        const base = path.join(dir, f.slice(0, -4));
+        let text = '';
+        try {
+          text = fs.readFileSync(`${base}.txt`, 'utf8').trim();
+        } catch {}
+        return { pcm: up(fs.readFileSync(`${base}.pcm`)), text };
+      })
+      .filter((c) => c.pcm.length);
   } catch (e) {
-    log.warn('voice: ack clip unavailable, turns will not be acknowledged', { error: e.message });
-    return Buffer.alloc(0);
+    log.warn('voice: ack clips unavailable, turns will not be acknowledged', { error: e.message });
+    return [];
   }
 })();
 
-const ACK_CLIP_TEXT = (() => {
-  try {
-    return fs.readFileSync(path.join(__dirname, 'ack-clip.txt'), 'utf8').trim();
-  } catch {
-    return '';
-  }
-})();
+/** A random cue index, never the one played last when there is a choice. */
+function pickAckClip(last, n = ACK_CLIPS.length, rnd = Math.random) {
+  if (n <= 1) return 0;
+  const i = Math.floor(rnd() * (n - 1));
+  return last !== undefined && last !== null && i >= last ? i + 1 : i;
+}
 
 /** One live voice session: Discord audio <-> speech-to-speech. */
 class Session {
@@ -1202,7 +1215,7 @@ class Session {
   }
 
   /**
-   * Speak the acknowledgment cue ("Okay.") the moment an addressed turn is
+   * Speak one acknowledgment cue ("Mm-hm.", …) the moment an addressed turn is
    * transcribed.
    *
    * Unlike the stall clip, the stream it opens CLOSES ITSELF once the clip has
@@ -1213,7 +1226,7 @@ class Session {
    * then lives as long as the reply does.
    */
   speakAckClip() {
-    if (!config.voiceAck || !ACK_CLIP.length) return;
+    if (!config.voiceAck || !ACK_CLIPS.length) return;
     // Something is already playing — a reply, or the stall clip. Never stack.
     if (this.audio) return;
     // Same gates as the stall clip: text-only asked for no sound at all, and a
@@ -1224,13 +1237,16 @@ class Session {
     this.ending = true;
     this.ackOnly = true;
     this.speaking = true;
-    this.outQueue = Buffer.concat([this.outQueue, ACK_CLIP]);
+    this.lastAck = pickAckClip(this.lastAck);
+    const clip = ACK_CLIPS[this.lastAck];
+    this.outQueue = Buffer.concat([this.outQueue, clip.pcm]);
     this.playbackResumes = 0;
     this.player.play(createAudioResource(this.audio, { inputType: StreamType.Raw }));
     this.outTick = setInterval(() => this.pumpOut(), TICK_MS);
-    if (ACK_CLIP_TEXT) this.transcript?.writeText(config.assistantLabel, ACK_CLIP_TEXT);
+    if (clip.text) this.transcript?.writeText(config.assistantLabel, clip.text);
     log.info('  voice: ack clip playing', {
-      clipMs: Math.round(ACK_CLIP.length / ((DISCORD_RATE * DISCORD_CH * 2) / 1000)),
+      clip: clip.text,
+      clipMs: Math.round(clip.pcm.length / ((DISCORD_RATE * DISCORD_CH * 2) / 1000)),
     });
   }
 
@@ -2368,6 +2384,8 @@ module.exports = {
   // Exported for unit tests: the wire shape is the whole fix — the switch is
   // ignored by the server when it sits anywhere else.
   sessionUpdate,
+  // Exported for unit tests: the no-repeat rotation of the ack cues.
+  pickAckClip,
   sessions,
   transcriptFor,
   liveSessionFor,
