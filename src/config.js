@@ -353,10 +353,14 @@ const config = {
   // when the wait is treated as one worth narrating.
   voiceStallThresholdMs: parseInt(process.env.VOICE_STALL_THRESHOLD_MS || '8000', 10),
 
-  // Play a short backchannel ("Ah.", "Mm-hm.", "Hmm.", "Uh-huh.") the moment an addressed spoken turn is transcribed, so
-  // the speaker knows it reached the assistant before any model time is spent
+  // Say a short "Got it." when an addressed spoken turn's answer has not
+  // started within voiceAckDelayMs, so the speaker knows it was heard
   // (src/ack-clips/). On by default; VOICE_ACK=0 turns it off.
   voiceAck: flag(process.env.VOICE_ACK, true),
+  // How long the ack cue waits for answer audio before speaking. A reply that
+  // starts within this window (the front tier answers chit-chat in well under
+  // a second) gets no cue in front of it.
+  voiceAckDelayMs: parseInt(process.env.VOICE_ACK_DELAY_MS || '700', 10),
 
   build: {
     version: process.env.BUILD_GIT_VERSION || 'dev',

@@ -186,16 +186,16 @@ function sessionUpdate(interruptResponse) {
 }
 
 /**
- * The acknowledgment cues — short backchannels ("Ah.", "Mm-hm.", "Hmm.", "Uh-huh.")
- * in the assistant's own voice, one played the moment an addressed turn is
- * transcribed so the speaker knows it reached the assistant before any model
- * time is spent. Pre-rendered by tools/make-stall-clip.py (second argument is
- * the line) into src/ack-clips/<name>.pcm with a .txt sidecar, for the same
- * reason as the stall clip: it must cost nothing at the moment it is needed.
+ * The acknowledgment cue — "Got it." in the assistant's own voice, played when
+ * an addressed turn's answer has not started within voiceAckDelayMs, so the
+ * speaker knows it was heard. Pre-rendered by tools/make-stall-clip.py (second
+ * argument is the line) into src/ack-clips/<name>.pcm with a .txt sidecar, for
+ * the same reason as the stall clip: it must cost nothing when it is needed.
  *
- * Several, rotated, because one identical sound on every turn reads as a
- * machine (chosen live on 2026-10-09). An empty or missing directory → no cue,
- * the same degrade-don't-fail posture as the stall clip.
+ * A real word, not a hum: "Hmm."/"Mm-hm."/"Ah."/"Uh-huh." were tried live on
+ * 2026-10-09 and judged strange or annoying. The loader still takes a set and
+ * rotates it, so adding a variant is dropping a file in. An empty or missing
+ * directory → no cue, the same degrade-don't-fail posture as the stall clip.
  */
 const ACK_CLIPS = (() => {
   const dir = path.join(__dirname, 'ack-clips');
@@ -905,11 +905,15 @@ class Session {
         // threshold while the verdict was unknown is narrated NOW, which is
         // the earliest moment the bot can know an answer is actually owed.
         if (this.answering && this.stallDetected) this.speakStallClip();
-        // Acknowledge the turn at once — "heard you" — before any model time.
+        // Acknowledge the turn — "heard you" — but only if the answer is not
+        // already on its way: the cue waits voiceAckDelayMs and is dropped
+        // when answer audio arrives first. A front-tier reply in well under a
+        // second needs no cue in front of it (heard live 2026-10-09: a cue
+        // before a fast "Hello." is noise); a multi-second Claude turn does.
         // After the stall clip on purpose: on a warm-up turn whose transcript
         // was itself late, the stall clip already owns the stream and says
         // more, and speakAckClip() no-ops on a live stream.
-        if (this.answering) this.speakAckClip();
+        if (this.answering) this.scheduleAckClip();
         if (this.answering) this.showTyping();
         else log.debug('  voice: not addressed, no typing indicator');
         break;
@@ -1215,8 +1219,8 @@ class Session {
   }
 
   /**
-   * Speak one acknowledgment cue ("Mm-hm.", …) the moment an addressed turn is
-   * transcribed.
+   * Speak the acknowledgment cue ("Got it.") — reached from scheduleAckClip()
+   * once an addressed turn's answer has not started within voiceAckDelayMs.
    *
    * Unlike the stall clip, the stream it opens CLOSES ITSELF once the clip has
    * drained (`ending` set up front): a turn that is never answered must not
@@ -1225,6 +1229,26 @@ class Session {
    * (`ackOnly`), so the answer follows the cue without a gap and the stream
    * then lives as long as the reply does.
    */
+  scheduleAckClip() {
+    this.clearAckTimer();
+    this.turnAudioSeen = false;
+    this.ackTimer = setTimeout(() => {
+      this.ackTimer = null;
+      // The answer already started — or already finished and ended the turn
+      // (`answering` lowered on response.done): nothing to acknowledge.
+      if (!this.answering || this.turnAudioSeen) return;
+      this.speakAckClip();
+    }, config.voiceAckDelayMs);
+    this.ackTimer.unref?.();
+  }
+
+  clearAckTimer() {
+    if (this.ackTimer) {
+      clearTimeout(this.ackTimer);
+      this.ackTimer = null;
+    }
+  }
+
   speakAckClip() {
     if (!config.voiceAck || !ACK_CLIPS.length) return;
     // Something is already playing — a reply, or the stall clip. Never stack.
@@ -1275,6 +1299,10 @@ class Session {
     // Real TTS audio has now reached this session, so the pipeline is warm and
     // the stall clip's "getting the audio ready" is no longer true.
     this.heardReply = true;
+    // Answer audio is here: a pending ack cue has nothing left to say.
+    this.turnAudioSeen = true;
+    clearTimeout(this.ackTimer);
+    this.ackTimer = null;
     this.outQueue = Buffer.concat([this.outQueue, up(chunk)]);
 
     // First frame of the turn: the wait is over. Reported BEFORE the guard
@@ -1396,6 +1424,8 @@ class Session {
     // is over, and a clock left armed would report the next turn's audio
     // against the abandoned utterance's start.
     this.clearStallClock();
+    clearTimeout(this.ackTimer);
+    this.ackTimer = null;
     clearInterval(this.outTick);
     this.outTick = null;
     this.outQueue = Buffer.alloc(0);

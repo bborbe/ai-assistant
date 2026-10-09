@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: the acknowledgment cue is now a single "Got it." and plays only when the answer has not started within `VOICE_ACK_DELAY_MS` (default 700ms) — a fast front-tier reply comes out with no cue in front of it. The hum-type cues ("Ah.", "Mm-hm.", "Hmm.", "Uh-huh.") were judged strange or annoying in a live call and are removed.
+
 ## v0.60.0
 
 - feat: play a short backchannel ("Ah.", "Mm-hm.", "Hmm." or "Uh-huh.", rotated, never the same twice in a row) in the assistant's own voice the moment an addressed spoken turn is transcribed, so the speaker knows it was heard before any model time is spent. The clips are pre-rendered (`src/ack-clips/*.pcm`, via `tools/make-stall-clip.py <out> "<line>"`), never play on top of other audio, stays silent in text-only mode and on cancelled turns, and is switched off with `VOICE_ACK=0`.

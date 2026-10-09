@@ -2563,7 +2563,7 @@ test('speakAckClip queues the cue on a self-closing stream', () => {
   assert.equal(fake.ending, true, 'an unanswered turn must not leave the ring lit');
   assert.equal(fake.ackOnly, true);
   assert.ok(
-    fake._transcriptWrites.some((w) => ['Ah.', 'Mm-hm.', 'Hmm.', 'Uh-huh.'].includes(w.text)),
+    fake._transcriptWrites.some((w) => w.text === 'Got it.'),
     'the cue is recorded as said',
   );
   Session.prototype.stopAudio.call(fake);
@@ -2603,24 +2603,54 @@ test('a reply arriving during the cue takes the stream over', () => {
   Session.prototype.stopAudio.call(fake);
 });
 
-test('an addressed transcription plays the cue; an unaddressed one does not', () => {
-  const addressed = fakeOnEventTarget({ solo: true, speakAckClip: Session.prototype.speakAckClip });
+test('an addressed turn gets the cue only after the delay, an unaddressed one never', async (t) => {
+  t.mock.property(config, 'voiceAckDelayMs', 5);
+  const addressed = fakeOnEventTarget({ solo: true });
   onCtx(addressed, {
     type: 'conversation.item.input_audio_transcription.completed',
     transcript: 'what is the plan',
   });
-  assert.ok(addressed.outQueue.length > 0, 'solo turn is addressed: cue queued');
+  assert.equal(addressed.outQueue.length, 0, 'not at transcription time — the answer may be fast');
+  await new Promise((r) => setTimeout(r, 30));
+  assert.ok(addressed.outQueue.length > 0, 'no answer audio within the delay: cue queued');
   Session.prototype.stopAudio.call(addressed);
 
-  const unaddressed = fakeOnEventTarget({
-    solo: false,
-    speakAckClip: Session.prototype.speakAckClip,
-  });
+  const unaddressed = fakeOnEventTarget({ solo: false });
   onCtx(unaddressed, {
     type: 'conversation.item.input_audio_transcription.completed',
     transcript: 'talking to a colleague',
   });
+  await new Promise((r) => setTimeout(r, 30));
   assert.equal(unaddressed.outQueue.length, 0, 'no cue for a remark not meant for the bot');
+});
+
+// A fast front-tier reply must come out clean, with no cue in front of it.
+test('answer audio arriving within the delay cancels the cue', async (t) => {
+  t.mock.property(config, 'voiceAckDelayMs', 20);
+  const fake = fakeOnEventTarget({ solo: true });
+  onCtx(fake, {
+    type: 'conversation.item.input_audio_transcription.completed',
+    transcript: 'hello',
+  });
+  Session.prototype.pushAudio.call(fake, Buffer.alloc(320));
+  await new Promise((r) => setTimeout(r, 50));
+  assert.ok(
+    !fake._transcriptWrites.some((w) => w.text === 'Got it.'),
+    'the answer was already playing — the cue must not be spoken',
+  );
+  Session.prototype.stopAudio.call(fake);
+});
+
+test('a turn that ended before the delay gets no cue', async (t) => {
+  t.mock.property(config, 'voiceAckDelayMs', 5);
+  const fake = fakeOnEventTarget({ solo: true });
+  onCtx(fake, {
+    type: 'conversation.item.input_audio_transcription.completed',
+    transcript: 'hello',
+  });
+  fake.answering = false; // response.done already lowered it
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(fake.outQueue.length, 0);
 });
 
 test('pickAckClip never repeats the last cue', () => {
@@ -2634,13 +2664,11 @@ test('pickAckClip never repeats the last cue', () => {
   assert.equal(voice.pickAckClip(undefined, 1), 0, 'a single cue is always that cue');
 });
 
-test('speakAckClip rotates through the cue set', () => {
+test('the single cue is always "Got it."', () => {
   const fake = fakeOnEventTarget();
-  const said = [];
-  for (let k = 0; k < 6; k++) {
+  for (let k = 0; k < 3; k++) {
     Session.prototype.speakAckClip.call(fake);
-    said.push(fake._transcriptWrites.at(-1).text);
+    assert.equal(fake._transcriptWrites.at(-1).text, 'Got it.');
     Session.prototype.stopAudio.call(fake);
   }
-  for (let k = 1; k < said.length; k++) assert.notEqual(said[k], said[k - 1], said.join(' '));
 });
