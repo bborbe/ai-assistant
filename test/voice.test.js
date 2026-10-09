@@ -20,6 +20,9 @@ process.env.VOICE_STATE_PATH = pathMod.join(STATE_DIR, 'live-call.json');
 // the first require of config. Without this, every `voice:G1` assertion fails
 // with a `:personal` suffix it never asked for.
 delete process.env.IDENTITY;
+// Same trap for the ack cue: an identity env enabling VOICE_ACK would make the
+// default-off assertion below test the operator's env, not the code's default.
+delete process.env.VOICE_ACK;
 delete require.cache[require.resolve('../src/config')];
 const voice = require('../src/voice');
 const config = require('../src/config');
@@ -2554,8 +2557,17 @@ test('onPlayerIdle gives up after repeated resumes', () => {
   assert.equal(fake.outQueue.length, 0);
 });
 
-// The acknowledgment cues: a rotated backchannel the moment an addressed turn is transcribed.
-test('speakAckClip queues the cue on a self-closing stream', () => {
+// The acknowledgment cue: off by default, opted into per identity with VOICE_ACK=1.
+test('speakAckClip queues nothing with the default config (VOICE_ACK off)', () => {
+  assert.equal(config.voiceAck, false, 'the cue is opt-in');
+  const fake = fakeOnEventTarget();
+  Session.prototype.speakAckClip.call(fake);
+  assert.equal(fake.audio, null);
+  assert.equal(fake.outQueue.length, 0);
+});
+
+test('speakAckClip queues the cue on a self-closing stream', (t) => {
+  t.mock.property(config, 'voiceAck', true);
   const fake = fakeOnEventTarget();
   Session.prototype.speakAckClip.call(fake);
   assert.notEqual(fake.audio, null, 'the cue needs a live stream');
@@ -2570,13 +2582,15 @@ test('speakAckClip queues the cue on a self-closing stream', () => {
   assert.equal(fake.ackOnly, false);
 });
 
-test('speakAckClip never stacks on live playback', () => {
+test('speakAckClip never stacks on live playback', (t) => {
+  t.mock.property(config, 'voiceAck', true);
   const fake = fakeOnEventTarget({ audio: { end: () => {} } });
   Session.prototype.speakAckClip.call(fake);
   assert.equal(fake.outQueue.length, 0);
 });
 
-test('speakAckClip stays silent in text-only mode and on a cancelled turn', () => {
+test('speakAckClip stays silent in text-only mode and on a cancelled turn', (t) => {
+  t.mock.property(config, 'voiceAck', true);
   for (const o of [{ speechOff: true }, { cancelled: true }]) {
     const fake = fakeOnEventTarget(o);
     Session.prototype.speakAckClip.call(fake);
@@ -2592,7 +2606,8 @@ test('speakAckClip honours VOICE_ACK=0', (t) => {
   assert.equal(fake.audio, null);
 });
 
-test('a reply arriving during the cue takes the stream over', () => {
+test('a reply arriving during the cue takes the stream over', (t) => {
+  t.mock.property(config, 'voiceAck', true);
   const fake = fakeOnEventTarget();
   Session.prototype.speakAckClip.call(fake);
   const stream = fake.audio;
@@ -2604,6 +2619,7 @@ test('a reply arriving during the cue takes the stream over', () => {
 });
 
 test('an addressed turn gets the cue only after the delay, an unaddressed one never', async (t) => {
+  t.mock.property(config, 'voiceAck', true);
   t.mock.property(config, 'voiceAckDelayMs', 5);
   const addressed = fakeOnEventTarget({ solo: true });
   onCtx(addressed, {
@@ -2626,6 +2642,7 @@ test('an addressed turn gets the cue only after the delay, an unaddressed one ne
 
 // A fast front-tier reply must come out clean, with no cue in front of it.
 test('answer audio arriving within the delay cancels the cue', async (t) => {
+  t.mock.property(config, 'voiceAck', true);
   t.mock.property(config, 'voiceAckDelayMs', 20);
   const fake = fakeOnEventTarget({ solo: true });
   onCtx(fake, {
@@ -2642,6 +2659,7 @@ test('answer audio arriving within the delay cancels the cue', async (t) => {
 });
 
 test('a turn that ended before the delay gets no cue', async (t) => {
+  t.mock.property(config, 'voiceAck', true);
   t.mock.property(config, 'voiceAckDelayMs', 5);
   const fake = fakeOnEventTarget({ solo: true });
   onCtx(fake, {
@@ -2664,7 +2682,8 @@ test('pickAckClip never repeats the last cue', () => {
   assert.equal(voice.pickAckClip(undefined, 1), 0, 'a single cue is always that cue');
 });
 
-test('the single cue is always "Got it."', () => {
+test('the single cue is always "Got it."', (t) => {
+  t.mock.property(config, 'voiceAck', true);
   const fake = fakeOnEventTarget();
   for (let k = 0; k < 3; k++) {
     Session.prototype.speakAckClip.call(fake);

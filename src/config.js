@@ -355,12 +355,14 @@ const config = {
 
   // Say a short "Got it." when an addressed spoken turn's answer has not
   // started within voiceAckDelayMs, so the speaker knows it was heard
-  // (src/ack-clips/). On by default; VOICE_ACK=0 turns it off.
-  voiceAck: flag(process.env.VOICE_ACK, true),
+  // (src/ack-clips/). Off by default; VOICE_ACK=1 turns it on per identity
+  // (e.g. in that identity's .env).
+  voiceAck: flag(process.env.VOICE_ACK, false),
   // How long the ack cue waits for answer audio before speaking. A reply that
-  // starts within this window (the front tier answers chit-chat in well under
-  // a second) gets no cue in front of it.
-  voiceAckDelayMs: parseInt(process.env.VOICE_ACK_DELAY_MS || '700', 10),
+  // starts within this window gets no cue in front of it. Live measurement on
+  // 2026-10-09 put front-tier (gemma) turns at 1.3–2.7s to first audio and the
+  // shim's holding line at ~1.4s, so 3s keeps those clean.
+  voiceAckDelayMs: parseInt(process.env.VOICE_ACK_DELAY_MS || '3000', 10),
 
   build: {
     version: process.env.BUILD_GIT_VERSION || 'dev',
