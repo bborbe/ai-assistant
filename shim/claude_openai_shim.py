@@ -1160,6 +1160,12 @@ _HEDGE = re.compile(r"""(
     | \bi\s+(do\s+not|don'?t|can'?t|cannot)\s+have\s+the\s+(capability|ability|capacity)\b
     | \bi\s+(am\s+not|was\s+not)\s+(able|equipped|capable)\b
     | \b(not|isn'?t)\s+(sure|clear)\s+what\s+you'?re?\s+(referring|talking)\b
+    # SCOPE refusals, added 2026-10-09: "I can only answer from the conversation
+    # itself." was spoken twice in a Star Citizen call — once to a typed rename
+    # request — and Claude never heard either. "only" carried the refusal, which
+    # no verb-list branch above can see.
+    | \bi\s+(can|could)\s+only\s+(answer|respond|help|talk|go|work)\b
+    | \b(outside|beyond)\s+(of\s+)?(what\s+i\s+can|my\s+(scope|reach|abilities))\b
 )""", re.I | re.X)
 
 _front_history: dict[str, deque] = defaultdict(lambda: deque(maxlen=FRONT_HISTORY))
@@ -3903,9 +3909,13 @@ class Handler(BaseHTTPRequestHandler):
         # Front tier decides, proxy executes. The front model either answers pure
         # conversation itself — which never wakes Claude — or asks for the tool
         # and gives us a pause-filler to speak while Claude works. Voice only: a
-        # text surface has no latency problem worth a second model.
+        # text surface has no latency problem worth a second model — and a
+        # turn TYPED during a call is a text turn that happens to ride the voice
+        # pipeline. Typed messages always go to Claude (operator rule,
+        # 2026-10-09): the front model answered a typed rename request with a
+        # refusal and the request never reached Claude.
         pre_spoken = False
-        if voice and FRONT_API_KEY:
+        if voice and not typed_turn and FRONT_API_KEY:
             # Three ways, cheapest first.
             #
             #   recognised chat  -> front answers                       ~1.0s

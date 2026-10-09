@@ -1600,6 +1600,9 @@ class HedgeConsult(unittest.TestCase):
             "I do not have the capability to ask Claude Code.",
             "I don't have the ability to do that.",
             "I am not able to look that up.",
+            # 2026-10-09 Star Citizen call, to a typed rename request.
+            "I can only answer from the conversation itself.",
+            "I can only help with what was said in this conversation.",
         ):
             with self.subTest(reply=reply):
                 self.assertTrue(shim._HEDGE.search(reply))
@@ -1622,6 +1625,15 @@ class HedgeConsult(unittest.TestCase):
         ):
             with self.subTest(reply=reply):
                 self.assertFalse(shim._HEDGE.search(reply))
+
+
+class TypedTurnSkipsFrontTier(unittest.TestCase):
+    """A turn typed during a call must never be answered by the front model."""
+
+    def test_front_gate_excludes_typed_turns(self):
+        src = pathlib.Path(shim.__file__).read_text()
+        self.assertIn("if voice and not typed_turn and FRONT_API_KEY:", src)
+        self.assertNotIn("if voice and FRONT_API_KEY:", src)
 
 
 class ControlRouteAuth(unittest.TestCase):
