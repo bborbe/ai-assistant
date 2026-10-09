@@ -51,6 +51,16 @@ const OUT_FRAME = (DISCORD_RATE * DISCORD_CH * 2 * TICK_MS) / 1000;
  */
 const RUN_ON = /[.!?][A-Z]/;
 const SILENCE = Buffer.alloc(OUT_FRAME);
+// How many consecutive 20ms frames the player may find empty before it gives
+// up on the resource. @discordjs/voice defaults to 5 (100ms) — and the out-pump
+// writes exactly one frame per tick with no lead, so any event-loop pause of
+// 100ms starved it: the player stopped mid-reply, went idle, and every later
+// frame was written into a stream nobody read. Observed 2026-10-09: a fully
+// synthesised 15s reply (`Response done (status=completed)`, no barge-in) was
+// heard only to its second sentence. A normally ENDED stream still stops the
+// player at once via checkPlayable(), so this only lengthens tolerance for a
+// stall, never the tail of a finished reply.
+const MAX_MISSED_FRAMES = 250; // 5s
 
 // Discord's typing indicator lapses after ~10s, so it has to be re-sent while
 // an answer is still being produced. The cap bounds a response that never
@@ -154,6 +164,26 @@ const STALL_CLIP_TEXT = (() => {
     return '';
   }
 })();
+
+/**
+ * The `session.update` sent on connect — see its call site in connectS2S().
+ * `turn_detection` is nested under `audio.input` because that is the only
+ * place speech-to-speech reads it; the top-level (beta) position is accepted
+ * and silently ignored.
+ */
+function sessionUpdate(interruptResponse) {
+  return {
+    type: 'session.update',
+    session: {
+      type: 'realtime',
+      audio: {
+        input: {
+          turn_detection: { type: 'server_vad', interrupt_response: interruptResponse },
+        },
+      },
+    },
+  };
+}
 
 /** One live voice session: Discord audio <-> speech-to-speech. */
 class Session {
@@ -297,11 +327,18 @@ class Session {
     this.flushTimers = new Map(); // userId -> pending flush
     this.names = new Map(); // userId -> display name
 
-    this.player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play } });
-    this.conn.subscribe(this.player);
-    this.player.on('idle', () => {
-      this.speaking = false;
+    this.player = createAudioPlayer({
+      behaviors: { noSubscriber: NoSubscriberBehavior.Play, maxMissedFrames: MAX_MISSED_FRAMES },
     });
+    this.conn.subscribe(this.player);
+    this.player.on('idle', () => this.onPlayerIdle());
+    // Restarts spent by onPlayerIdle() on the current reply — bounds a resource
+    // that idles the moment it is played from looping forever.
+    this.playbackResumes = 0;
+    // False until the first real TTS audio of this s2s session arrives. Gates
+    // the stall clip, whose "getting the audio ready" is only true while the
+    // pipeline is still warming up — see speakStallClip().
+    this.heardReply = false;
 
     this.conn.receiver.speaking.on('start', (userId) => {
       clearTimeout(this.flushTimers.get(userId)); // resumed — keep accumulating
@@ -494,15 +531,15 @@ class Session {
       // — a message that reads like the event is unsupported when it is really
       // a validation failure. Verified against the openai SessionUpdateEvent
       // model directly: without `session.type` it does not validate.
-      ws.send(
-        JSON.stringify({
-          type: 'session.update',
-          session: {
-            type: 'realtime',
-            turn_detection: { type: 'server_vad', interrupt_response: config.interruptResponse },
-          },
-        }),
-      );
+      // NESTED under `audio.input`, the GA shape. A top-level `turn_detection`
+      // (the beta shape) validates too, but lands in the model's extras and is
+      // never read — speech-to-speech reads `session.audio.input.turn_detection`
+      // (runtime_config.py interrupt_response_enabled) and defaults a missing
+      // one to TRUE. So the switch logged as off while the server kept
+      // cancelling: observed 2026-10-09, two finished answers flushed unplayed
+      // ("speech during response: cancelled, queue flushed") with
+      // INTERRUPT_RESPONSE unset.
+      ws.send(JSON.stringify(sessionUpdate(config.interruptResponse)));
       log.info('  voice: interrupt-on-speech', { enabled: config.interruptResponse });
     });
     // Object, not a bare string: the logger spreads its second argument, so a
@@ -740,6 +777,10 @@ class Session {
       // (which sends no session.created), so claiming a completed handover
       // belongs here, where a rejection can never have preceded it.
       case 'session.created':
+        // A fresh s2s session — first connect, or a reconnect after s2s
+        // restarted and reloaded its models — is warming up again, so the
+        // stall clip's "getting the audio ready" is true once more.
+        this.heardReply = false;
         this.onSlotFreed();
         log.info('  voice: s2s session accepted', { sessionId: e.session?.id });
         break;
@@ -1085,6 +1126,13 @@ class Session {
   speakStallClip() {
     // Playback is already live, so the wait this was going to fill is over.
     if (this.audio || !STALL_CLIP.length) return;
+    // The clip SAYS "still getting the audio ready", which is only true while
+    // the pipeline warms up — the first turn after a join, with models still
+    // loading. Once a real reply has played, a slow turn means the assistant
+    // is thinking, and the shim's own progress lines already cover that; the
+    // clip there misreports what is happening and stacks a second filler on
+    // top of the shim's.
+    if (this.heardReply) return;
     // text-only: the shim will never send audio, so the stall this clip exists
     // to cover never ends — it is the mode, not a slow turn. Speaking into it
     // would put the only sound of the call into a conversation that asked for
@@ -1102,6 +1150,7 @@ class Session {
     this.ending = false;
     this.speaking = true;
     this.outQueue = Buffer.concat([this.outQueue, STALL_CLIP]);
+    this.playbackResumes = 0;
     this.player.play(createAudioResource(this.audio, { inputType: StreamType.Raw }));
     this.outTick = setInterval(() => this.pumpOut(), TICK_MS);
     // Recorded under the assistant's own label, exactly as a spoken reply is —
@@ -1138,6 +1187,9 @@ class Session {
     // will hear. Cleared on response.done / response.created (see below), so
     // the next genuine reply plays normally.
     if (this.cancelled) return;
+    // Real TTS audio has now reached this session, so the pipeline is warm and
+    // the stall clip's "getting the audio ready" is no longer true.
+    this.heardReply = true;
     this.outQueue = Buffer.concat([this.outQueue, up(chunk)]);
 
     // First frame of the turn: the wait is over. Reported BEFORE the guard
@@ -1153,6 +1205,7 @@ class Session {
     this.audio = new PassThrough();
     this.ending = false;
     this.speaking = true;
+    this.playbackResumes = 0;
     log.debug('  voice: playback started');
     this.player.play(createAudioResource(this.audio, { inputType: StreamType.Raw }));
     // Paced writer, mirroring the input pump above. Writing chunks straight
@@ -1208,6 +1261,40 @@ class Session {
     this.audio = null;
     this.ending = false;
     log.debug('  voice: playback finished');
+  }
+
+  /**
+   * The player went idle. Normal when the stream ended (finishAudio) or was
+   * abandoned (stopAudio) — both drop `this.audio` before the player idles.
+   *
+   * With `this.audio` still set, the player gave up on a reply that is still
+   * being written: it starved past MAX_MISSED_FRAMES. Before this existed the
+   * pump kept writing into the dead stream and the rest of the reply vanished
+   * without a log line. Re-attach the queued remainder to a fresh resource
+   * instead; the frames stranded in the old stream are milliseconds, the
+   * queue is the rest of the answer.
+   */
+  onPlayerIdle() {
+    this.speaking = false;
+    if (!this.audio) return;
+    const queuedMs = Math.round(this.outQueue.length / ((DISCORD_RATE * DISCORD_CH * 2) / 1000));
+    if (this.playbackResumes >= 3) {
+      log.warn('  voice: player went idle mid-reply — giving up', { queuedMs });
+      this.stopAudio();
+      return;
+    }
+    this.playbackResumes++;
+    log.warn('  voice: player went idle mid-reply — resuming', {
+      queuedMs,
+      ending: this.ending,
+      resumes: this.playbackResumes,
+    });
+    try {
+      this.audio.destroy();
+    } catch {}
+    this.audio = new PassThrough();
+    this.speaking = true;
+    this.player.play(createAudioResource(this.audio, { inputType: StreamType.Raw }));
   }
 
   /** Abandon playback mid-stream — barge-in, or teardown. */
@@ -2200,6 +2287,9 @@ module.exports = {
   join,
   leave,
   evictGhost,
+  // Exported for unit tests: the wire shape is the whole fix — the switch is
+  // ignored by the server when it sits anywhere else.
+  sessionUpdate,
   sessions,
   transcriptFor,
   liveSessionFor,
