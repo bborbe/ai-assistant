@@ -353,7 +353,7 @@ const config = {
   // when the wait is treated as one worth narrating.
   voiceStallThresholdMs: parseInt(process.env.VOICE_STALL_THRESHOLD_MS || '8000', 10),
 
-  // Play a short "Hmm." the moment an addressed spoken turn is transcribed, so
+  // Play a short "Okay." the moment an addressed spoken turn is transcribed, so
   // the speaker knows it reached the assistant before any model time is spent
   // (src/ack-clip.pcm). On by default; VOICE_ACK=0 turns it off.
   voiceAck: flag(process.env.VOICE_ACK, true),

@@ -66,7 +66,7 @@ SETUP_KWARGS = {
 def main() -> int:
     out_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("src/stall-clip.pcm")
     # Optional second argument: the line to speak. The same renderer makes the
-    # acknowledgment clip (src/ack-clip.pcm, "Hmm.") — one voice config, one
+    # acknowledgment clip (src/ack-clip.pcm, "Okay.") — one voice config, one
     # int16 guard, rather than a second script that could drift from this one.
     line = sys.argv[2] if len(sys.argv) > 2 else LINE
 

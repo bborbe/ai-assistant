@@ -2554,7 +2554,7 @@ test('onPlayerIdle gives up after repeated resumes', () => {
   assert.equal(fake.outQueue.length, 0);
 });
 
-// The acknowledgment cue: "Hmm." the moment an addressed turn is transcribed.
+// The acknowledgment cue: "Okay." the moment an addressed turn is transcribed.
 test('speakAckClip queues the cue on a self-closing stream', () => {
   const fake = fakeOnEventTarget();
   Session.prototype.speakAckClip.call(fake);
@@ -2563,7 +2563,7 @@ test('speakAckClip queues the cue on a self-closing stream', () => {
   assert.equal(fake.ending, true, 'an unanswered turn must not leave the ring lit');
   assert.equal(fake.ackOnly, true);
   assert.ok(
-    fake._transcriptWrites.some((w) => w.text === 'Hmm.'),
+    fake._transcriptWrites.some((w) => w.text === 'Okay.'),
     'the cue is recorded as said',
   );
   Session.prototype.stopAudio.call(fake);

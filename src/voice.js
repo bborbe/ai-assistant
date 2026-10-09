@@ -186,13 +186,14 @@ function sessionUpdate(interruptResponse) {
 }
 
 /**
- * The acknowledgment cue — a short "Hmm." in the assistant's own voice, played
+ * The acknowledgment cue — a short "Okay." in the assistant's own voice, played
  * the moment an addressed turn is transcribed so the speaker knows it reached
  * the assistant before any model time is spent. Pre-rendered by
  * tools/make-stall-clip.py (second argument is the line) for the same reason as
  * the stall clip: it must cost nothing at the moment it is needed.
  *
- * "Hmm." rather than "okay": "okay" reads as the start of the answer.
+ * "Okay." rather than "Hmm.": the TTS renders a non-word like "Hmm" oddly —
+ * heard live on 2026-10-09 as "strange" — while a real word comes out clean.
  * Missing file → empty buffer → no cue, same degrade-don't-fail posture.
  */
 const ACK_CLIP = (() => {
@@ -1201,7 +1202,7 @@ class Session {
   }
 
   /**
-   * Speak the acknowledgment cue ("Hmm.") the moment an addressed turn is
+   * Speak the acknowledgment cue ("Okay.") the moment an addressed turn is
    * transcribed.
    *
    * Unlike the stall clip, the stream it opens CLOSES ITSELF once the clip has
