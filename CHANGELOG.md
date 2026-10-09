@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.60.3
 
 - fix(shim): per-identity `transcript_dir` — the shared shim told every voice session the launching env's transcript folder, so Boss read Personal's transcript while its bot wrote under Boss/
 - test(shim): point the suite at a non-existent config so the operator's live `config.yaml` no longer fails 4 tests locally
