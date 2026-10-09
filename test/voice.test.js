@@ -2444,3 +2444,112 @@ test('an unreadable bot id cannot make the bot leave on its own arrival', () => 
     'an unreadable member list must fail safe, not abandon the call',
   );
 });
+
+// Barge-in switch. speech-to-speech reads turn_detection ONLY at
+// session.audio.input; the top-level position validates but is ignored, and a
+// missing one defaults to interrupting — so INTERRUPT_RESPONSE=0 was never in
+// force and finished answers were flushed unplayed (observed 2026-10-09).
+test('sessionUpdate nests turn_detection under audio.input', () => {
+  const msg = voice.sessionUpdate(false);
+  assert.equal(msg.type, 'session.update');
+  assert.equal(msg.session.type, 'realtime');
+  assert.equal(msg.session.turn_detection, undefined, 'the ignored top-level position');
+  assert.deepEqual(msg.session.audio.input.turn_detection, {
+    type: 'server_vad',
+    interrupt_response: false,
+  });
+  assert.equal(
+    voice.sessionUpdate(true).session.audio.input.turn_detection.interrupt_response,
+    true,
+  );
+});
+
+// "Getting the audio ready" is a warm-up line. Once a real reply has played,
+// a slow turn is thinking, not warming up, and the clip must stay quiet.
+test('speakStallClip is silent once a real reply has played in this session', () => {
+  const fake = fakeOnEventTarget({ stallStartedAt: Date.now() - 8100, heardReply: true });
+  Session.prototype.speakStallClip.call(fake);
+  assert.equal(fake.outQueue.length, 0, 'no clip may be queued after warm-up');
+  assert.equal(fake.audio, null, 'no pump may be opened');
+});
+
+test('pushAudio marks the session as having heard a real reply', () => {
+  const fake = fakeOnEventTarget({ audio: { write: () => {} }, heardReply: false });
+  Session.prototype.pushAudio.call(fake, Buffer.alloc(320));
+  assert.equal(fake.heardReply, true);
+});
+
+test('session.created re-arms the warm-up clip', () => {
+  const fake = fakeOnEventTarget({
+    heardReply: true,
+    onSlotFreed: Session.prototype.onSlotFreed,
+  });
+  Session.prototype.onEvent.call(
+    fake,
+    JSON.stringify({ type: 'session.created', session: { id: 'sess-3' } }),
+  );
+  assert.equal(fake.heardReply, false, 'a fresh s2s session is warming up again');
+});
+
+// The player gives up on a starved resource and goes idle. With the reply
+// still being written, the remainder must be re-attached, not written into a
+// stream nobody reads.
+test('onPlayerIdle resumes playback when a reply is still live', () => {
+  let played = 0;
+  let destroyed = false;
+  const fake = fakeOnEventTarget({
+    audio: {
+      destroy: () => {
+        destroyed = true;
+      },
+    },
+    outQueue: Buffer.alloc(OUT_FRAME_BYTES * 10),
+    playbackResumes: 0,
+  });
+  fake.player = {
+    play: () => {
+      played++;
+    },
+    stop: () => {},
+  };
+  Session.prototype.onPlayerIdle.call(fake);
+  assert.equal(destroyed, true, 'the abandoned stream is released');
+  assert.notEqual(fake.audio, null, 'a fresh stream carries the rest');
+  assert.equal(played, 1, 'the fresh stream is handed to the player');
+  assert.equal(fake.speaking, true);
+  assert.equal(fake.outQueue.length, OUT_FRAME_BYTES * 10, 'the queued remainder is kept');
+  fake.audio.destroy();
+});
+
+test('onPlayerIdle is a no-op after a normal end', () => {
+  let played = 0;
+  const fake = fakeOnEventTarget({ audio: null, speaking: true });
+  fake.player = {
+    play: () => {
+      played++;
+    },
+    stop: () => {},
+  };
+  Session.prototype.onPlayerIdle.call(fake);
+  assert.equal(played, 0);
+  assert.equal(fake.speaking, false);
+});
+
+test('onPlayerIdle gives up after repeated resumes', () => {
+  let played = 0;
+  const fake = fakeOnEventTarget({
+    audio: { destroy: () => {} },
+    outQueue: Buffer.alloc(OUT_FRAME_BYTES),
+    playbackResumes: 3,
+  });
+  fake.player = {
+    play: () => {
+      played++;
+    },
+    stop: () => {},
+  };
+  Session.prototype.onPlayerIdle.call(fake);
+  assert.equal(played, 0, 'no further restart');
+  assert.equal(fake.audio, null, 'playback is abandoned cleanly');
+  assert.equal(fake.outQueue.length, 0);
+});
