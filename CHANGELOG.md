@@ -12,6 +12,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 - fix: send `turn_detection` under `session.audio.input` so `INTERRUPT_RESPONSE=0` actually reaches speech-to-speech. The top-level position was accepted and ignored, the server defaulted to interrupting, and a finished answer was flushed unplayed whenever the user spoke before it started.
 - fix: stop a long reply losing its tail. The Discord player gave up after 5 missed frames (100ms) and went idle mid-reply, and the rest of the reply was written into a stream nobody read. Tolerance is now 5s, and an idle player with a reply still queued is resumed on a fresh resource and logged.
+- feat: play a short "Hmm." in the assistant's own voice the moment an addressed spoken turn is transcribed, so the speaker knows it was heard before any model time is spent. The clip is pre-rendered (`src/ack-clip.pcm`, via `tools/make-stall-clip.py <out> "Hmm."`), never plays on top of other audio, stays silent in text-only mode and on cancelled turns, and is switched off with `VOICE_ACK=0`.
 - fix: the "still getting the audio ready" stall clip plays only while the session warms up, before its first real reply. Later slow turns are thinking, which the shim's progress lines already cover.
 
 ## v0.59.0

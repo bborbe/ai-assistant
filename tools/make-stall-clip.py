@@ -65,6 +65,10 @@ SETUP_KWARGS = {
 
 def main() -> int:
     out_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("src/stall-clip.pcm")
+    # Optional second argument: the line to speak. The same renderer makes the
+    # acknowledgment clip (src/ack-clip.pcm, "Hmm.") — one voice config, one
+    # int16 guard, rather than a second script that could drift from this one.
+    line = sys.argv[2] if len(sys.argv) > 2 else LINE
 
     # Left unset, exactly as speech-to-speech's own benchmark does: the handler
     # only stores this event, so setting it would be a guess about semantics
@@ -79,7 +83,7 @@ def main() -> int:
 
     chunks = [
         chunk
-        for chunk in handler.process(TTSInput(text=LINE, language_code="en"))
+        for chunk in handler.process(TTSInput(text=line, language_code="en"))
         if chunk is not None
     ]
     if not chunks:
@@ -118,14 +122,14 @@ def main() -> int:
     # when the clip plays. One source, so what is heard and what is recorded
     # cannot drift; a second copy in the bot would diverge the first time this
     # line changed, and the divergence would be silent.
-    out_path.with_suffix(".txt").write_text(LINE + "\n", encoding="utf-8")
+    out_path.with_suffix(".txt").write_text(line + "\n", encoding="utf-8")
 
     peak = int(np.abs(audio).max())
     print(f"wrote {out_path} — {len(pcm)} bytes, {len(audio) / SAMPLE_RATE:.2f}s @ {SAMPLE_RATE} Hz")
     # Printed every run, and it is the number to check: speech peaks well below
     # full scale, so a peak at or near 32768 means something is clamping.
     print(f"peak={peak} ({peak / 32768:.3f} full scale)")
-    print(f"line: {LINE!r}")
+    print(f"line: {line!r}")
     return 0
 
 

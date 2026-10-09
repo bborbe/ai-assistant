@@ -185,6 +185,33 @@ function sessionUpdate(interruptResponse) {
   };
 }
 
+/**
+ * The acknowledgment cue — a short "Hmm." in the assistant's own voice, played
+ * the moment an addressed turn is transcribed so the speaker knows it reached
+ * the assistant before any model time is spent. Pre-rendered by
+ * tools/make-stall-clip.py (second argument is the line) for the same reason as
+ * the stall clip: it must cost nothing at the moment it is needed.
+ *
+ * "Hmm." rather than "okay": "okay" reads as the start of the answer.
+ * Missing file → empty buffer → no cue, same degrade-don't-fail posture.
+ */
+const ACK_CLIP = (() => {
+  try {
+    return up(fs.readFileSync(path.join(__dirname, 'ack-clip.pcm')));
+  } catch (e) {
+    log.warn('voice: ack clip unavailable, turns will not be acknowledged', { error: e.message });
+    return Buffer.alloc(0);
+  }
+})();
+
+const ACK_CLIP_TEXT = (() => {
+  try {
+    return fs.readFileSync(path.join(__dirname, 'ack-clip.txt'), 'utf8').trim();
+  } catch {
+    return '';
+  }
+})();
+
 /** One live voice session: Discord audio <-> speech-to-speech. */
 class Session {
   constructor(connection, guildId, guildName, channelName, channelId, channel) {
@@ -339,6 +366,9 @@ class Session {
     // the stall clip, whose "getting the audio ready" is only true while the
     // pipeline is still warming up — see speakStallClip().
     this.heardReply = false;
+    // True while the open stream carries only the ack cue (self-closing);
+    // pushAudio() clears it when a reply takes the stream over.
+    this.ackOnly = false;
 
     this.conn.receiver.speaking.on('start', (userId) => {
       clearTimeout(this.flushTimers.get(userId)); // resumed — keep accumulating
@@ -861,6 +891,11 @@ class Session {
         // threshold while the verdict was unknown is narrated NOW, which is
         // the earliest moment the bot can know an answer is actually owed.
         if (this.answering && this.stallDetected) this.speakStallClip();
+        // Acknowledge the turn at once — "heard you" — before any model time.
+        // After the stall clip on purpose: on a warm-up turn whose transcript
+        // was itself late, the stall clip already owns the stream and says
+        // more, and speakAckClip() no-ops on a live stream.
+        if (this.answering) this.speakAckClip();
         if (this.answering) this.showTyping();
         else log.debug('  voice: not addressed, no typing indicator');
         break;
@@ -1166,6 +1201,39 @@ class Session {
   }
 
   /**
+   * Speak the acknowledgment cue ("Hmm.") the moment an addressed turn is
+   * transcribed.
+   *
+   * Unlike the stall clip, the stream it opens CLOSES ITSELF once the clip has
+   * drained (`ending` set up front): a turn that is never answered must not
+   * leave the speaking ring lit. If the answer's first audio arrives while the
+   * clip is still playing, pushAudio() hands the open stream over to the reply
+   * (`ackOnly`), so the answer follows the cue without a gap and the stream
+   * then lives as long as the reply does.
+   */
+  speakAckClip() {
+    if (!config.voiceAck || !ACK_CLIP.length) return;
+    // Something is already playing — a reply, or the stall clip. Never stack.
+    if (this.audio) return;
+    // Same gates as the stall clip: text-only asked for no sound at all, and a
+    // cancelled turn must not reopen the player.
+    if (this.speechOff) return;
+    if (this.cancelled) return;
+    this.audio = new PassThrough();
+    this.ending = true;
+    this.ackOnly = true;
+    this.speaking = true;
+    this.outQueue = Buffer.concat([this.outQueue, ACK_CLIP]);
+    this.playbackResumes = 0;
+    this.player.play(createAudioResource(this.audio, { inputType: StreamType.Raw }));
+    this.outTick = setInterval(() => this.pumpOut(), TICK_MS);
+    if (ACK_CLIP_TEXT) this.transcript?.writeText(config.assistantLabel, ACK_CLIP_TEXT);
+    log.info('  voice: ack clip playing', {
+      clipMs: Math.round(ACK_CLIP.length / ((DISCORD_RATE * DISCORD_CH * 2) / 1000)),
+    });
+  }
+
+  /**
    * Start playback on the FIRST audio chunk, not when the response completes.
    *
    * Waiting for `response.output_audio.done` buffers the whole reply and plays
@@ -1199,6 +1267,13 @@ class Session {
     // Reported before the playback bookkeeping too, so the number is when audio
     // ARRIVED rather than when the player got around to starting.
     this.reportStall();
+
+    // The ack cue's self-closing stream is still draining: the reply takes it
+    // over, so it must stay open through the reply's synthesis gaps.
+    if (this.ackOnly) {
+      this.ackOnly = false;
+      this.ending = false;
+    }
 
     if (this.audio) return;
 
@@ -1260,6 +1335,7 @@ class Session {
     } catch {}
     this.audio = null;
     this.ending = false;
+    this.ackOnly = false;
     log.debug('  voice: playback finished');
   }
 
@@ -1311,6 +1387,7 @@ class Session {
       this.audio = null;
     }
     this.ending = false;
+    this.ackOnly = false;
     try {
       this.player.stop(true);
     } catch {}
