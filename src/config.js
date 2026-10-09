@@ -353,10 +353,16 @@ const config = {
   // when the wait is treated as one worth narrating.
   voiceStallThresholdMs: parseInt(process.env.VOICE_STALL_THRESHOLD_MS || '8000', 10),
 
-  // Play a short backchannel ("Ah.", "Mm-hm.", "Hmm.", "Uh-huh.") the moment an addressed spoken turn is transcribed, so
-  // the speaker knows it reached the assistant before any model time is spent
-  // (src/ack-clips/). On by default; VOICE_ACK=0 turns it off.
-  voiceAck: flag(process.env.VOICE_ACK, true),
+  // Say a short "Got it." when an addressed spoken turn's answer has not
+  // started within voiceAckDelayMs, so the speaker knows it was heard
+  // (src/ack-clips/). Off by default; VOICE_ACK=1 turns it on per identity
+  // (e.g. in that identity's .env).
+  voiceAck: flag(process.env.VOICE_ACK, false),
+  // How long the ack cue waits for answer audio before speaking. A reply that
+  // starts within this window gets no cue in front of it. Live measurement on
+  // 2026-10-09 put front-tier (gemma) turns at 1.3–2.7s to first audio and the
+  // shim's holding line at ~1.4s, so 3s keeps those clean.
+  voiceAckDelayMs: parseInt(process.env.VOICE_ACK_DELAY_MS || '3000', 10),
 
   build: {
     version: process.env.BUILD_GIT_VERSION || 'dev',
