@@ -390,6 +390,21 @@ s2s)
   ;;
 
 transcriber)
+  # An identity that does not record audio has nothing to transcribe, and
+  # LAUNCHD_COMPONENTS installs this component for every identity regardless.
+  # The cost of that is not zero: the watcher loads the STT model on its first
+  # segment and holds it (~2.5 GB of unified memory) for the process lifetime,
+  # over whatever TRANSCRIPT_DIR that identity's env file names — which for the
+  # text-only `data` identity is another identity's directory, so two watchers
+  # end up transcribing the same segments.
+  #
+  # Exit 0, per the contract at the top of this file: launchd restarts only on a
+  # non-zero exit, so leaving it stopped is the intent. Default 1 keeps every
+  # identity that does not set TRANSCRIBE at all running as before.
+  if [ "${TRANSCRIBE:-1}" = "0" ]; then
+    echo "launchd-run[transcriber]: TRANSCRIBE=0 for this identity — nothing to transcribe, not starting" >&2
+    exit 0
+  fi
   command -v uv >/dev/null 2>&1 || die_config "uv not on PATH"
   run_server uv run tools/transcriber.py
   ;;
