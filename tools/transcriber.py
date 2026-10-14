@@ -36,7 +36,25 @@ import numpy as np
 import soundfile as sf
 import soxr
 
-ROOT = Path(os.environ.get("TRANSCRIPT_DIR", Path.home() / "Documents/transcripts"))
+def _dir_env(name: str, default: Path) -> Path:
+    """Resolve a directory from the environment, naming an empty value.
+
+    The `or` is load-bearing. `os.environ.get(name, default)` returns the default
+    only when the key is ABSENT — a set-but-empty value returns "", and `Path("")`
+    is "." , the current directory. So an env file carrying `export
+    TRANSCRIPT_DIR=` would silently point the watcher at its cwd, and that
+    failure is invisible: `ps` shows a healthy process at ~14 MB RSS polling
+    every 2 s and finding nothing, while its ROOT is a repo root it was never
+    meant to read.
+    """
+    configured = (os.environ.get(name) or "").strip()
+    if configured:
+        return Path(configured)
+    print(f"!! {name} is unset or empty — using {default}", flush=True)
+    return default
+
+
+ROOT = _dir_env("TRANSCRIPT_DIR", Path.home() / "Documents/transcripts")
 POLL_SECONDS = float(os.environ.get("TRANSCRIBER_POLL", "2"))
 STT_RATE = 16000
 KEEP_AUDIO = os.environ.get("TRANSCRIBER_KEEP_AUDIO") == "1"
