@@ -55,14 +55,22 @@ re-measures z.ai's buffering instead of the model.
 ## Running
 
 ```bash
-python3 -u screen.py                    # all models
-python3 -u screen.py MiniMax-M3         # subset
-python3 -u screen.py --nothink          # thinking disabled where supported
+uv run screen.py                    # all models
+uv run screen.py MiniMax-M3         # subset
+uv run screen.py --nothink          # thinking disabled where supported
 
-python3 -u bench2.py minimax:MiniMax-M3 zai:glm-4.6:nothink seibert:deepseek-v4-flash-fast
+uv run bench2.py minimax:MiniMax-M3 zai:glm-4.6:nothink seibert:deepseek-v4-flash-fast
 ```
 
-Always `-u`. Without it the output buffers and a long sweep looks hung.
+`uv run` reads each script's PEP 723 header, so the interpreter and any
+dependencies are resolved per script rather than inherited from the shell —
+these four are stdlib-only, so the header is just the pin. Run them from this
+directory: `bench2.py`, `ds_matrix.py` and `zai_matrix.py` all
+`from screen import …`, which resolves because the script's own directory is
+on `sys.path`.
+
+Output is line-buffered through `uv run`; if a long sweep looks hung, it is
+still buffering — `uv run python -u screen.py …` forces it.
 
 ## Gotchas found the hard way
 

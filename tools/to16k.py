@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["numpy", "soundfile", "soxr"]
+# ///
 """Convert Discord's 48 kHz stereo capture to the 16 kHz mono speech-to-speech wants.
 
 Run inside the speech-to-speech venv (soxr + soundfile already live there):

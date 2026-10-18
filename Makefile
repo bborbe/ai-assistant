@@ -67,7 +67,7 @@ shim:
 	  SHIM_FRONT_API_KEY=$$(teamvault-cli password $$FRONT_API_KEY_ID); \
 	  export SHIM_FRONT_API_KEY; \
 	fi; \
-	python3 -u shim/claude_openai_shim.py
+	PYTHONUNBUFFERED=1 uv run shim/claude_openai_shim.py
 
 .PHONY: clean-local
 # Clean build artifacts (local)

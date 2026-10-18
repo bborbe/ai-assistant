@@ -10,13 +10,13 @@ For the cluster, see [deploy-kubernetes.md](deploy-kubernetes.md).
 
 Five long-lived processes. `make dev` starts the four app processes in one terminal; launchd starts all five as independent jobs.
 
-| Component        | Port           | Started by                           | Needed for                    |
-| ---------------- | -------------- | ------------------------------------ | ----------------------------- |
-| shim             | 8080           | `python3 shim/claude_openai_shim.py` | both surfaces                 |
-| speech-to-speech | 127.0.0.1:8765 | `scripts/s2s-minimax`                | voice only (~60 s model load) |
-| gateway          | 0.0.0.0:8766   | `nginx -c <rendered conf>`           | voice from off-host clients   |
-| transcriber      | —              | `uv run tools/transcriber.py`        | per-speaker transcripts       |
-| bot              | 8081           | `node src/index.js`                  | both surfaces                 |
+| Component        | Port           | Started by                          | Needed for                    |
+| ---------------- | -------------- | ----------------------------------- | ----------------------------- |
+| shim             | 8080           | `uv run shim/claude_openai_shim.py` | both surfaces                 |
+| speech-to-speech | 127.0.0.1:8765 | `scripts/s2s-minimax`               | voice only (~60 s model load) |
+| gateway          | 0.0.0.0:8766   | `nginx -c <rendered conf>`          | voice from off-host clients   |
+| transcriber      | —              | `uv run tools/transcriber.py`       | per-speaker transcripts       |
+| bot              | 8081           | `node src/index.js`                 | both surfaces                 |
 
 The transcriber is easy to forget — it has no port, so nothing fails loudly when it is missing; the transcript file simply stops growing.
 
@@ -182,6 +182,22 @@ The launcher now classifies, and **defaults to retrying**:
 Unknown errors retry on purpose. A job that retries too often is visible in the log; a job that stopped when it should not have is invisible until somebody notices the assistant is gone.
 
 Verified against all four shapes with a stubbed `teamvault-cli`, not by reasoning about them.
+
+### A component's own EX_CONFIG (`78`)
+
+The launcher is not the only thing that can meet a config file it cannot load.
+The shim reads `~/.config/discord-assistant/config.yaml`, and since 2026-10-18
+it exits **`78`** (EX_CONFIG) when that file is _present_ but unparseable, or
+when PyYAML is missing. `run_server()` maps `78` to `die_config`, so the job
+stops exactly like an unrecoverable TeamVault error instead of respawning a
+process that will fail identically forever.
+
+This exists because the previous behaviour was to ignore the broken file and
+start on defaults. On 2026-10-17 a Homebrew `python3` bump to 3.15.0 removed
+PyYAML; the shim came up with **no identities**, answered health checks
+normally, and every Discord turn failed for a day with nothing in the log
+flagged as a failure. A _missing_ config file is still not an error — that is
+the env-plus-defaults instance and it behaves exactly as before.
 
 ## Resource limits
 

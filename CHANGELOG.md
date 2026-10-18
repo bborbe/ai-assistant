@@ -8,6 +8,12 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat(shim): every Python entry point runs through `uv`. The shim carries a PEP 723 header declaring its one third-party dependency (PyYAML) and is started by `uv run` from the launcher, `Makefile`, `scripts/dev.sh` and `npm run shim`; the shim tests run under `uv` too, so nothing depends on whichever `python3` Homebrew happens to leave on `PATH`. On 2026-10-17 a Homebrew bump to 3.15.0 removed PyYAML, the shim started with no identities, and every Discord turn failed for a day before anyone noticed.
+- fix(shim): a config file that is present but unloadable now exits `78` (EX_CONFIG) instead of being silently ignored. `run_server()` maps `78` to `die_config`, so launchd stops the job rather than respawning a process that can never start. A missing config file is still non-fatal — that is the env-plus-defaults instance.
+- chore(tools): the `tools/` scripts carry PEP 723 headers, so `uv run <script>` resolves each one's dependencies rather than inheriting the shell's interpreter.
+
 ## v0.60.5
 
 - fix(launchd): an identity with `TRANSCRIBE=0` no longer starts a transcriber. `LAUNCHD_COMPONENTS` installed the component for every identity regardless, so the text-only `data` identity ran a watcher that loaded the STT model on its first segment and held it (~2.5 GB of unified memory) for the process lifetime — over `TRANSCRIPT_DIR`, which its env file pointed at another identity's directory, so two watchers transcribed the same segments. Exits 0, per this file's exit-code contract, so launchd leaves it stopped instead of restarting it. Every identity that does not set `TRANSCRIBE` keeps running as before.

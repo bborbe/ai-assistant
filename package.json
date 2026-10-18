@@ -13,7 +13,7 @@
     "test": "node --test",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "shim": "python3 -u shim/claude_openai_shim.py"
+    "shim": "PYTHONUNBUFFERED=1 uv run shim/claude_openai_shim.py"
   },
   "license": "BSD-3-Clause",
   "dependencies": {

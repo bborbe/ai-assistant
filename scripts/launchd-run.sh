@@ -112,6 +112,14 @@ run_server() {
   if [ "$rc" -gt 128 ]; then
     die_transient "$component exited on signal $((rc - 128))"
   fi
+  # 78 is EX_CONFIG: the component found a config file it is not allowed to
+  # start without and stopped on purpose. A retry cannot fix it, and a respawn
+  # loop hides it — on 2026-10-17 the shim ran for a day with no identities
+  # because nothing treated the broken config as a failure. Stopping the job
+  # is the loud outcome; `die_config` exits 0 so KeepAlive leaves it stopped.
+  if [ "$rc" -eq 78 ]; then
+    die_config "$component exited 78 (EX_CONFIG) — configuration is unloadable, not restarting"
+  fi
   die_transient "$component exited with status $rc — a server exiting is never success"
 }
 
@@ -354,7 +362,10 @@ shim)
     SHIM_FRONT_API_KEY="$RESOLVED_SECRET"
     export SHIM_FRONT_API_KEY
   fi
-  run_server python3 -u shim/claude_openai_shim.py
+  # `uv run` reads the shim's PEP 723 header and installs its dependencies.
+  # PYTHONUNBUFFERED replaces the `-u` the bare interpreter used to get, so
+  # the log still streams a turn while it is happening rather than at exit.
+  run_server env PYTHONUNBUFFERED=1 uv run shim/claude_openai_shim.py
   ;;
 
 s2s)

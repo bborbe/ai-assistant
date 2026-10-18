@@ -79,7 +79,7 @@ else
   if [ -n "${FRONT_API_KEY_ID:-}" ] && [ -z "${SHIM_FRONT_API_KEY:-}" ]; then
     SHIM_FRONT_API_KEY=$(teamvault-cli password "$FRONT_API_KEY_ID") && export SHIM_FRONT_API_KEY
   fi
-  python3 -u shim/claude_openai_shim.py > "$LOGDIR/shim.log" 2>&1 &
+  PYTHONUNBUFFERED=1 uv run shim/claude_openai_shim.py > "$LOGDIR/shim.log" 2>&1 &
   pids+=($!)
   wait_for_port "$SHIM_PORT" shim 15 || exit 1
 fi
