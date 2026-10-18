@@ -21,6 +21,14 @@ jobs:
           node-version: '22'
           cache: npm
 
+      # The shim's tests run through `uv` (it reads the script's PEP 723 header
+      # for PyYAML rather than trusting the runner's python3), so the runner
+      # needs uv on PATH before `make precommit`.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
       - name: Install Trivy
         run: |
           sudo apt-get update
