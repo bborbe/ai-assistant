@@ -40,7 +40,7 @@ Fixing either is welcome in any PR that already touches the area.
 Changes here break in ways tests do not catch:
 
 - `patches/` — a patch applied against a dependency. It must keep applying; verify after any dependency change.
-- `shim/claude_openai_shim.py` — a **Python** process, started via `npm run shim`. Not covered by the Node guides.
+- `shim/claude_openai_shim.py` — a **Python** process, started via `uv run shim/claude_openai_shim.py` (`npm run shim` and `make shim` wrap the same command). Its PEP 723 header declares its only third-party dependency, PyYAML, so it never relies on the system interpreter having it. Not covered by the Node guides.
 - `tools/` — mixed `.js` and `.py` diagnostics, run by hand from a terminal. `no-console` is deliberately disabled for `tools/**`; a terminal is their interface.
 - `scripts/` — dev helpers.
 
@@ -50,7 +50,7 @@ Changes here break in ways tests do not catch:
 make precommit    # install format test check — run before every commit
 make test         # node --test
 make check        # lint formatcheck audit trivy
-npm run shim      # start the Python shim
+uv run shim/claude_openai_shim.py   # start the Python shim (or: make shim)
 ```
 
 ## Verifying Voice Changes

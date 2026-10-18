@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["numpy"]
+# ///
+# `speech_to_speech` is deliberately NOT declared here: it is the local checkout
+# at ~/Documents/workspaces/speech-to-speech, not a published distribution. Run
+# this script from that project's own `uv run` (see the docstring below), which
+# is the only environment where the package and the MLX model both resolve.
 """Render the stall filler to PCM in the SAME voice the bot speaks in.
 
 The bot plays this clip into the voice channel during a stall (see

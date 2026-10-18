@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["websockets"]
+# ///
 """Minimal OpenAI-Realtime client that probes a speech-to-speech server.
 
 Sends a WAV of speech, collects the audio reply, and reports every event type

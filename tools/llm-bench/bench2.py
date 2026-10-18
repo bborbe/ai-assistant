@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
 """Stage-2: full Discord fixture + fabrication re-test, OpenAI path.
 
 Usage: bench2.py <provider:model> [<provider:model> ...]

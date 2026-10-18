@@ -1,7 +1,11 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pyyaml"]
+# ///
 """OpenAI-compatible endpoint backed by keyed, persistent Claude Code sessions.
 
-    python3 shim/claude_openai_shim.py
+    uv run shim/claude_openai_shim.py
 
 Any OpenAI client can point at http://127.0.0.1:8080/v1. Clients that send
 `X-Session-Key` get their own conversation; clients that cannot send headers
@@ -41,6 +45,7 @@ import re
 import select
 import socket as _socket
 import subprocess
+import sys
 import time
 import uuid
 import urllib.error
@@ -51,7 +56,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Event, Lock, Thread
-from typing import TypedDict
+from typing import NoReturn, TypedDict
 
 # ── configuration ──────────────────────────────────────────────────────────
 # One flat config for one instance. Deliberately NOT multi-profile: two
@@ -70,21 +75,42 @@ CONFIG_FILE = Path(os.environ.get(
     "DISCORD_ASSISTANT_CONFIG", Path.home() / ".config/discord-assistant/config.yaml"))
 
 
+# EX_CONFIG from sysexits.h. Distinct from every transient exit so the
+# launcher's `run_server()` can stop the launchd job instead of respawning a
+# process that will fail identically forever.
+CONFIG_EXIT_CODE = 78
+
+
+def _die_config(reason: str) -> NoReturn:
+    """Stop when a config file is present but cannot be read.
+
+    Swallowing this is what made 2026-10-17 silent: Homebrew moved `python3` to
+    3.15.0, PyYAML was no longer installed, the ImportError was ignored, and
+    the shim answered health checks with no identities until a Discord turn
+    died — a day later, with nothing in the log flagged as a failure.
+
+    A *missing* file is still fine; that is the "no config file, env plus
+    defaults" instance and it behaves exactly as before. A file that is
+    present and unloadable has no working default behind it, so it must stop
+    rather than start half-configured.
+    """
+    print(f"config: {CONFIG_FILE} {reason}", file=sys.stderr, flush=True)
+    print(f"config: refusing to start with no identities — fix or remove {CONFIG_FILE}",
+          file=sys.stderr, flush=True)
+    sys.exit(CONFIG_EXIT_CODE)
+
+
 def _load_config() -> dict:
     if not CONFIG_FILE.exists():
         return {}
     try:
         import yaml
     except ImportError:
-        print(f"  config: {CONFIG_FILE} present but PyYAML is not installed — ignoring", flush=True)
-        return {}
+        _die_config("present but PyYAML is not installed")
     try:
         return yaml.safe_load(CONFIG_FILE.read_text()) or {}
     except Exception as e:
-        # Loud but not fatal: a typo in the config must not take the endpoint
-        # down, and every value has a working default behind it.
-        print(f"  config: {CONFIG_FILE} unreadable ({e}) — using defaults", flush=True)
-        return {}
+        _die_config(f"unreadable ({e})")
 
 
 _CFG = _load_config()

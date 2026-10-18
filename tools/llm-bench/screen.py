@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
 """Stage-1 broad screen: TTFT + streaming behaviour for every reachable model.
 
 Every provider is hit on its OWN OpenAI-compatible endpoint rather than through

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
 """DeepSeek matrix: surface x variant x reasoning volume x fabrication.
 
 The GLM lesson applied: count only user-visible text, and separate

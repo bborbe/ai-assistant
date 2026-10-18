@@ -427,8 +427,9 @@ class IdentityStrictMode(unittest.TestCase):
 class LoadIdentitiesFromConfig(unittest.TestCase):
     """Parsing the `identities:` block out of config.yaml's shape.
 
-    A typo here must degrade to "no per-identity routing", never take the
-    shim down — the same rule the rest of `_load_config()` already follows.
+    A typo *inside* a parsed file still degrades to "no per-identity routing"
+    rather than taking the shim down. The file-level failures are the
+    exception, and deliberately so — see `UnloadableConfigStopsTheProcess`.
     """
 
     def setUp(self):
@@ -494,6 +495,73 @@ class LoadIdentitiesFromConfig(unittest.TestCase):
                 shim._CFG = {"identities": {"sc": {"chat_bridge_url": bad}}}
                 out = shim._load_identities()
                 self.assertNotIn("chat_bridge_url", out["sc"])
+
+
+class UnloadableConfigStopsTheProcess(unittest.TestCase):
+    """A config file that is present but cannot load must stop the shim.
+
+    2026-10-17: Homebrew moved `python3` to 3.15.0, PyYAML was gone, and
+    `_load_config()` swallowed the ImportError. The shim then served health
+    checks with no identities — every Discord turn died for a day, and the log
+    carried no failure anyone was watching. Exit 78 is deliberate rather than
+    any non-zero code: `run_server()` maps it to `die_config` (exit 0) so
+    launchd stops the job instead of respawning a process that can never
+    start.
+
+    A missing file stays non-fatal — that is the "no config, env + defaults"
+    instance — so the positive control below guards the boundary.
+    """
+
+    def _with_config(self, text):
+        """Patch CONFIG_FILE at a temp path holding `text`; yield that path."""
+        return mock.patch.object(shim, "CONFIG_FILE", self._cfg)
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._cfg = pathlib.Path(self._tmp.name) / "config.yaml"
+
+    def test_a_malformed_config_exits_78_and_names_the_path(self):
+        self._cfg.write_text("identities: [unclosed\n")
+        stderr = io.StringIO()
+        with self._with_config(None), contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as ctx:
+                shim._load_config()
+        self.assertEqual(ctx.exception.code, shim.CONFIG_EXIT_CODE)
+        self.assertIn(str(self._cfg), stderr.getvalue())
+
+    def test_a_missing_pyyaml_exits_78_and_names_the_path(self):
+        # `sys.modules["yaml"] = None` makes `import yaml` raise ImportError,
+        # reproducing the Homebrew 3.15.0 state without uninstalling anything.
+        self._cfg.write_text("identities:\n  boss:\n    cwd: /tmp/boss\n")
+        stderr = io.StringIO()
+        with self._with_config(None), \
+                mock.patch.dict(sys.modules, {"yaml": None}), \
+                contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as ctx:
+                shim._load_config()
+        self.assertEqual(ctx.exception.code, shim.CONFIG_EXIT_CODE)
+        self.assertIn(str(self._cfg), stderr.getvalue())
+
+    def test_a_valid_config_still_loads_identities(self):
+        # Positive control: the exit path above must not have swallowed the
+        # success path. A good file returns its parsed mapping.
+        self._cfg.write_text("identities:\n  boss:\n    cwd: /tmp/boss\n")
+        with self._with_config(None):
+            cfg = shim._load_config()
+        self.assertEqual(cfg["identities"]["boss"]["cwd"], "/tmp/boss")
+
+    def test_a_missing_config_file_is_not_fatal(self):
+        # The boundary: absent is not the same as unloadable. An instance with
+        # no config file must still start on env + defaults.
+        with self._with_config(None):
+            self.assertEqual(shim._load_config(), {})
+
+    def test_the_launcher_maps_the_exit_code_to_a_stop(self):
+        # The contract only works if both halves agree, and they live in
+        # different files. Read the launcher rather than trusting the pairing.
+        launcher = pathlib.Path(__file__).resolve().parent.parent / "scripts/launchd-run.sh"
+        self.assertIn(str(shim.CONFIG_EXIT_CODE), launcher.read_text())
 
 
 class TranscriptDirPerKey(unittest.TestCase):

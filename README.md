@@ -91,6 +91,8 @@ Unset, the default is unchanged (`local.env` relative to the repo), so a single-
 
 `shim/claude_openai_shim.py` exposes **persistent, keyed Claude Code sessions** as `/v1/chat/completions` — one per conversation, so a turn continues where that conversation left off instead of starting cold.
 
+Start it with `uv run shim/claude_openai_shim.py` (or `make shim`). The script's PEP 723 header declares its only third-party dependency, PyYAML, so `uv` installs it for the script — the shim never depends on whichever `python3` Homebrew happens to have left on `PATH`.
+
 ### Configuring it
 
 Optional YAML at `~/.config/discord-assistant/config.yaml` (`DISCORD_ASSISTANT_CONFIG` to move it) — see `config.example.yaml`. Precedence is **environment > file > default**, so a k8s ConfigMap or a one-off `SHIM_*` var still wins and an instance with no file behaves as it always did.
