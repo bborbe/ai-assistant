@@ -1,23 +1,57 @@
-# Firewall rules for the Star Citizen assistant (bot + shim).
+# Firewall rules for the Star Citizen assistant (shim + bot).
 #
-# Default-deny in BOTH directions. Allowed egress: DNS, the Discord gateway/API,
-# anything inside the star-citizen namespace, and ONE sanctioned cross-namespace
-# path to the shared Claude router (model access). Allowed ingress: same
-# namespace (bot <-> shim), kubelet health probes from the node CIDR, and the
-# cluster's Traefik so the shim's Ingress can reach it (see claude-shim-ing.yaml).
-#
-# ⚠️ The Traefik rule admits the whole kube-system namespace, not one pod: a
-# NetworkPolicy cannot select a Deployment's pods by owner, and Traefik's pods
-# carry no label unique to it. Anything else running in kube-system can
-# therefore also reach the shim — it still needs CHAT_BRIDGE_TOKEN, which is the
-# auth boundary. There is deliberately NO source-address scoping anywhere on this
-# path: Traefik terminates the connection, so it sees an internal address and an
-# ipBlock here would match nothing, and an ipAllowList at the edge cannot
-# distinguish the laptop from any other external host either. The boundary is the
-# network firewall plus that token — see the measurement in claude-shim-ing.yaml.
+# Default-deny in BOTH directions. Every rule below names its source (pod
+# selector, or a specific CIDR) together with its port. There is no all-ports
+# rule and no port-less rule in either direction: a rule without a `ports:`
+# block admits every port, which is the shape this file exists to avoid.
 #
 # Applies to both pods via the shared label sc.assistant="true" (set on the bot
 # and shim pod templates — one identity, one policy).
+#
+# ── Callers and destinations, as measured 2026-10-28 ────────────────────────
+#
+# Egress (what the pods dial):
+#   * kube-dns:53             — DNS for both containers. Without it every lookup
+#                               times out and reads as a policy denial.
+#   * Discord:443             — the bot's gateway/API and the shim's chat-bridge
+#                               POST. Measured: every Discord host
+#                               (discord.com, gateway.discord.gg,
+#                               cdn.discordapp.com, discordapp.com) resolved
+#                               into 162.159.0.0/16 and nothing else.
+#   * github.com:22,443       — vault-sync clones/pulls the vault over git SSH.
+#   * claude-shim:8080        — the bot's OPENAI_BASE_URL
+#                               (http://claude-shim:8080/v1), same namespace.
+#   * claude-code-router:8788 — the shim's ANTHROPIC_BASE_URL (model access).
+#
+# Ingress (who reaches the pods):
+#   * Traefik:8080            — the claude-shim Ingress (claude-shim-ing.yaml),
+#                               in both environments.
+#   * bot:8080                — bot -> shim, same namespace.
+#
+# ── Notes that are load-bearing ─────────────────────────────────────────────
+#
+# * The router lives in the `agent` namespace on BOTH clusters
+#   (claude-code-router-dev / -prod), not in `dev` / `prod` as it did when this
+#   file was written. A literal namespace is used deliberately: it is identical
+#   in both environments, so a literal cannot silently diverge the way an
+#   env-substituted value can.
+# * Traefik IS selectable by label (app.kubernetes.io/name=traefik), so the
+#   ingress rule is scoped to its pods rather than to the whole kube-system
+#   namespace. This file previously claimed no such label existed; that was
+#   wrong.
+# * namespaceSelector and podSelector sit in the SAME peer entry on every
+#   cross-namespace rule. Split into two peers they OR and open the whole
+#   namespace.
+# * No rule admits the node CIDR or 10.0.0.0/8 for health probes. Kubelet
+#   probes are not policy-evaluated here: the pods reported Ready for weeks
+#   with no rule admitting the node address, so no probe rule is needed.
+#   Adding one would re-open the cluster-wide ingress this file exists to
+#   close.
+# * Discord publishes no CIDR list, so 162.159.0.0/16 is a measurement, not a
+#   contract. If the bot ever fails to reach the gateway, re-run the four
+#   lookups above and widen only to the ranges that answer; do not restore the
+#   three Cloudflare-wide ranges (104.16.0.0/13, 172.64.0.0/13,
+#   138.199.0.0/16) — none of them matched any Discord host.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -38,59 +72,47 @@ spec:
       ports:
         - { protocol: UDP, port: 53 }
         - { protocol: TCP, port: 53 }
-    # Discord gateway + API (HTTPS).
-    #
-    # ⚠️ VERIFY AT APPLY TIME: Discord's published IP list rotates and these are
-    # the commonly-documented Cloudflare/Discord ranges, not a fetched snapshot.
-    # The egress probe (curl to a denied destination) and a real bot gateway
-    # connection are the ground truth. If Discord rotates out of these ranges,
-    # fall back to an in-namespace egress-proxy with a domain allowlist and
-    # point the policy at it instead of ipBlocks. Remediation path is specified
-    # in bborbe/agent `specs/in-progress/048-agent-egress-proxy.md` (tinyproxy
-    # Deployment + ConfigMap domain allowlist; NetworkPolicy then allows only
-    # the proxy pod, since L3/L4 rules cannot express a domain).
+    # Discord gateway + API (HTTPS). Measured range — see the header note.
     - to:
         - ipBlock: { cidr: 162.159.0.0/16 }
-        - ipBlock: { cidr: 104.16.0.0/13 }
-        - ipBlock: { cidr: 172.64.0.0/13 }
-        - ipBlock: { cidr: 138.199.0.0/16 }
       ports:
         - { protocol: TCP, port: 443 }
     # Vault repo (git-over-SSH to github.com) — vault-clone init + vault-sync
-    # sidecar pull/push. github.com + ssh.github.com resolve inside 140.82.112.0/20.
+    # sidecar pull/push. github.com + ssh.github.com resolve inside this range.
     - to:
         - ipBlock: { cidr: 140.82.112.0/20 }
       ports:
         - { protocol: TCP, port: 22 }
         - { protocol: TCP, port: 443 }
-    # Same namespace: bot -> shim (claude-shim:8080) and any internal calls.
+    # Same namespace: bot -> shim (claude-shim:8080). Named destination and
+    # port — previously a bare podSelector{} that admitted every port.
     - to:
-        - podSelector: {}
-    # Sanctioned cross-namespace egress: shared Claude router (model access).
-    # ROUTER_NS resolves per environment (dev / prod) from local.env — the
-    # service is claude-code-router-{dev,prod} in that namespace.
+        - podSelector:
+            matchLabels: { app: discord-assistant-shim }
+      ports:
+        - { protocol: TCP, port: 8080 }
+    # Sanctioned cross-namespace egress: shared Claude router (model access),
+    # in the `agent` namespace on both clusters.
     - to:
         - namespaceSelector:
-            matchLabels: { kubernetes.io/metadata.name: '{{"ROUTER_NS" | env}}' }
+            matchLabels: { kubernetes.io/metadata.name: agent }
+          podSelector:
+            matchLabels: { app.kubernetes.io/name: claude-code-router }
       ports:
         - { protocol: TCP, port: 8788 }
   ingress:
-    # Same namespace (bot <-> shim).
-    - from:
-        - podSelector: {}
-    # Kubelet health/readiness probes originate from the node. Covers the nuke
-    # node + pod CIDRs (K3s: pods 10.42.0.0/16, services 10.43.0.0/16).
-    - from:
-        - ipBlock: { cidr: 10.0.0.0/8 }
-    # Traefik, so the claude-shim Ingress can reach the shim on 8080. Without
-    # this an Ingress routes but the backend refuses the connection (502) —
-    # Traefik runs in kube-system, which neither rule above admits.
-    #
-    # Scoped to the namespace rather than the pod: NetworkPolicy has no
-    # owner-based selector, and Traefik's pods share no distinguishing label.
-    # See the ⚠️ note in the header for what that widens.
+    # Traefik, so the claude-shim Ingress can reach the shim on 8080. Scoped to
+    # Traefik's own pods, not the whole kube-system namespace.
     - from:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { app.kubernetes.io/name: traefik }
+      ports:
+        - { protocol: TCP, port: 8080 }
+    # Same namespace: bot -> shim.
+    - from:
+        - podSelector:
+            matchLabels: { app: discord-assistant }
       ports:
         - { protocol: TCP, port: 8080 }
