@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.61.1
 
 - fix(deps): bump `undici` 6.29.0 → 6.29.1 to clear the high-severity advisories that fail `npm audit --audit-level=high` on every PR opened since the advisories published (GHSA-4qv8-2p9j-2685 and siblings). It is transitive through `discord.js` / `@discordjs/rest`, which require `^6.27.0`, so the bump is a patch inside the existing range: no API change and no other package in the lockfile moves. `npm audit --audit-level=high` now reports `found 0 vulnerabilities`.
 
