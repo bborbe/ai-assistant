@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix(deps): bump `undici` 6.29.0 → 6.29.1 to clear the high-severity advisories that fail `npm audit --audit-level=high` on every PR opened since the advisories published (GHSA-4qv8-2p9j-2685 and siblings). It is transitive through `discord.js` / `@discordjs/rest`, which require `^6.27.0`, so the bump is a patch inside the existing range: no API change and no other package in the lockfile moves. `npm audit --audit-level=high` now reports `found 0 vulnerabilities`.
+
 ## v0.61.0
 
 - feat(shim): every Python entry point runs through `uv`. The shim carries a PEP 723 header declaring its one third-party dependency (PyYAML) and is started by `uv run` from the launcher, `Makefile`, `scripts/dev.sh` and `npm run shim`; the shim tests run under `uv` too, so nothing depends on whichever `python3` Homebrew happens to leave on `PATH`. On 2026-10-17 a Homebrew bump to 3.15.0 removed PyYAML, the shim started with no identities, and every Discord turn failed for a day before anyone noticed.
