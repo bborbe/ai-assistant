@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- chore: restate the do-not-merge contract in the gate workflow
+
 ## v0.61.1
 
 - fix(k8s): the `sc-assistant` NetworkPolicy now names every source and destination with its port instead of admitting whole address blocks. Ingress dropped the `10.0.0.0/8` all-ports rule and the all-ports same-namespace rule; it admits Traefik's own pods on 8080 (selectable by `app.kubernetes.io/name=traefik`, which the file previously claimed did not exist) and the bot on 8080. Egress replaced the port-less same-namespace peer with `app: discord-assistant-shim` on 8080, narrowed the four Cloudflare ranges to the measured `162.159.0.0/16` (no Discord host resolved into the other three), and retargeted the Claude-router peer to the `agent` namespace, where `claude-code-router-dev`/`-prod` have lived since the fleet move — the old `dev`/`prod` peer matched nothing. Removing the router-namespace substitution also removes the last dev/prod divergence in the file.
