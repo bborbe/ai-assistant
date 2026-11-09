@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- chore(dark-factory): worktree workflow with PR delivery
+
 ## v0.61.2
 
 - chore: restate the do-not-merge contract in the gate workflow
