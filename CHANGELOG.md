@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.62.2
 
 - fix(deploy): render the manifests against `CLUSTER_REGISTRY` (default `docker.io`) so the Deployment names the registry the deploy path pushes to, not the private mirror
 
