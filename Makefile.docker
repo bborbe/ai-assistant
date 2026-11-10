@@ -1,6 +1,22 @@
 DIRS += $(shell find */* -maxdepth 0 -name Makefile -exec dirname "{}" \;)
 
+# BUILD_TARGET selects where `make build` runs. `local` (the default) uses the
+# local Docker daemon; any other value names a cluster alias (sun / nukedev /
+# nukeprod) or a kubectl context and builds inside that cluster as a Job
+# rendered from hack/build-job.yaml.
+BUILD_TARGET ?= local
+BUILD_TIMEOUT ?= 3600
+BUILD_REPO_URL ?= https://github.com/bborbe/ai-assistant.git
+BUILD_DOCKERFILE ?= Dockerfile
+BUILD_PUSH_SECRET ?= buildkit-push
+# The cluster arm can only push Docker Hub: the buildkit-push secret carries a
+# docker.io credential. $(DOCKER_REGISTRY) cannot serve here — it has no default
+# in this repo and local.env is gitignored, so on a fresh clone it is empty and
+# $(DOCKER_REGISTRY)/$(SERVICE) composes a relative path, not a registry.
+CLUSTER_REGISTRY ?= docker.io
+
 .PHONY: build
+ifeq ($(BUILD_TARGET),local)
 build:
 	DOCKER_BUILDKIT=1 \
 	docker build \
@@ -13,6 +29,31 @@ build:
 	--build-arg BUILD_DATE=$$(date -u +%Y-%m-%dT%H:%M:%SZ) \
 	-t $(DOCKER_REGISTRY)/$(SERVICE):$(BRANCH) \
 	-f Dockerfile .
+else
+# VERSION has no definition anywhere in this repo, so the guard fires on
+# `undefined` as well as on a defaulted value. A default here would publish a
+# tag the checked-out tree does not correspond to, and the cluster arm names a
+# REF rather than a branch, so only the caller can say which tag is being cut.
+build:
+	@if [ -z "$(VERSION)" ]; then \
+		echo "ERROR: the cluster arm needs an explicit VERSION." >&2; \
+		echo "  make build BUILD_TARGET=<cluster> REF=<full-40-char-sha> VERSION=<scratch-tag>" >&2; \
+		echo "  VERSION has no default: a default would publish a tag this tree does not correspond to." >&2; \
+		exit 1; \
+	fi
+	@echo "cluster build: $(CLUSTER_REGISTRY)/$(SERVICE):$(VERSION)"
+	BUILD_TARGET='$(BUILD_TARGET)' \
+	REPO_URL='$(BUILD_REPO_URL)' \
+	REF='$(REF)' \
+	TAG='$(VERSION)' \
+	DOCKERFILE='$(BUILD_DOCKERFILE)' \
+	IMAGE='$(CLUSTER_REGISTRY)/$(SERVICE)' \
+	DOCKER_REGISTRY='$(CLUSTER_REGISTRY)' \
+	PUSH='true' \
+	PUSH_SECRET='$(BUILD_PUSH_SECRET)' \
+	TIMEOUT='$(BUILD_TIMEOUT)' \
+	hack/build-cluster.sh
+endif
 
 .PHONY: upload
 upload:

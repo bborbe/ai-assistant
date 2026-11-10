@@ -1,3 +1,6 @@
 node_modules/
 coverage/
 package-lock.json
+# Copied verbatim from their source repos; prettier would rewrite the Job
+# template (singleQuote: true) and the copy would silently diverge.
+hack/
