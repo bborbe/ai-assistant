@@ -1,3 +1,12 @@
 BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD | tr '/' '-')
 HOSTNAME ?= $(shell hostname -s)
 ROOTDIR ?= $(shell git rev-parse --show-toplevel)
+# The registry the k8s `apply` renders into the manifests. Docker Hub is the
+# default because the cluster build arm can only push there (the
+# `buildkit-push` secret carries a `docker.io` credential).
+CLUSTER_REGISTRY ?= docker.io
+# The local arm's tag registry. It defaults to CLUSTER_REGISTRY so `make buca`
+# pushes and deploys the same registry; a `local.env` that sets it must set the
+# same value, or build/upload land in one registry while the manifests name
+# another.
+DOCKER_REGISTRY ?= $(CLUSTER_REGISTRY)

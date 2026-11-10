@@ -19,6 +19,19 @@
 # CLUSTER_CONTEXT selects the wrapper and is the only thing that does. An
 # unmapped value is refused rather than guessed at, because a typo here applies
 # one cluster's manifests to the other.
+#
+# The manifests must name the image the deploy path pushes. `build` and `upload`
+# push `$(DOCKER_REGISTRY)/$(SERVICE)`, which defaults to `CLUSTER_REGISTRY`
+# (Makefile.variables), so the render sets `DOCKER_REGISTRY` from
+# `CLUSTER_REGISTRY` and exports it *after* sourcing `local.env` — that file
+# exports `DOCKER_REGISTRY` as the private nuke mirror, and an override placed
+# before the `source` is a no-op.
+#
+# A `local.env` that still exports the old private `DOCKER_REGISTRY` would push
+# there while this render named Docker Hub — the same ImagePullBackOff, silently.
+# The recipe therefore refuses to run when the two disagree; align both, as
+# `local.env.example` documents.
 apply:
 	@command -v teamvault-cli >/dev/null 2>&1 || { echo "teamvault-cli not on PATH" >&2; exit 1; }
-	bash -c 'source ${ROOTDIR}/local.env && case "$${CLUSTER_CONTEXT}" in nuke-dev) KUBECTL=kubectlnukedev ;; nuke-prod) KUBECTL=kubectlnukeprod ;; *) echo "Makefile.k8s: no wrapper for CLUSTER_CONTEXT=$${CLUSTER_CONTEXT} — refusing to guess" >&2; exit 1 ;; esac && [ -n "$${NAMESPACE}" ] || { echo "Makefile.k8s: NAMESPACE unset in $${ROOTDIR}/local.env" >&2; exit 1; } && command -v "$${KUBECTL}" >/dev/null 2>&1 || { echo "Makefile.k8s: $${KUBECTL} not on PATH" >&2; exit 1; } && find . -name "*.yaml" | while read -r file; do cat $${file} | teamvault-cli config parse --cache | $${KUBECTL} -n "$${NAMESPACE}" apply -f -; done'
+	@printf '%s' '$(CLUSTER_REGISTRY)' | grep -qE '^[A-Za-z0-9._/:-]+$$' || { echo "Makefile.k8s: CLUSTER_REGISTRY '$(CLUSTER_REGISTRY)' contains characters outside [A-Za-z0-9._/:-]" >&2; exit 1; }
+	CLUSTER_REGISTRY='$(CLUSTER_REGISTRY)' bash -c 'source ${ROOTDIR}/local.env && [ -z "$${DOCKER_REGISTRY:-}" ] || [ "$${DOCKER_REGISTRY}" = "$${CLUSTER_REGISTRY}" ] || { echo "Makefile.k8s: local.env sets DOCKER_REGISTRY=$${DOCKER_REGISTRY} but the manifests render CLUSTER_REGISTRY=$${CLUSTER_REGISTRY} — set both to the same registry (see local.env.example)" >&2; exit 1; } && export DOCKER_REGISTRY="$${CLUSTER_REGISTRY:?CLUSTER_REGISTRY is unset}" && case "$${CLUSTER_CONTEXT}" in nuke-dev) KUBECTL=kubectlnukedev ;; nuke-prod) KUBECTL=kubectlnukeprod ;; *) echo "Makefile.k8s: no wrapper for CLUSTER_CONTEXT=$${CLUSTER_CONTEXT} — refusing to guess" >&2; exit 1 ;; esac && [ -n "$${NAMESPACE}" ] || { echo "Makefile.k8s: NAMESPACE unset in $${ROOTDIR}/local.env" >&2; exit 1; } && command -v "$${KUBECTL}" >/dev/null 2>&1 || { echo "Makefile.k8s: $${KUBECTL} not on PATH" >&2; exit 1; } && find . -name "*.yaml" | while read -r file; do cat $${file} | teamvault-cli config parse --cache | $${KUBECTL} -n "$${NAMESPACE}" apply -f -; done'

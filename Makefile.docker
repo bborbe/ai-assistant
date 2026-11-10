@@ -9,11 +9,9 @@ BUILD_TIMEOUT ?= 3600
 BUILD_REPO_URL ?= https://github.com/bborbe/ai-assistant.git
 BUILD_DOCKERFILE ?= Dockerfile
 BUILD_PUSH_SECRET ?= buildkit-push
-# The cluster arm can only push Docker Hub: the buildkit-push secret carries a
-# docker.io credential. $(DOCKER_REGISTRY) cannot serve here — it has no default
-# in this repo and local.env is gitignored, so on a fresh clone it is empty and
-# $(DOCKER_REGISTRY)/$(SERVICE) composes a relative path, not a registry.
-CLUSTER_REGISTRY ?= docker.io
+# The cluster arm can only push Docker Hub: the `buildkit-push` secret carries a
+# docker.io credential. `CLUSTER_REGISTRY` (Makefile.variables) is the registry
+# the manifests render; `DOCKER_REGISTRY` defaults to it.
 
 .PHONY: build
 ifeq ($(BUILD_TARGET),local)

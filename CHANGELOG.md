@@ -11,6 +11,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 ## v0.62.1
 
 - chore: track prompts/in-progress so the dark-factory worktree lane can save prompt metadata
+- fix(deploy): render the manifests against `CLUSTER_REGISTRY` (default `docker.io`) so the Deployment names the registry the deploy path pushes to, not the private mirror
 
 ## v0.62.0
 
