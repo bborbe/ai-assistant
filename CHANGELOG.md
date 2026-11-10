@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix(deploy): render the manifests against `CLUSTER_REGISTRY`, so the Deployment names the image the cluster build arm actually pushes instead of the private mirror
+
 ## v0.62.0
 
 - feat(build): add a cluster build arm beside the local one (`BUILD_TARGET`, `REF`, `VERSION`)
