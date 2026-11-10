@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - MINOR version when you add functionality in a backwards-compatible manner, and
 - PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- docs(build): add the cluster build arm spec (`BUILD_TARGET`, `REF`, `VERSION`)
+
 ## v0.61.3
 
 - chore(dark-factory): worktree workflow with PR delivery
