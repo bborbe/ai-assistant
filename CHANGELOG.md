@@ -10,7 +10,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 ## Unreleased
 
-- feat(build): add a cluster build arm beside the local one (`BUILD_TARGET`, `REF`, `VERSION`)
+- docs(build): add the cluster build arm spec (`BUILD_TARGET`, `REF`, `VERSION`)
 
 ## v0.61.3
 
