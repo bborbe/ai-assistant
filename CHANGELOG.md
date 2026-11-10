@@ -10,7 +10,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 ## Unreleased
 
-- fix(deploy): render the manifests against `CLUSTER_REGISTRY`, so the Deployment names the image the cluster build arm actually pushes instead of the private mirror
+- fix(deploy): render the manifests against `CLUSTER_REGISTRY` (default `docker.io`) so the Deployment names the registry the deploy path pushes to, not the private mirror
 
 ## v0.62.0
 
